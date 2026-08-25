@@ -1,0 +1,537 @@
+import SwiftUI
+
+enum LedditLoadState: Equatable {
+    case idle
+    case loading
+    case loaded
+    case empty
+    case failed(String)
+}
+
+struct LedditStateView<Content: View>: View {
+    let state: LedditLoadState
+    let retry: (() -> Void)?
+    @ViewBuilder let content: () -> Content
+
+    init(
+        state: LedditLoadState, retry: (() -> Void)? = nil,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.state = state
+        self.retry = retry
+        self.content = content
+    }
+
+    var body: some View {
+        switch state {
+        case .idle, .loaded:
+            content()
+        case .loading:
+            VStack(spacing: 0) {
+                ForEach(0..<4, id: \.self) { _ in LedditSkeletonPostRow() }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Loading")
+        case .empty:
+            ContentUnavailableView(
+                "Nothing here yet", systemImage: "tray",
+                description: Text("Try refreshing or changing your filters."))
+        case .failed(let message):
+            ContentUnavailableView {
+                Label("Could not load", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(message)
+            } actions: {
+                if let retry {
+                    Button("Retry", action: retry)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+}
+
+struct LedditSkeletonPostRow: View {
+    @Environment(\.ledditTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Circle().fill(theme.tertiaryText.opacity(0.18)).frame(width: 22, height: 22)
+                RoundedRectangle(cornerRadius: 3).fill(theme.tertiaryText.opacity(0.18)).frame(
+                    width: 130, height: 11)
+                Spacer()
+                RoundedRectangle(cornerRadius: 3).fill(theme.tertiaryText.opacity(0.12)).frame(
+                    width: 35, height: 11)
+            }
+            RoundedRectangle(cornerRadius: 4).fill(theme.tertiaryText.opacity(0.18)).frame(height: 16)
+            RoundedRectangle(cornerRadius: 4).fill(theme.tertiaryText.opacity(0.12)).frame(
+                width: 220, height: 12)
+            HStack {
+                RoundedRectangle(cornerRadius: 3).fill(theme.tertiaryText.opacity(0.12)).frame(
+                    width: 68, height: 10)
+                RoundedRectangle(cornerRadius: 3).fill(theme.tertiaryText.opacity(0.12)).frame(
+                    width: 68, height: 10)
+                Spacer()
+            }
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal)
+        .redacted(reason: .placeholder)
+    }
+}
+
+struct LedditMediaPlaceholder: View {
+    @Environment(\.ledditTheme) private var theme
+    let title: String
+    let symbol: String
+    var isBlurred = false
+    var action: (() -> Void)?
+
+    var body: some View {
+        Button(action: action ?? {}) {
+            ZStack {
+                Rectangle().fill(theme.elevatedSurface)
+                Image(systemName: symbol)
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(theme.tertiaryText)
+                if !title.isEmpty {
+                    VStack {
+                        Spacer()
+                        HStack(spacing: 6) {
+                            Image(systemName: symbol == "play.fill" ? "play.fill" : "photo")
+                            Text(title).lineLimit(1)
+                            Spacer()
+                        }
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .background(.black.opacity(0.58))
+                    }
+                }
+                if isBlurred {
+                    Color.black.opacity(0.38)
+                    VStack(spacing: 7) {
+                        Image(systemName: "eye.slash")
+                        Text("Sensitive media")
+                            .font(.caption.weight(.semibold))
+                        Text("Tap to reveal")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.white)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isBlurred ? "Sensitive media. Tap to reveal." : title)
+    }
+}
+
+struct LedditVoteControls: View {
+    @Environment(\.ledditTheme) private var theme
+    let score: Int
+    let vote: Int
+    var onVote: ((Int) -> Void)?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Button {
+                onVote?(vote == 1 ? 0 : 1)
+            } label: {
+                Image(systemName: vote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
+                    .font(.title3)
+            }
+            .foregroundStyle(vote == 1 ? theme.upvote : theme.secondaryText)
+            .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
+            Text(score.formatted())
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundStyle(
+                    vote == 1 ? theme.upvote : vote == -1 ? theme.downvote : theme.secondaryText
+                )
+                .frame(minWidth: 32)
+            Button {
+                onVote?(vote == -1 ? 0 : -1)
+            } label: {
+                Image(systemName: vote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
+                    .font(.title3)
+            }
+            .foregroundStyle(vote == -1 ? theme.downvote : theme.secondaryText)
+            .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+struct LedditPostRow: View {
+    @Environment(\.ledditTheme) private var theme
+    @Environment(\.openURL) private var openURL
+    let post: PostCardModel
+    var bodyLineLimit: Int? = 4
+    var onVote: ((Int) -> Void)?
+    var onSave: (() -> Void)?
+    var onSeen: (() -> Void)?
+    var onMedia: ((Int) -> Void)?
+    var onOpen: (() -> Void)?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 7) {
+                Image(systemName: "person.crop.circle.fill")
+                    .foregroundStyle(theme.tertiaryText)
+                Text("r/\(post.community)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(theme.secondaryText)
+                if !post.author.isEmpty {
+                    Text("• u/\(post.author)").font(.caption).foregroundStyle(theme.tertiaryText)
+                }
+                Spacer()
+                if post.isSticky { LedditPill(title: "Pinned", color: theme.moderator) }
+                if post.isNSFW { LedditPill(title: "18+", color: theme.destructive) }
+            }
+            postTitle
+            if !post.body.isEmpty {
+                postBody
+            }
+            if post.hasMedia {
+                LedditInlineMediaView(post: post, onOpen: onMedia)
+            }
+            HStack(spacing: 14) {
+                LedditVoteControls(score: post.score, vote: post.vote, onVote: onVote)
+                LedditIconLabel(
+                    systemImage: "bubble.left", title: post.comments.formatted(), color: theme.secondaryText)
+                LedditIconLabel(
+                    systemImage: post.isSeen ? "eye.slash" : "eye", title: post.age,
+                    color: post.isSeen ? theme.seen : theme.secondaryText)
+                Spacer()
+                Button {
+                    onSave?()
+                } label: {
+                    Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                }
+                .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
+                .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 13)
+        .opacity(post.isSeen ? 0.62 : 1)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(
+            "r/\(post.community), \(post.title), \(post.score) points, \(post.comments) comments"
+        )
+        .contextMenu {
+            Button {
+                onVote?(1)
+            } label: {
+                Label("Upvote", systemImage: "arrow.up")
+            }
+            Button {
+                onVote?(-1)
+            } label: {
+                Label("Downvote", systemImage: "arrow.down")
+            }
+            Button {
+                onSave?()
+            } label: {
+                Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
+            }
+            Button {
+                onSeen?()
+            } label: {
+                Label(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
+            }
+            if let mediaURL = post.mediaURL {
+                Button {
+                    openURL(mediaURL)
+                } label: {
+                    Label("Open External Link", systemImage: "arrow.up.right.square")
+                }
+            }
+            ShareLink(item: post.shareURL) { Label("Share Link", systemImage: "square.and.arrow.up") }
+        }
+    }
+
+    @ViewBuilder
+    private var postTitle: some View {
+        if let onOpen {
+            Button(action: onOpen) {
+                titleText
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the post")
+        } else {
+            titleText
+        }
+    }
+
+    private var titleText: some View {
+        Text(post.title)
+            .font(.headline)
+            .foregroundStyle(theme.primaryText)
+            .lineLimit(3)
+            .multilineTextAlignment(.leading)
+    }
+
+    @ViewBuilder
+    private var postBody: some View {
+        if let onOpen {
+            Button(action: onOpen) {
+                bodyText
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the post")
+        } else {
+            bodyText
+        }
+    }
+
+    private var bodyText: some View {
+        Text(post.body)
+            .font(.body)
+            .foregroundStyle(theme.secondaryText)
+            .lineLimit(bodyLineLimit)
+            .multilineTextAlignment(.leading)
+    }
+}
+
+struct LedditCompactPostRow: View {
+    @Environment(\.ledditTheme) private var theme
+    let post: PostCardModel
+    var thumbnailOnRight = false
+    var onVote: ((Int) -> Void)?
+    var onSave: (() -> Void)?
+    var onOpen: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 11) {
+            if !thumbnailOnRight { thumbnail }
+            VStack(alignment: .leading, spacing: 5) {
+                postTitle
+                Text("r/\(post.community) • \(post.author.isEmpty ? "deleted" : "u/\(post.author)")")
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
+                HStack(spacing: 10) {
+                    Text("↑ \(post.score.formatted())")
+                    Text("💬 \(post.comments.formatted())")
+                    Text(post.age)
+                    Spacer()
+                    Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                }
+                .font(.caption2)
+                .foregroundStyle(post.isSaved ? theme.saved : theme.tertiaryText)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if thumbnailOnRight { thumbnail }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 9)
+        .opacity(post.isSeen ? 0.62 : 1)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "r/\(post.community), \(post.title), \(post.score) points, \(post.comments) comments"
+        )
+        .contextMenu {
+            Button {
+                onVote?(1)
+            } label: {
+                Label("Upvote", systemImage: "arrow.up")
+            }
+            Button {
+                onVote?(-1)
+            } label: {
+                Label("Downvote", systemImage: "arrow.down")
+            }
+            Button {
+                onSave?()
+            } label: {
+                Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var postTitle: some View {
+        if let onOpen {
+            Button(action: onOpen) {
+                titleText
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Opens the post")
+        } else {
+            titleText
+        }
+    }
+
+    private var titleText: some View {
+        Text(post.title)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(theme.primaryText)
+            .lineLimit(3)
+            .multilineTextAlignment(.leading)
+    }
+
+    private var thumbnail: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 7).fill(theme.elevatedSurface)
+            Image(systemName: post.isVideo ? "play.fill" : post.hasMedia ? "photo" : "doc.text")
+                .foregroundStyle(theme.tertiaryText)
+            if post.isSensitive {
+                Image(systemName: "eye.slash").foregroundStyle(.white).padding(5).background(
+                    .black.opacity(0.6), in: Circle())
+            }
+        }
+        .frame(width: 70, height: 70)
+        .accessibilityHidden(true)
+    }
+}
+
+struct LedditCommunityRow: View {
+    @Environment(\.ledditTheme) private var theme
+    let community: CommunityCardModel
+    var onFavorite: (() -> Void)?
+    var onSubscribe: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(theme.accent.opacity(0.15))
+                Image(systemName: "person.3.fill").foregroundStyle(theme.accent)
+            }
+            .frame(width: 34, height: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("r/\(community.name)")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(theme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(community.memberCount.map { "\($0.formatted()) members" } ?? "Community")
+                    .font(.caption)
+                    .foregroundStyle(theme.secondaryText)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
+            HStack(spacing: 8) {
+                Button {
+                    onFavorite?()
+                } label: {
+                    Image(systemName: community.isFavorite ? "star.fill" : "star")
+                        .frame(width: 24, height: 30)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(community.isFavorite ? theme.saved : theme.secondaryText)
+                .accessibilityLabel(community.isFavorite ? "Remove favorite" : "Add favorite")
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
+        .contextMenu {
+            Button {
+                onSubscribe?()
+            } label: {
+                Label(
+                    community.isSubscribed ? "Unsubscribe" : "Subscribe", systemImage: "person.badge.plus")
+            }
+            Button {
+                onFavorite?()
+            } label: {
+                Label(community.isFavorite ? "Remove Favorite" : "Add Favorite", systemImage: "star")
+            }
+        }
+    }
+}
+
+struct LedditCommentRow: View {
+    @Environment(\.ledditTheme) private var theme
+    let comment: CommentCardModel
+    var onCollapse: (() -> Void)?
+    var onVote: ((Int) -> Void)?
+    var onReply: (() -> Void)?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 9) {
+            Rectangle()
+                .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 7) {
+                Button(action: { onCollapse?() }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: comment.isCollapsed ? "chevron.right" : "chevron.down")
+                            .font(.caption.weight(.bold))
+                        Text(comment.author.isEmpty ? "[deleted]" : "u/\(comment.author)")
+                            .font(.caption.weight(.semibold))
+                        if comment.isModerator { LedditPill(title: "MOD", color: theme.moderator) }
+                        Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
+                        Spacer()
+                    }
+                    .foregroundStyle(theme.primaryText)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
+                if !comment.isCollapsed {
+                    if !comment.body.isEmpty {
+                        Text(comment.body).font(.subheadline).foregroundStyle(theme.primaryText).textSelection(
+                            .enabled)
+                    }
+                    HStack(spacing: 13) {
+                        LedditVoteControls(score: comment.score, vote: comment.vote, onVote: onVote)
+                        Button {
+                            onReply?()
+                        } label: {
+                            Label("Reply", systemImage: "arrowshape.turn.up.left")
+                        }
+                        .foregroundStyle(theme.reply)
+                        Button(action: { onCollapse?() }) { Label("Collapse", systemImage: "chevron.up") }
+                            .foregroundStyle(theme.secondaryText)
+                    }
+                    .font(.caption)
+                } else {
+                    Text("Show comment")
+                        .font(.caption)
+                        .foregroundStyle(theme.accent)
+                }
+            }
+        }
+        .padding(.leading, min(CGFloat(comment.depth) * 8, 48))
+        .padding(.trailing)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
+        .accessibilityElement(children: .contain)
+        .accessibilityValue("Depth \(comment.depth), \(comment.isCollapsed ? "collapsed" : "expanded")")
+        .contextMenu {
+            Button {
+                onVote?(1)
+            } label: {
+                Label("Upvote", systemImage: "arrow.up")
+            }
+            Button {
+                onVote?(-1)
+            } label: {
+                Label("Downvote", systemImage: "arrow.down")
+            }
+            Button {
+                onReply?()
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button {
+                onCollapse?()
+            } label: {
+                Label(comment.isCollapsed ? "Expand" : "Collapse", systemImage: "chevron.down")
+            }
+        }
+    }
+}

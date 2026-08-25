@@ -1,0 +1,57 @@
+name: Leddit
+options:
+  bundleIdPrefix: com.ledwardchow
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    IPHONEOS_DEPLOYMENT_TARGET: 26.0
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 1.0
+  configs:
+    Debug:
+      SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+targets:
+  Leddit:
+    type: application
+    platform: iOS
+    sources:
+      - path: LedditApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.Leddit
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Leddit
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+    info:
+      path: LedditApp/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.ledwardchow.Leddit
+            CFBundleURLSchemes:
+              - leddit
+    scheme:
+      gatherCoverageData: true
+      testTargets:
+        - LedditTests
+  LedditTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: LedditTests
+    dependencies:
+      - target: Leddit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.LedditTests
+        GENERATE_INFOPLIST_FILE: YES
