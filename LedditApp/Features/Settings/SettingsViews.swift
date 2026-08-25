@@ -194,6 +194,7 @@ struct SettingsDetailView: View {
     @AppStorage("appearance.showUsername") private var showUsername = true
     @State private var showingReset = false
     @State private var imageCacheBytes = 0
+    @State private var responseCacheBytes = 0
 
     var body: some View {
         Form {
@@ -230,6 +231,7 @@ struct SettingsDetailView: View {
             intelligenceAvailability = await dependencies.intelligence.availability
             if destination == .dataUse {
                 imageCacheBytes = await LedditImageCache.diskUsage()
+                responseCacheBytes = RedditResponseCache.diskUsage
             }
         }
     }
@@ -325,10 +327,15 @@ struct SettingsDetailView: View {
                     fromByteCount: Int64(imageCacheBytes),
                     countStyle: .file
                 ))
-                LabeledContent("Reddit response cache", value: "0 MB")
+                LabeledContent("Reddit response cache", value: ByteCountFormatter.string(
+                    fromByteCount: Int64(responseCacheBytes),
+                    countStyle: .file
+                ))
                 Button("Clear Network and Media Cache") {
-                    URLCache.shared.removeAllCachedResponses()
+                    RedditResponseCache.removeAll()
+                    responseCacheBytes = 0
                     Task {
+                        await SubscribedCommunitiesCache.shared.removeAll()
                         await LedditImageCache.removeAll()
                         imageCacheBytes = 0
                     }

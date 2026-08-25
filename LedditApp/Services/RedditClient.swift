@@ -39,6 +39,55 @@ protocol RedditClient: Sendable {
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult
 }
 
+/// Replaceable on-disk cache for logged-out Reddit JSON responses. Reddit's
+/// cache headers often require a round trip, so Leddit applies a short local
+/// freshness window to feeds it can safely share between sessions.
+enum RedditResponseCache {
+    static let storage = URLCache(
+        memoryCapacity: 16 * 1_024 * 1_024,
+        diskCapacity: 100 * 1_024 * 1_024,
+        diskPath: "LedditRedditResponses"
+    )
+
+    private static let cachedAtHeader = "X-Leddit-Cached-At"
+    private static let freshness: TimeInterval = 15 * 60
+
+    static var diskUsage: Int { storage.currentDiskUsage }
+
+    static func removeAll() {
+        storage.removeAllCachedResponses()
+    }
+
+    static func data(for request: URLRequest, now: Date = .now) -> Data? {
+        guard let cached = storage.cachedResponse(for: request),
+              let response = cached.response as? HTTPURLResponse,
+              let timestamp = response.value(forHTTPHeaderField: cachedAtHeader).flatMap(TimeInterval.init),
+              now.timeIntervalSince1970 - timestamp < freshness else {
+            return nil
+        }
+        return cached.data
+    }
+
+    static func store(_ data: Data, response: HTTPURLResponse, for request: URLRequest, now: Date = .now) {
+        var headers = response.allHeaderFields.reduce(into: [String: String]()) { values, pair in
+            guard let key = pair.key as? String else { return }
+            values[key] = String(describing: pair.value)
+        }
+        headers["Cache-Control"] = "max-age=900"
+        headers[cachedAtHeader] = String(now.timeIntervalSince1970)
+        guard let cachedResponse = HTTPURLResponse(
+            url: response.url ?? request.url!,
+            statusCode: response.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: headers
+        ) else { return }
+        storage.storeCachedResponse(
+            CachedURLResponse(response: cachedResponse, data: data, storagePolicy: .allowed),
+            for: request
+        )
+    }
+}
+
 /// A Reddit web-session JSON client. It uses an ephemeral URLSession and asks
 /// the credential vault for the selected account on every request.
 actor URLSessionRedditClient: RedditClient {
@@ -61,6 +110,7 @@ actor URLSessionRedditClient: RedditClient {
         // Ephemeral sessions keep Reddit's logged-out edge cookies in memory
         // without persisting browsing state beyond this app process.
         configuration.httpShouldSetCookies = true
+        configuration.urlCache = RedditResponseCache.storage
         configuration.requestCachePolicy = .useProtocolCachePolicy
         configuration.timeoutIntervalForRequest = 30
         configuration.timeoutIntervalForResource = 60
@@ -88,7 +138,8 @@ actor URLSessionRedditClient: RedditClient {
             query: query,
             body: nil,
             account: account ?? accountFromScope(request.accountScope),
-            retryable: true
+            retryable: true,
+            responseCachePolicy: request.responseCachePolicy
         )
         return try RedditJSONCodec.decodePosts(data)
     }
@@ -223,7 +274,8 @@ actor URLSessionRedditClient: RedditClient {
         query: [URLQueryItem],
         body: [String: String]?,
         account: AccountID?,
-        retryable: Bool
+        retryable: Bool,
+        responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache
     ) async throws -> Data {
         var attempt = 0
         while true {
@@ -233,7 +285,8 @@ actor URLSessionRedditClient: RedditClient {
                     path: path,
                     query: query,
                     body: body,
-                    account: account
+                    account: account,
+                    responseCachePolicy: responseCachePolicy
                 )
             } catch let error as RedditClientError {
                 guard retryable, attempt < 2, shouldRetry(error) else { throw error }
@@ -261,17 +314,30 @@ actor URLSessionRedditClient: RedditClient {
         path: String,
         query: [URLQueryItem],
         body: [String: String]?,
-        account: AccountID?
+        account: AccountID?,
+        responseCachePolicy: ListingRequest.ResponseCachePolicy
     ) async throws -> Data {
-        if account == nil {
-            await bootstrapAnonymousSessionIfNeeded()
-        }
         guard let url = makeURL(path: path, query: query) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let cacheRequest = request
+
+        let canUsePersistentCache = method == "GET" && account == nil
+        if canUsePersistentCache,
+           responseCachePolicy == .useCache,
+           let cached = RedditResponseCache.data(for: cacheRequest) {
+            return cached
+        }
+        if !canUsePersistentCache || responseCachePolicy == .reloadIgnoringCache {
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+        }
+
+        // A cache hit should not wait for Reddit's anonymous cookie bootstrap.
+        if account == nil {
+            await bootstrapAnonymousSessionIfNeeded()
+        }
 
         if let body {
             request.httpBody = formEncoded(body)
@@ -321,6 +387,9 @@ actor URLSessionRedditClient: RedditClient {
            !result.succeeded,
            let message = result.message {
             throw RedditClientError.reddit(errors: [message])
+        }
+        if canUsePersistentCache {
+            RedditResponseCache.store(data, response: http, for: cacheRequest)
         }
         return data
     }

@@ -372,9 +372,12 @@ struct LedditZoomableImage: View {
                             drag(viewportSize: geometry.size, imageSize: image.size),
                             isEnabled: scale > 1
                         )
-                        .onTapGesture(count: 2) {
-                            toggleZoom(viewportSize: geometry.size, imageSize: image.size)
-                        }
+                        .highPriorityGesture(
+                            TapGesture(count: 2)
+                                .onEnded {
+                                    toggleZoom(viewportSize: geometry.size, imageSize: image.size)
+                                }
+                        )
                 } else if loadFailed {
                     ContentUnavailableView("Image unavailable", systemImage: "photo.slash")
                 } else {
@@ -410,7 +413,18 @@ struct LedditZoomableImage: View {
     private func magnification(viewportSize: CGSize, imageSize: CGSize) -> some Gesture {
         MagnificationGesture()
             .onChanged { value in
-                scale = min(max(baseScale * value, 1), 8)
+                let proposedScale = min(max(baseScale * value, 1), 8)
+                let minimumZoomScale = fillScale(
+                    imageSize: imageSize,
+                    viewportSize: viewportSize
+                )
+                if baseScale > 1, proposedScale < minimumZoomScale * 0.85 {
+                    scale = 1
+                } else if proposedScale > 1 {
+                    scale = max(proposedScale, minimumZoomScale)
+                } else {
+                    scale = 1
+                }
                 offset = clampedOffset(
                     baseOffset,
                     scale: scale,
@@ -453,16 +467,22 @@ struct LedditZoomableImage: View {
         if scale > 1 {
             resetPosition()
         } else {
-            let fittedSize = aspectFitSize(imageSize: imageSize, viewportSize: viewportSize)
-            let fillScale = max(
-                viewportSize.width / max(fittedSize.width, 1),
-                viewportSize.height / max(fittedSize.height, 1)
-            )
-            let targetScale = min(max(fillScale, 2), 8)
+            let targetScale = min(max(
+                fillScale(imageSize: imageSize, viewportSize: viewportSize),
+                2
+            ), 8)
             scale = targetScale
             baseScale = targetScale
             onZoomChange?(true)
         }
+    }
+
+    private func fillScale(imageSize: CGSize, viewportSize: CGSize) -> CGFloat {
+        let fittedSize = aspectFitSize(imageSize: imageSize, viewportSize: viewportSize)
+        return max(
+            viewportSize.width / max(fittedSize.width, 1),
+            viewportSize.height / max(fittedSize.height, 1)
+        )
     }
 
     private func clampPosition(viewportSize: CGSize, imageSize: CGSize?) {
@@ -555,6 +575,15 @@ struct LedditMediaViewer: View {
         return post.galleryURLs
     }
 
+    private var pagePosition: Binding<Int?> {
+        Binding(
+            get: { page },
+            set: { newPage in
+                if let newPage { page = newPage }
+            }
+        )
+    }
+
     var body: some View {
         ZStack {
             Color.black
@@ -565,37 +594,47 @@ struct LedditMediaViewer: View {
                     ContentUnavailableView("Media unavailable", systemImage: "photo.slash")
                         .foregroundStyle(.white)
                 } else {
-                    TabView(selection: $page) {
-                        ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
-                            if post.mediaKind == "video" || post.mediaKind == "gif" {
-                                LedditVideoDetailView(url: url, audioURL: post.audioURL)
-                                    .tag(index)
-                            } else {
-                                ZStack {
-                                    LedditZoomableImage(
-                                        url: url,
-                                        accessibilityLabel: "Image \(index + 1) of \(mediaURLs.count)",
-                                        onZoomChange: { isZoomed = $0 }
-                                    )
-                                    if post.isSensitive && !isRevealed {
-                                        Button { isRevealed = true } label: {
-                                            VStack(spacing: 7) {
-                                                Image(systemName: "eye.slash")
-                                                Text("Tap to reveal")
-                                                    .font(.caption.weight(.semibold))
+                    GeometryReader { viewport in
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 0) {
+                                ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
+                                    Group {
+                                        if post.mediaKind == "video" || post.mediaKind == "gif" {
+                                            LedditVideoDetailView(url: url, audioURL: post.audioURL)
+                                        } else {
+                                            ZStack {
+                                                LedditZoomableImage(
+                                                    url: url,
+                                                    accessibilityLabel: "Image \(index + 1) of \(mediaURLs.count)",
+                                                    onZoomChange: { isZoomed = $0 }
+                                                )
+                                                if post.isSensitive && !isRevealed {
+                                                    Button { isRevealed = true } label: {
+                                                        VStack(spacing: 7) {
+                                                            Image(systemName: "eye.slash")
+                                                            Text("Tap to reveal")
+                                                                .font(.caption.weight(.semibold))
+                                                        }
+                                                        .foregroundStyle(.white)
+                                                        .padding(18)
+                                                        .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
                                             }
-                                            .foregroundStyle(.white)
-                                            .padding(18)
-                                            .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
                                         }
-                                        .buttonStyle(.plain)
                                     }
+                                    .frame(width: viewport.size.width, height: viewport.size.height)
+                                    .id(index)
                                 }
-                                .tag(index)
                             }
+                            .scrollTargetLayout()
                         }
+                        .scrollTargetBehavior(.paging)
+                        .scrollPosition(id: pagePosition)
+                        .scrollDisabled(isZoomed)
+                        .scrollIndicators(.hidden)
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
                     .ignoresSafeArea(.container, edges: .all)
                 }
 

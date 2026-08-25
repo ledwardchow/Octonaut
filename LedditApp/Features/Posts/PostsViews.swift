@@ -61,7 +61,7 @@ struct PostsRootView: View {
         .listStyle(.insetGrouped)
         .navigationTitle("Posts")
         .searchable(text: $communityQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a community")
-        .refreshable { await store.refreshCommunities() }
+        .refreshable { await store.refreshCommunities(forceRefresh: true) }
         .task(id: store.accountContextKey) { await store.refreshCommunities() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -129,6 +129,7 @@ struct PostsRootView: View {
                 Image(systemName: isExpanded.wrappedValue ? "chevron.down" : "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .frame(width: 14, height: 20, alignment: .center)
             }
             .contentShape(Rectangle())
         }
@@ -146,7 +147,9 @@ struct PostsRootView: View {
                 onSubscribe: { store.toggleSubscribe(communityID: community.id) }
             )
         }
-        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+        // Keep the system disclosure indicator on the same trailing line as
+        // the section controls while the row content still spans the width.
+        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
     }
 }
 
@@ -212,7 +215,7 @@ struct FeedView: View {
                         }
                     }
                     .listStyle(.plain)
-                    .refreshable { await store.refreshPosts(for: descriptor) }
+                    .refreshable { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                     .onChange(of: visiblePosts.first?.id) { _, firstID in
                         guard let firstID else { return }
                         proxy.scrollTo(firstID, anchor: .top)
@@ -228,7 +231,7 @@ struct FeedView: View {
                     ForEach(["Best", "Hot", "New", "Top", "Rising", "Controversial"], id: \.self) { sort in
                         Button {
                             store.selectedSort = sort
-                            Task { await store.refreshPosts(for: descriptor) }
+                            Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                         } label: {
                             if store.selectedSort == sort { Label(sort, systemImage: "checkmark") } else { Text(sort) }
                         }

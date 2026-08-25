@@ -234,13 +234,21 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
 struct CommunityCardModel: Identifiable, Hashable, Sendable {
     let id: String
     var name: String
+    var iconURL: URL?
     var memberCount: Int?
     var isSubscribed: Bool
     var isFavorite: Bool
 
-    init(name: String, memberCount: Int? = nil, isSubscribed: Bool = false, isFavorite: Bool = false) {
+    init(
+        name: String,
+        iconURL: URL? = nil,
+        memberCount: Int? = nil,
+        isSubscribed: Bool = false,
+        isFavorite: Bool = false
+    ) {
         self.id = name.lowercased()
         self.name = name
+        self.iconURL = iconURL
         self.memberCount = memberCount
         self.isSubscribed = isSubscribed
         self.isFavorite = isFavorite
@@ -248,8 +256,63 @@ struct CommunityCardModel: Identifiable, Hashable, Sendable {
 
     init(community: Community) {
         self.init(
-            name: community.reference.name, memberCount: community.subscribers,
+            name: community.reference.name, iconURL: community.reference.iconURL,
+            memberCount: community.subscribers,
             isSubscribed: community.isSubscribed, isFavorite: community.isFavorite)
+    }
+}
+
+actor SubscribedCommunitiesCache {
+    static let shared = SubscribedCommunitiesCache()
+
+    struct Value: Sendable {
+        let communities: [Community]
+        let isFresh: Bool
+    }
+
+    private struct Entry: Codable {
+        let storedAt: Date
+        let communities: [Community]
+    }
+
+    private let directoryURL: URL
+    private let freshness: TimeInterval = 15 * 60
+
+    init(fileManager: FileManager = .default) {
+        let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        directoryURL = cachesURL.appendingPathComponent("LedditSubscribedCommunities", isDirectory: true)
+        try? fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    }
+
+    func value(for account: AccountID, now: Date = .now) -> Value? {
+        guard let data = try? Data(contentsOf: fileURL(for: account)),
+              let entry = try? JSONDecoder().decode(Entry.self, from: data) else {
+            return nil
+        }
+        return Value(
+            communities: entry.communities,
+            isFresh: now.timeIntervalSince(entry.storedAt) < freshness
+        )
+    }
+
+    func store(_ communities: [Community], for account: AccountID, now: Date = .now) {
+        let entry = Entry(storedAt: now, communities: communities)
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        try? data.write(to: fileURL(for: account), options: .atomic)
+    }
+
+    func remove(for account: AccountID) {
+        try? FileManager.default.removeItem(at: fileURL(for: account))
+    }
+
+    func removeAll() {
+        try? FileManager.default.removeItem(at: directoryURL)
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    }
+
+    private func fileURL(for account: AccountID) -> URL {
+        directoryURL.appendingPathComponent(account.rawValue.uuidString.lowercased()).appendingPathExtension("json")
     }
 }
 
@@ -766,7 +829,7 @@ final class LedditFeatureStore {
         accountID == id && accountGeneration == generation
     }
 
-    func refreshPosts(for descriptor: FeedDescriptorModel = .popular) async {
+    func refreshPosts(for descriptor: FeedDescriptorModel = .popular, forceRefresh: Bool = false) async {
         feedState = .loading
         filteredPostCount = 0
         guard let reddit else {
@@ -783,7 +846,8 @@ final class LedditFeatureStore {
                 ListingRequest(
                     feed: domainFeed(for: descriptor),
                     limit: 35,
-                    accountScope: selectedAccountID.map(AccountScope.account) ?? .anonymous
+                    accountScope: selectedAccountID.map(AccountScope.account) ?? .anonymous,
+                    responseCachePolicy: forceRefresh ? .reloadIgnoringCache : .useCache
                 ),
                 account: selectedAccountID
             )
@@ -806,7 +870,7 @@ final class LedditFeatureStore {
         }
     }
 
-    func refreshCommunities() async {
+    func refreshCommunities(forceRefresh: Bool = false) async {
         guard let reddit else {
             communitiesState = communities.isEmpty ? .empty : .loaded
             return
@@ -822,6 +886,14 @@ final class LedditFeatureStore {
         communities = favorites.sorted().map {
             CommunityCardModel(name: $0, isSubscribed: true, isFavorite: true)
         }
+
+        if !forceRefresh,
+           let cached = await SubscribedCommunitiesCache.shared.value(for: selectedAccountID) {
+            applyCommunities(cached.communities, favorites: favorites)
+            communitiesState = communities.isEmpty ? .empty : .loaded
+            if cached.isFresh { return }
+        }
+
         communitiesState = .loading
         do {
             var values: [Community] = []
@@ -840,19 +912,8 @@ final class LedditFeatureStore {
                 after = next
             } while after != nil
 
-            var seenIDs = Set<String>()
-            communities =
-                values
-                .sorted {
-                    $0.reference.name.localizedCaseInsensitiveCompare($1.reference.name) == .orderedAscending
-                }
-                .filter { seenIDs.insert($0.id).inserted }
-                .map { community in
-                    var model = CommunityCardModel(community: community)
-                    model.isSubscribed = true
-                    model.isFavorite = favorites.contains(model.id)
-                    return model
-                }
+            applyCommunities(values, favorites: favorites)
+            await SubscribedCommunitiesCache.shared.store(values, for: selectedAccountID)
             communitiesState = communities.isEmpty ? .empty : .loaded
         } catch is CancellationError {
             return
@@ -860,6 +921,22 @@ final class LedditFeatureStore {
             guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             communitiesState = .failed(error.localizedDescription)
         }
+    }
+
+    private func applyCommunities(_ values: [Community], favorites: Set<String>) {
+        var seenIDs = Set<String>()
+        communities =
+            values
+            .sorted {
+                $0.reference.name.localizedCaseInsensitiveCompare($1.reference.name) == .orderedAscending
+            }
+            .filter { seenIDs.insert($0.id).inserted }
+            .map { community in
+                var model = CommunityCardModel(community: community)
+                model.isSubscribed = true
+                model.isFavorite = favorites.contains(model.id)
+                return model
+            }
     }
 
     func refreshInbox() async {

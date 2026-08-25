@@ -209,24 +209,32 @@ enum SheetRoute: Hashable, Codable, Sendable, Identifiable {
 }
 
 struct ListingRequest: Hashable, Codable, Sendable {
+    enum ResponseCachePolicy: String, Codable, Sendable {
+        case useCache
+        case reloadIgnoringCache
+    }
+
     var feed: FeedDescriptor
     var limit: Int
     var after: String?
     var before: String?
     var accountScope: AccountScope
+    var responseCachePolicy: ResponseCachePolicy
 
     init(
         feed: FeedDescriptor,
         limit: Int = 35,
         after: String? = nil,
         before: String? = nil,
-        accountScope: AccountScope = .anonymous
+        accountScope: AccountScope = .anonymous,
+        responseCachePolicy: ResponseCachePolicy = .useCache
     ) {
         self.feed = feed
         self.limit = min(max(limit, 1), 100)
         self.after = after
         self.before = before
         self.accountScope = accountScope
+        self.responseCachePolicy = responseCachePolicy
     }
 }
 

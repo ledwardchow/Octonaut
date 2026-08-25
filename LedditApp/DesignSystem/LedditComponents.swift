@@ -402,10 +402,7 @@ struct LedditCommunityRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(theme.accent.opacity(0.15))
-                Image(systemName: "person.3.fill").foregroundStyle(theme.accent)
-            }
+            LedditCommunityIcon(url: community.iconURL, tint: theme.accent)
             .frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
                 Text("r/\(community.name)")
@@ -449,6 +446,33 @@ struct LedditCommunityRow: View {
             } label: {
                 Label(community.isFavorite ? "Remove Favorite" : "Add Favorite", systemImage: "star")
             }
+        }
+    }
+}
+
+private struct LedditCommunityIcon: View {
+    let url: URL?
+    let tint: Color
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            Circle().fill(tint.opacity(0.15))
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.3.fill")
+                    .foregroundStyle(tint)
+            }
+        }
+        .clipShape(Circle())
+        .accessibilityHidden(true)
+        .task(id: url) {
+            image = nil
+            guard let url else { return }
+            image = try? await LedditImageCache.image(for: url)
         }
     }
 }
