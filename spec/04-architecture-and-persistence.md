@@ -2,7 +2,7 @@
 
 ## Technical baseline
 
-Leddit is a Swift 6 application using SwiftUI, structured concurrency, Observation, SwiftData, Keychain Services, URLSession, WebKit, AVFoundation, VisionKit, NaturalLanguage, and Foundation Models. The deployment target is iOS and iPadOS 26. The implementation may use iOS 27 APIs behind availability checks. Do not put business logic in SwiftUI view bodies.
+Octonaut is a Swift 6 application using SwiftUI, structured concurrency, Observation, SwiftData, Keychain Services, URLSession, WebKit, AVFoundation, VisionKit, NaturalLanguage, and Foundation Models. The deployment target is iOS and iPadOS 26. The implementation may use iOS 27 APIs behind availability checks. Do not put business logic in SwiftUI view bodies.
 
 `ARCH-001` Build feature code against protocols. Live Reddit, local fixture, and test implementations must be replaceable through one dependency container.
 
@@ -13,8 +13,8 @@ Leddit is a Swift 6 application using SwiftUI, structured concurrency, Observati
 ## Suggested package layout
 
 ```text
-LedditApp/
-  App/                 LedditApp, AppDependencies, scene and URL routing
+OctonautApp/
+  App/                 OctonautApp, AppDependencies, scene and URL routing
   DesignSystem/        theme tokens and reusable native components
   Features/
     Posts/ Inbox/ Account/ Search/ Settings/
@@ -25,9 +25,9 @@ LedditApp/
   Intelligence/        Foundation Models, filtering, docs retrieval, fallbacks
   Media/               images, AVPlayer, export, Live Text
   Support/             logging, reachability, clocks, HTML/Markdown, fixtures
-LedditShareExtension/
-LedditTests/
-LedditUITests/
+OctonautShareExtension/
+OctonautTests/
+OctonautUITests/
 ```
 
 Features may be Swift Package targets if compile-time boundaries remain practical. `Domain` must not import SwiftUI, WebKit, SwiftData, or a concrete networking implementation.

@@ -2,7 +2,7 @@
 
 ## App shell
 
-`UI-001` Leddit must use a system `TabView` with five tabs in this order:
+`UI-001` Octonaut must use a system `TabView` with five tabs in this order:
 
 1. **Posts**, symbol `rectangle.stack`
 2. **Inbox**, symbol `envelope`

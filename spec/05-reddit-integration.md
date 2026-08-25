@@ -6,7 +6,7 @@ The initial transport reproduces the web-session behavior used by Hydra. It is n
 
 `REDDIT-001` No Reddit API key is embedded or requested for the web-session transport. Logged-out reads use Reddit's public JSON pages. Signed-in requests use the user's Reddit web session cookie and modhash.
 
-`REDDIT-002` The app must present a plain disclosure before first login: Leddit signs into Reddit's website, stores the resulting session securely on this device, and uses it to make Reddit requests. Include a link to Reddit's terms and privacy policy.
+`REDDIT-002` The app must present a plain disclosure before first login: Octonaut signs into Reddit's website, stores the resulting session securely on this device, and uses it to make Reddit requests. Include a link to Reddit's terms and privacy policy.
 
 `REDDIT-003` Endpoint paths and request shapes in this document are integration targets, not domain API. Centralize them in one route builder and cover them with fixtures.
 
@@ -24,7 +24,7 @@ The initial transport reproduces the web-session behavior used by Hydra. It is n
 
 `REDDIT-AUTH-001` A login attempt has a random nonce and an explicit lifecycle. Results arriving after cancellation are ignored and any uncommitted secret is discarded.
 
-`REDDIT-AUTH-002` The login web view may offer Reddit's own password manager and passkey behavior. Leddit never sees or stores the password.
+`REDDIT-AUTH-002` The login web view may offer Reddit's own password manager and passkey behavior. Octonaut never sees or stores the password.
 
 `REDDIT-AUTH-003` If Reddit requires CAPTCHA, two-factor authentication, email confirmation, or consent, the user completes it inside the Reddit page. Do not automate those steps.
 
@@ -51,7 +51,7 @@ Use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Disable iCloud Keychain sync
 
 - `Cookie: reddit_session=<value>`
 - `X-Modhash: <modhash>` for state-changing requests and where Reddit expects it
-- A stable, honest `User-Agent` containing Leddit, version, platform, and a project contact URL
+- A stable, honest `User-Agent` containing Octonaut, version, platform, and a project contact URL
 - Appropriate `Accept` and form content type
 
 Do not use `HTTPCookieStorage.shared`. Prevent automatic credential forwarding across redirects to a non-Reddit host. The allowed host set is exact and includes only the Reddit hosts needed by a route.

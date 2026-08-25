@@ -1,6 +1,6 @@
-# Leddit implementation specification
+# Octonaut implementation specification
 
-This folder is the implementation contract for Leddit, a fully native SwiftUI Reddit client for iPhone and iPad. It describes the product, screens, data, Reddit integration, local intelligence, settings, and quality requirements in enough detail to rebuild the app without referring to the Hydra TypeScript source.
+This folder is the implementation contract for Octonaut, a fully native SwiftUI Reddit client for iPhone and iPad. It describes the product, screens, data, Reddit integration, local intelligence, settings, and quality requirements in enough detail to rebuild the app without referring to the Hydra TypeScript source.
 
 ## Document map
 
@@ -15,7 +15,7 @@ This folder is the implementation contract for Leddit, a fully native SwiftUI Re
 
 ## Authority and interpretation
 
-- This specification is authoritative for Leddit. Hydra is a reference product, not a runtime dependency.
+- This specification is authoritative for Octonaut. Hydra is a reference product, not a runtime dependency.
 - Requirements using **must** are required for the stated release. **Should** means the implementation may vary if the same user outcome is preserved. **May** means optional.
 - Requirement IDs are stable. Tests, issues, and pull requests should cite them.
 - When two requirements conflict, security and data-loss prevention take priority, followed by accessibility, functional behavior, and visual matching.
@@ -23,7 +23,7 @@ This folder is the implementation contract for Leddit, a fully native SwiftUI Re
 
 ## Baseline decisions
 
-- Product name: **Leddit**.
+- Product name: **Octonaut**.
 - Platforms: iPhone and iPad.
 - UI: SwiftUI, with small UIKit/WebKit adapters only where Apple does not expose a SwiftUI equivalent, such as `WKWebView`, Live Text interaction, and advanced media playback.
 - Minimum OS: iOS and iPadOS 26.0. Development uses Xcode 27 and the iOS 27 SDK, with iOS 27 additions guarded by availability checks. This enables the Observation framework, current SwiftUI navigation, and Apple's Foundation Models framework.
@@ -36,4 +36,4 @@ This folder is the implementation contract for Leddit, a fully native SwiftUI Re
 
 ## Definition of complete
 
-Leddit is complete when a new implementation can satisfy all release-one requirements and acceptance criteria in these documents using only the contracts here, fixture JSON, and public platform documentation. No screen may depend directly on Hydra code, Hydra server routes, RevenueCat identifiers, or JavaScript application state.
+Octonaut is complete when a new implementation can satisfy all release-one requirements and acceptance criteria in these documents using only the contracts here, fixture JSON, and public platform documentation. No screen may depend directly on Hydra code, Hydra server routes, RevenueCat identifiers, or JavaScript application state.

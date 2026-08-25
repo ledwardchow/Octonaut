@@ -30,7 +30,7 @@
 
 ## Privacy behavior
 
-`PRIV-001` Leddit has no analytics, advertising identifier, subscription SDK, hosted AI call, or developer-operated account service in release one.
+`PRIV-001` Octonaut has no analytics, advertising identifier, subscription SDK, hosted AI call, or developer-operated account service in release one.
 
 `PRIV-002` Logged-out requests still disclose normal network information to Reddit and media hosts. Privacy copy must say this clearly rather than implying offline browsing.
 
@@ -140,7 +140,7 @@ Budgets are measured on the oldest supported Apple Intelligence-capable phone an
 ### Phase 0 - foundations
 
 - Project targets, strict concurrency, dependency container, domain models, fixture transport, theme tokens, SwiftData schema, Keychain vault, and typed routing.
-- CI builds and tests iPhone and iPad targets. Warnings are treated as errors for Leddit code.
+- CI builds and tests iPhone and iPad targets. Warnings are treated as errors for Octonaut code.
 
 ### Phase 1 - read-only client
 

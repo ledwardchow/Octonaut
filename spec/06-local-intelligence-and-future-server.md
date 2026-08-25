@@ -2,13 +2,13 @@
 
 ## Design choice
 
-Leddit uses Apple's on-device system language model for semantic filters and help answers. Summaries can use that model or a user-configured OpenAI-compatible endpoint. Off-device summaries are opt-in at the point where the user adds an API key, and the settings screen explains that the selected post or comments are sent to the provider.
+Octonaut uses Apple's on-device system language model for semantic filters and help answers. Summaries can use that model or a user-configured OpenAI-compatible endpoint. Off-device summaries are opt-in at the point where the user adds an API key, and the settings screen explains that the selected post or comments are sent to the provider.
 
 The development baseline was checked against Xcode 27.0, iOS 27.0 SDK, and Swift 6.4. That SDK provides `SystemLanguageModel`, `LanguageModelSession`, `@Generable`, `@Guide`, streaming responses, prewarming, `GenerationOptions.maximumResponseTokens`, availability reasons, and per-response usage. Keep the service compatible with the iOS 26 form of these APIs where possible and use iOS 27 additions behind `#available`.
 
 ## Hydra server migration
 
-| Hydra server feature | Leddit release-one replacement |
+| Hydra server feature | Octonaut release-one replacement |
 | --- | --- |
 | Post and comment summaries | Configurable on-device or OpenAI-compatible provider |
 | Smart/semantic post filter | Batched on-device classification |
@@ -136,7 +136,7 @@ Default eligibility is at least 1,000 combined characters among usable comments.
 
 `AI-FALLBACK-001` If the system model is unavailable, automatic summary space is omitted. A manual request shows the availability reason and an Apple Intelligence settings link when the platform provides one.
 
-`AI-FALLBACK-002` Leddit may provide a clearly labeled “Key excerpts” fallback using deterministic sentence selection. It must not call itself an AI summary. Select two to four source sentences using title term overlap, position, and redundancy removal, and preserve them verbatim within reasonable copyright display limits for user-fetched content.
+`AI-FALLBACK-002` Octonaut may provide a clearly labeled “Key excerpts” fallback using deterministic sentence selection. It must not call itself an AI summary. Select two to four source sentences using title term overlap, position, and redundancy removal, and preserve them verbatim within reasonable copyright display limits for user-fetched content.
 
 `AI-FALLBACK-003` Documentation search remains fully functional without generative AI. Semantic filters pause rather than switching to an undisclosed remote service.
 
@@ -165,4 +165,4 @@ Authenticate requests using an installation private key stored in the Secure Enc
 
 `SERVER-FUTURE-005` Store only installation ID, encrypted credential, APNs token, last seen inbox ID/time, status, and timestamps. Define automatic deletion after opt-out and a short inactive retention period. Rate limit every route and audit credential access.
 
-`SERVER-FUTURE-006` Notification settings can be designed now but remain disabled with “Requires the future Leddit notification service.” Do not present local background refresh as equivalent to push.
+`SERVER-FUTURE-006` Notification settings can be designed now but remain disabled with “Requires the future Octonaut notification service.” Do not present local background refresh as equivalent to push.

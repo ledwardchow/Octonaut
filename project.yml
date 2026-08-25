@@ -1,4 +1,4 @@
-name: Leddit
+name: Octonaut
 options:
   bundleIdPrefix: com.ledwardchow
   deploymentTarget:
@@ -21,37 +21,37 @@ settings:
     Release:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
 targets:
-  Leddit:
+  Octonaut:
     type: application
     platform: iOS
     sources:
-      - path: LedditApp
+      - path: OctonautApp
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.Leddit
+        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.Octonaut
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Leddit
+        INFOPLIST_KEY_CFBundleDisplayName: Octonaut
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
     info:
-      path: LedditApp/Info.plist
+      path: OctonautApp/Info.plist
       properties:
         CFBundleURLTypes:
-          - CFBundleURLName: com.ledwardchow.Leddit
+          - CFBundleURLName: com.ledwardchow.Octonaut
             CFBundleURLSchemes:
-              - leddit
+              - octonaut
     scheme:
       gatherCoverageData: true
       testTargets:
-        - LedditTests
-  LedditTests:
+        - OctonautTests
+  OctonautTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - path: LedditTests
+      - path: OctonautTests
     dependencies:
-      - target: Leddit
+      - target: Octonaut
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.LedditTests
+        PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.OctonautTests
         GENERATE_INFOPLIST_FILE: YES

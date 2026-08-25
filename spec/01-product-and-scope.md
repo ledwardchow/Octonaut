@@ -2,7 +2,7 @@
 
 ## Product intent
 
-Leddit is a fast, configurable Reddit reader and client built specifically for Apple platforms. It supports logged-out browsing, multiple Reddit accounts, dense or media-rich feeds, threaded comments, search, posting, messaging, media viewing and export, local filters, local usage statistics, and on-device summaries.
+Octonaut is a fast, configurable Reddit reader and client built specifically for Apple platforms. It supports logged-out browsing, multiple Reddit accounts, dense or media-rich feeds, threaded comments, search, posting, messaging, media viewing and export, local filters, local usage statistics, and on-device summaries.
 
 The product should feel like a native iOS application rather than a webpage wrapper. Reddit login may use an embedded Reddit webpage because the initial authentication method relies on a Reddit web session. All browsing and interaction screens remain native.
 
@@ -40,7 +40,7 @@ The product should feel like a native iOS application rather than a webpage wrap
 - Local drafts and local usage statistics.
 - Themes, custom themes, alternate icons, data-use controls, gestures, sorting, link handling, and privacy controls.
 - iPad feed-detail split view.
-- Deep links, Universal Links where entitlement/domain setup allows them, custom `leddit://` links, share extension, and clipboard link detection when enabled.
+- Deep links, Universal Links where entitlement/domain setup allows them, custom `octonaut://` links, share extension, and clipboard link detection when enabled.
 
 ### Explicitly deferred
 

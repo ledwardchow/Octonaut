@@ -126,7 +126,7 @@ Additional settings:
 | --- | --- | --- |
 | Open external links | In-app Safari | Choices are In-app Safari, Default Browser, or a detected supported browser. |
 | Prefer Reader Mode | Off | Requests reader presentation where supported. |
-| Open Reddit links in Leddit | On | Routes known Reddit URLs natively. |
+| Open Reddit links in Octonaut | On | Routes known Reddit URLs natively. |
 | Detect copied Reddit links | Off | Uses a user-triggered paste control, never background polling. |
 
 Link Rewrite Rules contain Name, Enabled, Match Host, optional path prefix, result host/path/query transform, and a Test field. They cannot contain JavaScript, regular-expression code execution, custom URL schemes other than HTTPS, or credentials. Provide built-in removable examples only when useful, such as changing a known image host to a direct asset host.
@@ -176,7 +176,7 @@ This screen shows the selected summary provider status and explains when content
 | --- | --- | --- |
 | Refresh inbox on foreground | On | Fetches unread state when signed in. |
 | Background App Refresh | System controlled | Links to Settings and explains it is best-effort. |
-| Push notifications | Unavailable | Disabled row: “Requires the future Leddit notification service.” |
+| Push notifications | Unavailable | Disabled row: “Requires the future Octonaut notification service.” |
 
 Do not ask for notification permission in release one.
 

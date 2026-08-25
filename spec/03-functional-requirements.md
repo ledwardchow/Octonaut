@@ -8,7 +8,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 `FUN-AUTH-002` Add Account presents Reddit's login page in an isolated web view. Success requires both a Reddit session cookie and a successful identity request. Cancelling or failing login must not alter existing sessions.
 
-`FUN-AUTH-003` Leddit supports any number of saved accounts. Each account has a username, optional avatar, session secret, modhash, last validation time, and health state. The session secret is kept in Keychain. Other metadata may be kept in SwiftData.
+`FUN-AUTH-003` Octonaut supports any number of saved accounts. Each account has a username, optional avatar, session secret, modhash, last validation time, and health state. The session secret is kept in Keychain. Other metadata may be kept in SwiftData.
 
 `FUN-AUTH-004` Switching accounts is atomic. Cancel work owned by the old account, select the new credential, clear account-bound in-memory caches, fetch the new identity, and refresh visible personalized screens. A request created before the switch must either finish against the old account without affecting the new UI, or be cancelled. It must never inherit the new or old account's credential by accident.
 
@@ -48,7 +48,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 `FUN-ACTION-004` Report may open Reddit's native webpage until a stable transport is implemented. The menu must describe this before leaving the app.
 
-`FUN-ACTION-005` Share Link provides the canonical public Reddit permalink. Share as Image renders the post or comment in the active theme, includes its community and attribution, excludes account-only controls, and applies no Leddit watermark.
+`FUN-ACTION-005` Share Link provides the canonical public Reddit permalink. Share as Image renders the post or comment in the active theme, includes its community and attribution, excludes account-only controls, and applies no Octonaut watermark.
 
 ## Communities and multireddits
 
@@ -68,7 +68,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 `FUN-SEARCH-002` Empty global search shows suggested or trending communities when obtainable without private data. Search starts after submission or a 350 millisecond debounce once the query contains two non-space characters. Cancel stale queries.
 
-`FUN-SEARCH-003` Community search limits post results to that community and makes the scope visible. Recent queries are local, capped at 30, individually removable, and clearable. Private browsing is not inferred and searches are not sent to Leddit servers.
+`FUN-SEARCH-003` Community search limits post results to that community and makes the scope visible. Recent queries are local, capped at 30, individually removable, and clearable. Private browsing is not inferred and searches are not sent to Octonaut servers.
 
 ## Comments
 
@@ -84,7 +84,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 ## Composing and drafts
 
-`FUN-COMPOSE-001` Leddit supports new text and link posts, comments, comment and self-post edits, private messages, and message replies. Unsupported Reddit post types may open Reddit's web composer.
+`FUN-COMPOSE-001` Octonaut supports new text and link posts, comments, comment and self-post edits, private messages, and message replies. Unsupported Reddit post types may open Reddit's web composer.
 
 `FUN-COMPOSE-002` A composer validates required fields before enabling Send. It displays the target account and community or recipient. Sending disables duplicate submission and remains cancel-safe until the network request begins.
 
@@ -122,7 +122,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 ## Links and deep links
 
-`FUN-LINK-001` Canonical Reddit links route inside Leddit. The share extension accepts a Reddit URL and opens the matching native route. `leddit://` supports feed, community, post, user, search, and settings routes.
+`FUN-LINK-001` Canonical Reddit links route inside Octonaut. The share extension accepts a Reddit URL and opens the matching native route. `octonaut://` supports feed, community, post, user, search, and settings routes.
 
 `FUN-LINK-002` External links open in an in-app Safari view by default. Other choices are the system browser or an installed supported browser. Reader Mode is used only when selected and available.
 
@@ -132,7 +132,7 @@ This document defines behavior shared by the screens in [Information architectur
 
 ## Local data and statistics
 
-`FUN-LOCAL-001` Leddit records app launches, foreground entries, estimated feed scroll distance, posts viewed, post and comment upvotes/downvotes, posts/comments created, and per-community visits. These counters stay on device and can be reset.
+`FUN-LOCAL-001` Octonaut records app launches, foreground entries, estimated feed scroll distance, posts viewed, post and comment upvotes/downvotes, posts/comments created, and per-community visits. These counters stay on device and can be reset.
 
 `FUN-LOCAL-002` A visit is counted at most once per community per foreground session. Scroll distance is approximate and must not retain a detailed movement log.
 
