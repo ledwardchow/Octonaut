@@ -6,7 +6,7 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>com.ledwardchow.Octonaut</string>
+			<string>com.leddytech.octonaut</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>octonaut</string>
