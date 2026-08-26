@@ -247,6 +247,7 @@ struct Post: Codable, Hashable, Sendable, Identifiable {
     let permalink: URL
     let community: CommunityReference
     let author: UserReference?
+    var authorFlair: Flair?
     var title: String
     var body: RichText?
     var flair: Flair?
@@ -270,6 +271,7 @@ struct Post: Codable, Hashable, Sendable, Identifiable {
         permalink: URL,
         community: CommunityReference,
         author: UserReference? = nil,
+        authorFlair: Flair? = nil,
         title: String,
         body: RichText? = nil,
         flair: Flair? = nil,
@@ -292,6 +294,7 @@ struct Post: Codable, Hashable, Sendable, Identifiable {
         self.permalink = permalink
         self.community = community
         self.author = author
+        self.authorFlair = authorFlair
         self.title = title
         self.body = body
         self.flair = flair
@@ -329,6 +332,7 @@ struct CommentNode: Codable, Hashable, Sendable, Identifiable {
     let fullname: String
     let parentFullname: String
     var author: UserReference?
+    var authorFlair: Flair? = nil
     var body: RichText?
     var createdAt: Date
     var score: Int?

@@ -124,13 +124,95 @@ struct OctonautPill: View {
     }
 }
 
+struct OctonautFlairPill: View {
+    @Environment(\.octonautTheme) private var theme
+    let flair: Flair
+
+    private var backgroundColor: Color {
+        flair.backgroundColor.flatMap(Color.init(octonautHex:)) ?? theme.accent
+    }
+
+    private var foregroundColor: Color {
+        switch flair.textColor?.lowercased() {
+        case "light": .white
+        case "dark": .black
+        case let value?: Color(octonautHex: value) ?? .white
+        case nil: .white
+        }
+    }
+
+    var body: some View {
+        Text(flair.text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(foregroundColor)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(backgroundColor, in: Capsule())
+            .fixedSize(horizontal: true, vertical: false)
+            .accessibilityLabel("Post flair: \(flair.text)")
+    }
+}
+
+struct OctonautUserFlairPill: View {
+    @Environment(\.octonautTheme) private var theme
+    let flair: Flair
+
+    private var backgroundColor: Color {
+        flair.backgroundColor.flatMap(Color.init(octonautHex:)) ?? theme.secondaryText.opacity(0.16)
+    }
+
+    private var foregroundColor: Color {
+        switch flair.textColor?.lowercased() {
+        case "light": .white
+        case "dark": .black
+        case let value?: Color(octonautHex: value) ?? theme.secondaryText
+        case nil: theme.secondaryText
+        }
+    }
+
+    var body: some View {
+        Text(flair.text)
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(foregroundColor)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(backgroundColor, in: Capsule())
+            .accessibilityLabel("User flair: \(flair.text)")
+    }
+}
+
+private extension Color {
+    init?(octonautHex value: String) {
+        let hex = value.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard hex.count == 6 || hex.count == 8,
+              let number = UInt64(hex, radix: 16) else { return nil }
+        let hasAlpha = hex.count == 8
+        self.init(
+            .sRGB,
+            red: Double((number >> (hasAlpha ? 24 : 16)) & 0xFF) / 255,
+            green: Double((number >> (hasAlpha ? 16 : 8)) & 0xFF) / 255,
+            blue: Double((number >> (hasAlpha ? 8 : 0)) & 0xFF) / 255,
+            opacity: hasAlpha ? Double(number & 0xFF) / 255 : 1
+        )
+    }
+}
+
 struct OctonautIconLabel: View {
     let systemImage: String
     let title: String
     var color: Color = .secondary
 
     var body: some View {
-        Label(title, systemImage: systemImage)
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 16))
+                .frame(width: 18, height: 18)
+            Text(title)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+        }
             .foregroundStyle(color)
+            .fixedSize(horizontal: true, vertical: false)
     }
 }

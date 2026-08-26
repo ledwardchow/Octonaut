@@ -69,7 +69,7 @@ struct AccountManagerView: View {
                 Button {
                     dependencies.accounts.logOut()
                 } label: {
-                    Label("Continue as Logged Out", systemImage: "person.crop.circle.badge.xmark")
+                    Label("Continue without signing in", systemImage: "person.crop.circle.badge.xmark")
                 }
             } header: {
                 OctonautSectionHeader("Current session")
@@ -104,7 +104,14 @@ struct AccountManagerView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .confirmationDialog("Remove this saved account?", item: $accountToRemove) { account in
+        .confirmationDialog(
+            "Remove this saved account?",
+            isPresented: Binding(
+                get: { accountToRemove != nil },
+                set: { if !$0 { accountToRemove = nil } }
+            ),
+            presenting: accountToRemove
+        ) { account in
             Button("Remove Account", role: .destructive) {
                 Task { try? await dependencies.accounts.remove(account.id) }
             }
@@ -165,13 +172,20 @@ struct UserProfileView: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .listRowSeparator(.hidden)
                     .accessibilityLabel("Profile content")
+
+                    profileContent
                 }
-                profileContent
             }
         }
         .listStyle(.insetGrouped)
-        .navigationTitle("u/\(username)")
+        .contentMargins(.top, 8, for: .scrollContent)
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable {
+            await store.loadUserProfile(username: username, forceRefresh: true)
+        }
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
         }
@@ -245,33 +259,32 @@ struct UserProfileView: View {
     private var profileContent: some View {
         switch selectedSection {
         case .posts:
-            Section("Posts") {
-                if store.userProfilePosts.isEmpty {
-                    Text("No posts to show.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(store.userProfilePosts) { post in
-                        NavigationLink(value: FeatureRoute.post(post)) {
-                            OctonautCompactPostRow(post: post)
-                        }
-                        .listRowInsets(EdgeInsets())
+            if store.userProfilePosts.isEmpty {
+                Text("No posts to show.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(store.userProfilePosts) { post in
+                    NavigationLink(value: FeatureRoute.post(post)) {
+                        OctonautCompactPostRow(
+                            post: post,
+                            showsFlair: dependencies.settings.showPostFlair
+                        )
                     }
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
                 }
             }
         case .comments:
-            Section("Comments") {
-                if store.userProfileComments.isEmpty {
-                    Text("No comments to show.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(store.userProfileComments) { comment in
-                        if let postURL = comment.postURL {
-                            NavigationLink(value: FeatureRoute.postURL(postURL)) {
-                                UserCommentProfileRow(comment: comment)
-                            }
-                        } else {
+            if store.userProfileComments.isEmpty {
+                Text("No comments to show.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(store.userProfileComments) { comment in
+                    if let postURL = comment.postURL {
+                        NavigationLink(value: FeatureRoute.postURL(postURL)) {
                             UserCommentProfileRow(comment: comment)
                         }
+                    } else {
+                        UserCommentProfileRow(comment: comment)
                     }
                 }
             }

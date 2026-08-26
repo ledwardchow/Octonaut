@@ -1,4 +1,26 @@
+import SafariServices
 import SwiftUI
+
+struct OctonautBrowserDestination: Identifiable, Hashable {
+    let url: URL
+
+    var id: String { url.absoluteString }
+}
+
+struct OctonautBrowserView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let configuration = SFSafariViewController.Configuration()
+        configuration.entersReaderIfAvailable = false
+        configuration.barCollapsingEnabled = true
+        let controller = SFSafariViewController(url: url, configuration: configuration)
+        controller.dismissButtonStyle = .close
+        return controller
+    }
+
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
 
 enum OctonautLoadState: Equatable {
     case idle
@@ -138,12 +160,13 @@ struct OctonautVoteControls: View {
     var onVote: ((Int) -> Void)?
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 3) {
             Button {
                 onVote?(vote == 1 ? 0 : 1)
             } label: {
-                Image(systemName: vote == 1 ? "arrow.up.circle.fill" : "arrow.up.circle")
-                    .font(.title3)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16))
+                    .frame(width: 22, height: 30)
             }
             .foregroundStyle(vote == 1 ? theme.upvote : theme.secondaryText)
             .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
@@ -152,16 +175,23 @@ struct OctonautVoteControls: View {
                 .foregroundStyle(
                     vote == 1 ? theme.upvote : vote == -1 ? theme.downvote : theme.secondaryText
                 )
-                .frame(minWidth: 32)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            Rectangle()
+                .fill(theme.divider)
+                .frame(width: 0.5, height: 18)
             Button {
                 onVote?(vote == -1 ? 0 : -1)
             } label: {
-                Image(systemName: vote == -1 ? "arrow.down.circle.fill" : "arrow.down.circle")
-                    .font(.title3)
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 16))
+                    .frame(width: 22, height: 30)
             }
             .foregroundStyle(vote == -1 ? theme.downvote : theme.secondaryText)
             .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
         }
+        .padding(.horizontal, 4)
+        .octonautActionPill(theme: theme)
         .buttonStyle(.plain)
         .accessibilityElement(children: .contain)
     }
@@ -172,47 +202,64 @@ struct OctonautPostRow: View {
     @Environment(\.openURL) private var openURL
     let post: PostCardModel
     var bodyLineLimit: Int? = 4
+    var showsFlair = true
     var onVote: ((Int) -> Void)?
     var onSave: (() -> Void)?
     var onSeen: (() -> Void)?
     var onMedia: ((Int) -> Void)?
     var onOpen: (() -> Void)?
+    var onComments: (() -> Void)?
+    var onCommunityOpen: (() -> Void)?
+    var onCrosspost: (() -> Void)?
+    var communityOpenAccessibilityHint = "Opens the post"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 7) {
                 Image(systemName: "person.crop.circle.fill")
                     .foregroundStyle(theme.tertiaryText)
-                Text("r/\(post.community)")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(theme.secondaryText)
+                communityLabel
                 if !post.author.isEmpty {
                     Text("• u/\(post.author)").font(.caption).foregroundStyle(theme.tertiaryText)
+                    if let authorFlair = post.authorFlair {
+                        OctonautUserFlairPill(flair: authorFlair)
+                    }
                 }
                 Spacer()
                 if post.isSticky { OctonautPill(title: "Pinned", color: theme.moderator) }
                 if post.isNSFW { OctonautPill(title: "18+", color: theme.destructive) }
             }
             postTitle
+            if showsFlair, let flair = post.flair {
+                OctonautFlairPill(flair: flair)
+            }
             if !post.body.isEmpty {
                 postBody
             }
             if post.hasMedia {
                 OctonautInlineMediaView(post: post, onOpen: onMedia)
             }
-            HStack(spacing: 14) {
+            HStack(spacing: 0) {
                 OctonautVoteControls(score: post.score, vote: post.vote, onVote: onVote)
-                OctonautIconLabel(
-                    systemImage: "bubble.left", title: post.comments.formatted(), color: theme.secondaryText)
+                Spacer(minLength: 8)
+                commentsControl
+                Spacer(minLength: 8)
                 OctonautIconLabel(
                     systemImage: post.isSeen ? "eye.slash" : "eye", title: post.age,
-                    color: post.isSeen ? theme.seen : theme.secondaryText)
-                Spacer()
+                    color: post.isSeen ? theme.seen : theme.secondaryText
+                )
+                .padding(.horizontal, 6)
+                .octonautActionPill(theme: theme)
+                Spacer(minLength: 8)
                 Button {
                     onSave?()
                 } label: {
                     Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 16))
+                        .frame(width: 34, height: 34)
+                        .contentShape(Rectangle())
                 }
+                .octonautActionPill(theme: theme)
                 .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
                 .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
             }
@@ -247,6 +294,11 @@ struct OctonautPostRow: View {
             } label: {
                 Label(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
             }
+            if let onCrosspost {
+                Button(action: onCrosspost) {
+                    Label("Crosspost", systemImage: "arrow.triangle.branch")
+                }
+            }
             if let mediaURL = post.mediaURL {
                 Button {
                     openURL(mediaURL)
@@ -256,6 +308,52 @@ struct OctonautPostRow: View {
             }
             ShareLink(item: post.shareURL) { Label("Share Link", systemImage: "square.and.arrow.up") }
         }
+    }
+
+    @ViewBuilder
+    private var commentsControl: some View {
+        if let onComments {
+            Button(action: onComments) {
+                OctonautIconLabel(
+                    systemImage: "bubble.left",
+                    title: post.comments.formatted(),
+                    color: theme.secondaryText
+                )
+                .padding(.horizontal, 6)
+                .octonautActionPill(theme: theme)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(post.comments) comments")
+            .accessibilityHint("Opens the comments")
+        } else {
+            OctonautIconLabel(
+                systemImage: "bubble.left",
+                title: post.comments.formatted(),
+                color: theme.secondaryText
+            )
+            .padding(.horizontal, 6)
+            .octonautActionPill(theme: theme)
+        }
+    }
+
+    @ViewBuilder
+    private var communityLabel: some View {
+        if let onCommunityOpen {
+            Button(action: onCommunityOpen) {
+                communityText
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(communityOpenAccessibilityHint)
+        } else {
+            communityText
+        }
+    }
+
+    private var communityText: some View {
+        Text("r/\(post.community)")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(theme.secondaryText)
     }
 
     @ViewBuilder
@@ -302,16 +400,92 @@ struct OctonautPostRow: View {
     }
 }
 
+private extension View {
+    func octonautActionPill(theme: OctonautTheme) -> some View {
+        frame(height: 34)
+            .background(theme.elevatedSurface, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(theme.divider.opacity(0.7), lineWidth: 0.75)
+            }
+    }
+}
+
 enum OctonautMarkdown {
     static func attributedString(from source: String) -> AttributedString {
         let normalizedSource = insertingMissingLinkSpacing(in: source)
-        return (try? AttributedString(
-            markdown: normalizedSource,
+        let lines = normalizedSource
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+        var renderedLines: [AttributedString] = []
+        var index = 0
+
+        while index < lines.count {
+            if index + 1 < lines.count,
+               let level = setextHeadingLevel(for: lines[index + 1]),
+               !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                renderedLines.append(renderInline(lines[index], headingLevel: level))
+                index += 2
+                continue
+            }
+            if let heading = atxHeading(in: lines[index]) {
+                renderedLines.append(renderInline(heading.text, headingLevel: heading.level))
+            } else {
+                renderedLines.append(renderInline(lines[index]))
+            }
+            index += 1
+        }
+
+        var result = AttributedString()
+        for (lineIndex, line) in renderedLines.enumerated() {
+            if lineIndex > 0 { result.append(AttributedString("\n")) }
+            result.append(line)
+        }
+        return result
+    }
+
+    private static func renderInline(_ source: String, headingLevel: Int? = nil) -> AttributedString {
+        var result = (try? AttributedString(
+            markdown: source,
             options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .full,
+                interpretedSyntax: .inlineOnlyPreservingWhitespace,
                 failurePolicy: .returnPartiallyParsedIfPossible
             )
-        )) ?? AttributedString(normalizedSource)
+        )) ?? AttributedString(source)
+        if let headingLevel {
+            result.font = switch headingLevel {
+            case 1: .title3.weight(.bold)
+            case 2: .headline
+            default: .subheadline.weight(.bold)
+            }
+        }
+        return result
+    }
+
+    private static func atxHeading(in line: String) -> (level: Int, text: String)? {
+        let content = line.drop(while: { $0 == " " })
+        guard line.count - content.count <= 3 else { return nil }
+        let level = content.prefix(while: { $0 == "#" }).count
+        guard (1...6).contains(level) else { return nil }
+        let remainder = content.dropFirst(level)
+        guard remainder.first == " " || remainder.first == "\t" else { return nil }
+        var text = String(remainder.drop(while: { $0 == " " || $0 == "\t" }))
+        text = text.replacingOccurrences(
+            of: #"[ \t]+#+[ \t]*$"#,
+            with: "",
+            options: .regularExpression
+        )
+        return (level, text)
+    }
+
+    private static func setextHeadingLevel(for line: String) -> Int? {
+        let marker = line.trimmingCharacters(in: .whitespaces)
+        guard !marker.isEmpty else { return nil }
+        if marker.allSatisfy({ $0 == "=" }) { return 1 }
+        if marker.allSatisfy({ $0 == "-" }) { return 2 }
+        return nil
     }
 
     private static func insertingMissingLinkSpacing(in source: String) -> String {
@@ -337,19 +511,31 @@ struct OctonautCompactPostRow: View {
     @Environment(\.octonautTheme) private var theme
     let post: PostCardModel
     var thumbnailOnRight = false
+    var showsFlair = true
     var onVote: ((Int) -> Void)?
     var onSave: (() -> Void)?
     var onOpen: (() -> Void)?
+    var onCommunityOpen: (() -> Void)?
+    var communityOpenAccessibilityHint = "Opens the post"
 
     var body: some View {
         HStack(spacing: 11) {
             if !thumbnailOnRight { thumbnail }
             VStack(alignment: .leading, spacing: 5) {
                 postTitle
-                Text("r/\(post.community) • \(post.author.isEmpty ? "deleted" : "u/\(post.author)")")
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryText)
-                    .lineLimit(1)
+                if showsFlair, let flair = post.flair {
+                    OctonautFlairPill(flair: flair)
+                }
+                HStack(spacing: 3) {
+                    communityLabel
+                    Text("• \(post.author.isEmpty ? "deleted" : "u/\(post.author)")")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                    if let authorFlair = post.authorFlair, !post.author.isEmpty {
+                        OctonautUserFlairPill(flair: authorFlair)
+                    }
+                }
+                .lineLimit(1)
                 HStack(spacing: 10) {
                     Text("↑ \(post.score.formatted())")
                     Text("💬 \(post.comments.formatted())")
@@ -391,6 +577,25 @@ struct OctonautCompactPostRow: View {
     }
 
     @ViewBuilder
+    private var communityLabel: some View {
+        if let onCommunityOpen {
+            Button(action: onCommunityOpen) {
+                communityText
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(communityOpenAccessibilityHint)
+        } else {
+            communityText
+        }
+    }
+
+    private var communityText: some View {
+        Text("r/\(post.community)")
+            .font(.caption)
+            .foregroundStyle(theme.secondaryText)
+    }
+
+    @ViewBuilder
     private var postTitle: some View {
         if let onOpen {
             Button(action: onOpen) {
@@ -414,15 +619,33 @@ struct OctonautCompactPostRow: View {
     private var thumbnail: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 7).fill(theme.elevatedSurface)
-            Image(systemName: post.isVideo ? "play.fill" : post.hasMedia ? "photo" : "doc.text")
-                .foregroundStyle(theme.tertiaryText)
+            if let previewURL {
+                OctonautAsyncImage(url: previewURL)
+            } else {
+                Image(systemName: post.isVideo ? "play.fill" : post.hasMedia ? "photo" : "doc.text")
+                    .foregroundStyle(theme.tertiaryText)
+            }
+            if post.isVideo && !post.isSensitive {
+                Image(systemName: "play.fill")
+                    .foregroundStyle(.white)
+                    .padding(7)
+                    .background(.black.opacity(0.55), in: Circle())
+            }
             if post.isSensitive {
                 Image(systemName: "eye.slash").foregroundStyle(.white).padding(5).background(
                     .black.opacity(0.6), in: Circle())
             }
         }
         .frame(width: 70, height: 70)
+        .clipShape(RoundedRectangle(cornerRadius: 7))
         .accessibilityHidden(true)
+    }
+
+    private var previewURL: URL? {
+        if let thumbnailURL = post.thumbnailURL { return thumbnailURL }
+        if let galleryURL = post.galleryURLs.first { return galleryURL }
+        if post.mediaKind == "image" || post.mediaKind == "gif" { return post.mediaURL }
+        return nil
     }
 }
 
@@ -528,6 +751,9 @@ struct OctonautCommentRow: View {
                             .font(.caption.weight(.bold))
                         Text(comment.author.isEmpty ? "[deleted]" : "u/\(comment.author)")
                             .font(.caption.weight(.semibold))
+                        if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
+                            OctonautUserFlairPill(flair: authorFlair)
+                        }
                         if comment.isModerator { OctonautPill(title: "MOD", color: theme.moderator) }
                         Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
                         Spacer()

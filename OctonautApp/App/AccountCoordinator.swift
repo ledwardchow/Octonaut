@@ -84,6 +84,7 @@ final class AccountCoordinator {
         try await secrets.delete(for: id)
         try await persistence.deleteAccount(id)
         await SubscribedCommunitiesCache.shared.remove(for: id)
+        await UserProfileCache.shared.remove(for: id)
         accounts.removeAll { $0.id == id }
         if selectedAccountID == id { selectedAccountID = accounts.first?.id }
     }
@@ -132,6 +133,7 @@ final class AccountCoordinator {
             try await persistence.deleteAccount(account.id)
         }
         await SubscribedCommunitiesCache.shared.removeAll()
+        await UserProfileCache.shared.removeAll()
         accounts.removeAll()
     }
 }

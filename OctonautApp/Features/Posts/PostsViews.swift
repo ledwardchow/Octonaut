@@ -162,6 +162,7 @@ struct FeedView: View {
     @State private var showingLogin = false
     @State private var selectedMediaPost: PostCardModel?
     @State private var selectedMediaPage = 0
+    @State private var browserDestination: OctonautBrowserDestination?
 
     private var compactRows: Bool { dependencies.settings.feedLayout == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
@@ -191,12 +192,27 @@ struct FeedView: View {
                         ForEach(Array(visiblePosts.enumerated()), id: \.element.id) { index, post in
                             Group {
                                 if compactRows {
-                                    OctonautCompactPostRow(post: post, thumbnailOnRight: thumbnailOnRight, onVote: { value in performVote(postID: post.id, value: value) }, onSave: { performSave(postID: post.id) }, onOpen: { router.push(.post(post)) })
+                                    OctonautCompactPostRow(post: post, thumbnailOnRight: thumbnailOnRight, showsFlair: dependencies.settings.showPostFlair, onVote: { value in performVote(postID: post.id, value: value) }, onSave: { performSave(postID: post.id) }, onOpen: { router.push(.post(post)) }, onCommunityOpen: { router.push(.post(post)) })
                                 } else {
-                                    OctonautPostRow(post: post, onVote: { value in performVote(postID: post.id, value: value) }, onSave: { performSave(postID: post.id) }, onSeen: { store.markSeen(postID: post.id) }, onMedia: { page in
-                                        selectedMediaPage = page
-                                        selectedMediaPost = post
-                                    }, onOpen: { router.push(.post(post)) })
+                                    OctonautPostRow(
+                                        post: post,
+                                        showsFlair: dependencies.settings.showPostFlair,
+                                        onVote: { value in
+                                            performVote(postID: post.id, value: value)
+                                        },
+                                        onSave: { performSave(postID: post.id) },
+                                        onSeen: { store.markSeen(postID: post.id) },
+                                        onMedia: { page in
+                                            selectedMediaPage = page
+                                            selectedMediaPost = post
+                                        },
+                                        onOpen: { router.push(.post(post)) },
+                                        onComments: { router.push(.post(post)) },
+                                        onCommunityOpen: { router.push(.post(post)) },
+                                        onCrosspost: {
+                                            browserDestination = OctonautBrowserDestination(url: post.crosspostURL)
+                                        }
+                                    )
                                 }
                             }
                             .listRowInsets(EdgeInsets())
@@ -260,6 +276,10 @@ struct FeedView: View {
         }
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
+        }
+        .sheet(item: $browserDestination) { destination in
+            OctonautBrowserView(url: destination.url)
+                .ignoresSafeArea()
         }
         .fullScreenCover(item: $selectedMediaPost) { post in
             OctonautMediaViewer(

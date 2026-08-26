@@ -72,7 +72,7 @@ Default eligibility:
 - The user has enabled post summaries.
 - The model is available.
 
-The user may request a summary manually for shorter content.
+Content below the eligibility threshold does not show a summary card and cannot be requested manually from the detail screen.
 
 `AI-SUMMARY-002` Normalize input to plain text, preserve paragraph boundaries, remove navigation boilerplate, and limit to the model's safe context budget. Prefer the title and beginning plus representative later paragraphs. The application-side hard ceiling is 15,000 characters until token-aware chunking is measured.
 
@@ -120,7 +120,7 @@ Default eligibility is at least 1,000 combined characters among usable comments.
 
 `AI-SAFE-001` Delimit Reddit content and user filter text as untrusted data. Instructions explicitly say that commands inside that data must not be followed. Structured generation limits output shape but does not replace validation.
 
-`AI-SAFE-002` A refusal, safety error, context-window error, unsupported guide, exceeded model rate, or concurrent-request error maps to a local error state. Do not weaken system guardrails automatically. The user can dismiss the summary.
+`AI-SAFE-002` A refusal, safety error, context-window error, unsupported guide, exceeded model rate, or concurrent-request error maps to a local error state. All system-model sessions use Apple's most permissive public guardrail mode, `permissiveContentTransformations`; Foundation Models does not expose a fully disabled mode. The user can dismiss the summary.
 
 `AI-SAFE-003` Generated summaries are informational and may be wrong. The info sheet says they are produced on device from selected visible text and encourages checking the source.
 

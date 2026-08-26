@@ -163,7 +163,7 @@ Remove All Accounts requires typing or selecting a confirmation. It deletes all 
 | API key | Empty | Stored in the device Keychain. Summaries remain unavailable until it is saved. |
 | Post summaries | On if available | Eligibility and limits are in `AI-SUMMARY-*`. |
 | Comment summaries | On if available | Eligibility and limits are in `AI-COMMENT-*`. |
-| Automatic visible summaries | On | Generates only for eligible visible content. Off keeps manual Summarize. |
+| Automatic visible summaries | On | Generates only for eligible visible content. Off keeps manual Summarize for eligible content only. |
 | Key excerpts fallback | On | Shows deterministic excerpts when generation is unavailable. |
 | Cache summaries | On | Uses the local 30-day content-hash cache. |
 | Local help answers | On if available | Lexical help search remains available when Off. |

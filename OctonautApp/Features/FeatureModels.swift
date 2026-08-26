@@ -7,7 +7,8 @@ extension PostMedia {
         case .image(_, let thumbnail, _, _): return thumbnail
         case .video(_, _, let thumbnail, _): return thumbnail
         case .gallery(let items): return items.first?.thumbnailURL
-        case .none, .link, .poll, .unsupported: return nil
+        case .link(_, let metadata): return metadata?.imageURL
+        case .none, .poll, .unsupported: return nil
         }
     }
 
@@ -32,8 +33,10 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
     let id: String
     var community: String
     var author: String
+    var authorFlair: Flair?
     var title: String
     var body: String
+    var flair: Flair?
     var score: Int
     var comments: Int
     var age: String
@@ -54,13 +57,21 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
     var audioURL: URL?
 
     var isSensitive: Bool { isNSFW || isSpoiler }
+    var fullname: String { IDNormalization.fullname(id, kind: "t3") }
+    var crosspostURL: URL {
+        var components = URLComponents(string: "https://www.reddit.com/submit")!
+        components.queryItems = [URLQueryItem(name: "source_id", value: fullname)]
+        return components.url!
+    }
 
     init(
         id: String,
         community: String,
         author: String,
+        authorFlair: Flair? = nil,
         title: String,
         body: String,
+        flair: Flair? = nil,
         score: Int,
         comments: Int,
         age: String,
@@ -83,8 +94,10 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         self.id = id
         self.community = community
         self.author = author
+        self.authorFlair = authorFlair
         self.title = title
         self.body = body
+        self.flair = flair
         self.score = score
         self.comments = comments
         self.age = age
@@ -110,8 +123,10 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
             id: post.id,
             community: post.community.name,
             author: post.author?.username ?? "",
+            authorFlair: post.authorFlair,
             title: post.title,
             body: Self.displayBody(for: post),
+            flair: post.flair,
             score: post.score ?? 0,
             comments: post.commentCount,
             age: post.createdAt.formatted(.relative(presentation: .named)),
@@ -135,7 +150,6 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
 
     private static func displayBody(for post: Post) -> String {
         guard let body = post.body?.plainText else { return "" }
-        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if post.media.kind == "embeddedVideo" || post.media.kind == "video",
            let mediaURL = post.media.primaryURL,
@@ -144,14 +158,17 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        guard post.media.kind == "image",
-              let mediaURL = post.media.primaryURL,
-              let bodyURL = URL(string: trimmedBody.replacingOccurrences(of: "&amp;", with: "&")),
-              bodyURL == mediaURL else {
+        guard post.media.kind == "image", let mediaURL = post.media.primaryURL else {
             return body
         }
 
-        return ""
+        let visibleLines = body.components(separatedBy: .newlines).filter { line in
+            let candidate = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "&amp;", with: "&")
+            return URL(string: candidate) != mediaURL
+        }
+        return visibleLines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Creates the small amount of identity needed to render a detail route
@@ -323,9 +340,99 @@ actor SubscribedCommunitiesCache {
     }
 }
 
+actor UserProfileCache {
+    static let shared = UserProfileCache()
+
+    struct Value: Sendable {
+        let profile: UserProfile
+        let posts: [Post]
+        let comments: [UserComment]
+        let isFresh: Bool
+    }
+
+    private struct Entry: Codable {
+        let storedAt: Date
+        let profile: UserProfile
+        let posts: [Post]
+        let comments: [UserComment]
+    }
+
+    private let directoryURL: URL
+    private let freshness: TimeInterval
+
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil,
+        freshness: TimeInterval = 60 * 60
+    ) {
+        let cachesURL = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        self.directoryURL = directoryURL
+            ?? cachesURL.appendingPathComponent("OctonautUserProfiles", isDirectory: true)
+        self.freshness = freshness
+        try? fileManager.createDirectory(at: self.directoryURL, withIntermediateDirectories: true)
+    }
+
+    func value(
+        for username: String,
+        account: AccountID?,
+        now: Date = .now
+    ) -> Value? {
+        guard let data = try? Data(contentsOf: fileURL(for: username, account: account)),
+              let entry = try? JSONDecoder().decode(Entry.self, from: data) else {
+            return nil
+        }
+        return Value(
+            profile: entry.profile,
+            posts: entry.posts,
+            comments: entry.comments,
+            isFresh: now.timeIntervalSince(entry.storedAt) < freshness
+        )
+    }
+
+    func store(
+        profile: UserProfile,
+        posts: [Post],
+        comments: [UserComment],
+        for username: String,
+        account: AccountID?,
+        now: Date = .now
+    ) {
+        let entry = Entry(storedAt: now, profile: profile, posts: posts, comments: comments)
+        let scopeDirectory = scopeDirectoryURL(for: account)
+        try? FileManager.default.createDirectory(at: scopeDirectory, withIntermediateDirectories: true)
+        guard let data = try? JSONEncoder().encode(entry) else { return }
+        try? data.write(to: fileURL(for: username, account: account), options: .atomic)
+    }
+
+    func remove(for account: AccountID) {
+        try? FileManager.default.removeItem(at: scopeDirectoryURL(for: account))
+    }
+
+    func removeAll() {
+        try? FileManager.default.removeItem(at: directoryURL)
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    }
+
+    private func fileURL(for username: String, account: AccountID?) -> URL {
+        let normalizedUsername = username.lowercased().map { character in
+            character.isLetter || character.isNumber || character == "_" || character == "-"
+                ? character : "_"
+        }
+        return scopeDirectoryURL(for: account)
+            .appendingPathComponent(String(normalizedUsername))
+            .appendingPathExtension("json")
+    }
+
+    private func scopeDirectoryURL(for account: AccountID?) -> URL {
+        directoryURL.appendingPathComponent(account?.description ?? "anonymous", isDirectory: true)
+    }
+}
+
 struct CommentCardModel: Identifiable, Hashable, Sendable {
     let id: String
     var author: String
+    var authorFlair: Flair?
     var body: String
     var score: Int
     var age: String
@@ -342,6 +449,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     init(
         id: String,
         author: String,
+        authorFlair: Flair? = nil,
         body: String,
         score: Int,
         age: String,
@@ -357,6 +465,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     ) {
         self.id = id
         self.author = author
+        self.authorFlair = authorFlair
         self.body = body
         self.score = score
         self.age = age
@@ -375,6 +484,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         self.init(
             id: comment.id,
             author: comment.author?.username ?? "",
+            authorFlair: comment.authorFlair,
             body: comment.body?.plainText ?? "",
             score: comment.score ?? 0,
             age: comment.createdAt.formatted(.relative(presentation: .named)),
@@ -677,6 +787,14 @@ enum FeatureSheet: Identifiable, Hashable {
 @MainActor
 @Observable
 final class OctonautFeatureStore {
+    private struct FeedCacheEntry {
+        let posts: [PostCardModel]
+        let filteredPostCount: Int
+        let nextPage: String?
+        let filterRevision: Int
+        let storedAt: Date
+    }
+
     @ObservationIgnored private let reddit: (any RedditClient)?
     @ObservationIgnored private let authenticated: (any AuthenticatedRedditService)?
     @ObservationIgnored private let intelligence: (any IntelligenceService)?
@@ -690,6 +808,10 @@ final class OctonautFeatureStore {
     private var accountGeneration: UInt = 0
     @ObservationIgnored private var nextPage: String?
     @ObservationIgnored private var loadedFeed: FeedDescriptorModel?
+    @ObservationIgnored private var feedCache: [FeedDescriptorModel: FeedCacheEntry] = [:]
+    @ObservationIgnored private let feedCacheFreshness: TimeInterval = 15 * 60
+    @ObservationIgnored private var communitiesRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var communitiesRefreshID: UUID?
     var posts: [PostCardModel] = [
         .sample,
         .mediaSample,
@@ -753,6 +875,7 @@ final class OctonautFeatureStore {
     var userProfileComments: [UserCommentCardModel] = []
     var userProfileState: OctonautLoadState = .idle
     var loadedUserProfileUsername = ""
+    var loadedUserProfileAccountContext = ""
     var unreadCount: Int { inbox.filter(\.isUnread).count }
     var accountContextKey: String {
         "\(accountID?.description ?? "anonymous"):\(accountGeneration)"
@@ -815,6 +938,10 @@ final class OctonautFeatureStore {
         accounts = domainAccounts.map { AccountCardModel(account: $0, isActive: $0.id == id) }
 
         guard selectionChanged else { return }
+        communitiesRefreshTask?.cancel()
+        communitiesRefreshTask = nil
+        communitiesRefreshID = nil
+        feedCache.removeAll()
         nextPage = nil
         loadedFeed = nil
         detailPost = nil
@@ -837,8 +964,24 @@ final class OctonautFeatureStore {
     }
 
     func refreshPosts(for descriptor: FeedDescriptorModel = .popular, forceRefresh: Bool = false) async {
-        feedState = .loading
-        filteredPostCount = 0
+        let filterRevision = Int(settings?.filterRevision ?? 0)
+        var hasWarmContent = loadedFeed == descriptor && !posts.isEmpty
+        if !forceRefresh,
+           let cached = feedCache[descriptor],
+           cached.filterRevision == filterRevision {
+            posts = cached.posts
+            filteredPostCount = cached.filteredPostCount
+            nextPage = cached.nextPage
+            loadedFeed = descriptor
+            feedState = posts.isEmpty ? .empty : .loaded
+            hasWarmContent = !posts.isEmpty
+            if Date.now.timeIntervalSince(cached.storedAt) < feedCacheFreshness {
+                return
+            }
+        }
+
+        feedState = hasWarmContent ? .loaded : .loading
+        if !hasWarmContent { filteredPostCount = 0 }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(240))
             guard !Task.isCancelled else { return }
@@ -868,16 +1011,47 @@ final class OctonautFeatureStore {
             nextPage = listing.after
             loadedFeed = descriptor
             feedState = posts.isEmpty ? .empty : .loaded
+            feedCache[descriptor] = FeedCacheEntry(
+                posts: posts,
+                filteredPostCount: filteredPostCount,
+                nextPage: nextPage,
+                filterRevision: filterRevision,
+                storedAt: .now
+            )
         } catch is CancellationError {
             return
         } catch {
             guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             nextPage = nil
-            feedState = .failed(error.localizedDescription)
+            feedState = hasWarmContent ? .loaded : .failed(error.localizedDescription)
         }
     }
 
     func refreshCommunities(forceRefresh: Bool = false) async {
+        if !forceRefresh, let communitiesRefreshTask {
+            await communitiesRefreshTask.value
+            return
+        }
+
+        if forceRefresh {
+            communitiesRefreshTask?.cancel()
+        }
+
+        let refreshID = UUID()
+        communitiesRefreshID = refreshID
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performCommunitiesRefresh(forceRefresh: forceRefresh)
+            if self.communitiesRefreshID == refreshID {
+                self.communitiesRefreshTask = nil
+                self.communitiesRefreshID = nil
+            }
+        }
+        communitiesRefreshTask = task
+        await task.value
+    }
+
+    private func performCommunitiesRefresh(forceRefresh: Bool) async {
         guard let reddit else {
             communitiesState = communities.isEmpty ? .empty : .loaded
             return
@@ -890,17 +1064,27 @@ final class OctonautFeatureStore {
 
         let selectedGeneration = accountGeneration
         let favorites = localFavoriteCommunityNames(accountID: selectedAccountID)
-        communities = favorites.sorted().map {
-            CommunityCardModel(name: $0, isSubscribed: true, isFavorite: true)
+        if communities.isEmpty {
+            communities = favorites.sorted().map {
+                CommunityCardModel(name: $0, isSubscribed: true, isFavorite: true)
+            }
         }
 
-        if !forceRefresh,
-           let cached = await SubscribedCommunitiesCache.shared.value(for: selectedAccountID) {
-            applyCommunities(cached.communities, favorites: favorites)
-            communitiesState = communities.isEmpty ? .empty : .loaded
-            if cached.isFresh { return }
+        if !forceRefresh {
+            let cached = await SubscribedCommunitiesCache.shared.value(for: selectedAccountID)
+            guard !Task.isCancelled,
+                  isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            else { return }
+            if let cached {
+                applyCommunities(cached.communities, favorites: favorites)
+                communitiesState = communities.isEmpty ? .empty : .loaded
+                if cached.isFresh { return }
+            }
         }
 
+        guard !Task.isCancelled,
+              isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+        else { return }
         communitiesState = .loading
         do {
             var values: [Community] = []
@@ -958,17 +1142,37 @@ final class OctonautFeatureStore {
         inboxState = inbox.isEmpty ? .empty : .loaded
     }
 
-    func loadUserProfile(username: String) async {
+    func loadUserProfile(username: String, forceRefresh: Bool = false) async {
         let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedUsername.isEmpty else {
             userProfileState = .failed("A username is required.")
             return
         }
-        userProfileState = .loading
+        let selectedAccountID = accountID
+        let selectedGeneration = accountGeneration
+        let currentAccountContext = accountContextKey
+        let isSameProfile =
+            loadedUserProfileUsername.caseInsensitiveCompare(normalizedUsername) == .orderedSame
+            && loadedUserProfileAccountContext == currentAccountContext
         loadedUserProfileUsername = normalizedUsername
-        userProfile = nil
-        userProfilePosts.removeAll()
-        userProfileComments.removeAll()
+        loadedUserProfileAccountContext = currentAccountContext
+
+        if !forceRefresh,
+           let cached = await UserProfileCache.shared.value(
+               for: normalizedUsername,
+               account: selectedAccountID
+           ),
+           !Task.isCancelled,
+           isCurrentAccount(selectedAccountID, generation: selectedGeneration),
+           loadedUserProfileUsername.caseInsensitiveCompare(normalizedUsername) == .orderedSame {
+            applyUserProfileCache(cached)
+            if cached.isFresh { return }
+        } else if !isSameProfile || userProfile == nil {
+            userProfile = nil
+            userProfilePosts.removeAll()
+            userProfileComments.removeAll()
+            userProfileState = .loading
+        }
 
         guard let reddit else {
             userProfile = UserProfile(
@@ -988,8 +1192,8 @@ final class OctonautFeatureStore {
             return
         }
 
-        let selectedAccountID = accountID
-        let selectedGeneration = accountGeneration
+        let hasCachedContent = userProfile != nil
+        if !hasCachedContent { userProfileState = .loading }
         do {
             async let profileRequest = reddit.userProfile(normalizedUsername, account: selectedAccountID)
             async let postsRequest = reddit.listing(
@@ -999,7 +1203,8 @@ final class OctonautFeatureStore {
                         sort: .new
                     ),
                     limit: 50,
-                    accountScope: selectedAccountID.map(AccountScope.account) ?? .anonymous
+                    accountScope: selectedAccountID.map(AccountScope.account) ?? .anonymous,
+                    responseCachePolicy: forceRefresh ? .reloadIgnoringCache : .useCache
                 ),
                 account: selectedAccountID
             )
@@ -1014,12 +1219,28 @@ final class OctonautFeatureStore {
             userProfilePosts = submitted.items.map(PostCardModel.init)
             userProfileComments = comments.items.map(UserCommentCardModel.init)
             userProfileState = .loaded
+            await UserProfileCache.shared.store(
+                profile: profile,
+                posts: submitted.items,
+                comments: comments.items,
+                for: normalizedUsername,
+                account: selectedAccountID
+            )
         } catch is CancellationError {
             return
         } catch {
             guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            userProfileState = .failed(error.localizedDescription)
+            if !hasCachedContent {
+                userProfileState = .failed(error.localizedDescription)
+            }
         }
+    }
+
+    private func applyUserProfileCache(_ cached: UserProfileCache.Value) {
+        userProfile = cached.profile
+        userProfilePosts = cached.posts.map(PostCardModel.init)
+        userProfileComments = cached.comments.map(UserCommentCardModel.init)
+        userProfileState = .loaded
     }
 
     func loadPostDetail(for post: PostCardModel, sort: String = "Best") async {
@@ -1082,7 +1303,9 @@ final class OctonautFeatureStore {
             let copies = posts.prefix(2).map { post in
                 PostCardModel(
                     id: "\(post.id)-\(nextIndex)", community: post.community, author: post.author,
-                    title: post.title, body: post.body, score: post.score, comments: post.comments,
+                    authorFlair: post.authorFlair, title: post.title, body: post.body,
+                    flair: post.flair, score: post.score,
+                    comments: post.comments,
                     age: post.age, vote: post.vote, isSaved: post.isSaved, isSeen: post.isSeen,
                     isNSFW: post.isNSFW, isSpoiler: post.isSpoiler, isSticky: post.isSticky,
                     isVideo: post.isVideo, hasMedia: post.hasMedia, mediaTitle: post.mediaTitle,
@@ -1116,6 +1339,13 @@ final class OctonautFeatureStore {
                 contentsOf: filtered.posts.filter { !existing.contains($0.id) }.map(PostCardModel.init))
             filteredPostCount += filtered.removedCount
             self.nextPage = listing.after
+            feedCache[descriptor] = FeedCacheEntry(
+                posts: posts,
+                filteredPostCount: filteredPostCount,
+                nextPage: self.nextPage,
+                filterRevision: Int(settings?.filterRevision ?? 0),
+                storedAt: .now
+            )
         } catch is CancellationError {
             return
         } catch {
@@ -1175,6 +1405,7 @@ final class OctonautFeatureStore {
         guard self.accountID != accountID else { return }
         self.accountID = accountID
         accountGeneration &+= 1
+        feedCache.removeAll()
         nextPage = nil
         loadedFeed = nil
         detailPost = nil
@@ -1208,6 +1439,7 @@ final class OctonautFeatureStore {
             detailPost?.vote = value
             detailPost?.score += value - oldDetailVote
         }
+        updateLoadedFeedCache()
     }
 
     /// Applies a vote immediately, then sends it for the selected account.
@@ -1245,6 +1477,7 @@ final class OctonautFeatureStore {
             posts[index].isSaved.toggle()
         }
         if detailPost?.id == postID { detailPost?.isSaved.toggle() }
+        updateLoadedFeedCache()
     }
 
     /// Applies a save change immediately, then sends it for the selected
@@ -1281,6 +1514,7 @@ final class OctonautFeatureStore {
         guard let index = posts.firstIndex(where: { $0.id == postID }) else { return }
         posts[index].isSeen.toggle()
         if detailPost?.id == postID { detailPost?.isSeen.toggle() }
+        updateLoadedFeedCache()
         guard let persistence else { return }
         let isSeen = posts[index].isSeen
         Task {
@@ -1303,6 +1537,17 @@ final class OctonautFeatureStore {
     func toggleSubscribe(communityID: String) {
         guard let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
         communities[index].isSubscribed.toggle()
+    }
+
+    private func updateLoadedFeedCache() {
+        guard let loadedFeed else { return }
+        feedCache[loadedFeed] = FeedCacheEntry(
+            posts: posts,
+            filteredPostCount: filteredPostCount,
+            nextPage: nextPage,
+            filterRevision: Int(settings?.filterRevision ?? 0),
+            storedAt: feedCache[loadedFeed]?.storedAt ?? .now
+        )
     }
 
     func markRead(itemID: String) {

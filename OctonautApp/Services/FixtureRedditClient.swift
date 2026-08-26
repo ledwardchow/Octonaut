@@ -8,18 +8,26 @@ actor FixtureRedditClient: RedditClient {
     private let searchData: Data?
     private let communitiesData: Data?
     private let actionResult: ActionResult
+    private let listingDelay: Duration?
+    private let subscribedCommunitiesDelay: Duration?
+    private var listingRequestCount = 0
+    private var subscribedCommunitiesRequestCount = 0
 
     init(
         listingData: Data? = nil,
         postData: Data? = nil,
         searchData: Data? = nil,
         communitiesData: Data? = nil,
+        listingDelay: Duration? = nil,
+        subscribedCommunitiesDelay: Duration? = nil,
         actionResult: ActionResult = ActionResult(succeeded: true)
     ) {
         self.listingData = listingData
         self.postData = postData
         self.searchData = searchData
         self.communitiesData = communitiesData
+        self.listingDelay = listingDelay
+        self.subscribedCommunitiesDelay = subscribedCommunitiesDelay
         self.actionResult = actionResult
     }
 
@@ -33,12 +41,22 @@ actor FixtureRedditClient: RedditClient {
         self.postData = try read("post.json")
         self.searchData = try read("search.json")
         self.communitiesData = try read("communities.json")
+        self.listingDelay = nil
+        self.subscribedCommunitiesDelay = nil
         self.actionResult = ActionResult(succeeded: true)
     }
 
     func listing(_ request: ListingRequest, account: AccountID? = nil) async throws -> Listing<Post> {
+        listingRequestCount += 1
+        if let listingDelay {
+            try await Task.sleep(for: listingDelay)
+        }
         guard let listingData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(listingData)
+    }
+
+    func listingRequests() -> Int {
+        listingRequestCount
     }
 
     func post(_ permalink: URL, sort: CommentSort, account: AccountID? = nil) async throws -> PostThread {
@@ -57,8 +75,16 @@ actor FixtureRedditClient: RedditClient {
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
+        subscribedCommunitiesRequestCount += 1
+        if let subscribedCommunitiesDelay {
+            try await Task.sleep(for: subscribedCommunitiesDelay)
+        }
         guard let communitiesData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeCommunities(communitiesData)
+    }
+
+    func subscribedCommunitiesRequests() -> Int {
+        subscribedCommunitiesRequestCount
     }
 
     func userProfile(_ username: String, account: AccountID? = nil) async throws -> UserProfile {

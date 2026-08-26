@@ -12,7 +12,7 @@ struct PostDetailView: View {
     @State private var isMediaViewerPresented = false
     @State private var selectedMediaPage = 0
     @State private var showingLogin = false
-    @Environment(\.openURL) private var openURL
+    @State private var browserDestination: OctonautBrowserDestination?
 
     private var currentPost: PostCardModel {
         guard let detailPost = store.detailPost, detailPost.id == post.id else { return post }
@@ -45,14 +45,18 @@ struct PostDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 OctonautPostRow(
-                    post: currentPost, bodyLineLimit: nil,
+                    post: currentPost,
+                    bodyLineLimit: nil,
+                    showsFlair: dependencies.settings.showPostFlair,
                     onVote: { performVote(postID: currentPost.id, value: $0) },
                     onSave: { performSave(postID: currentPost.id) },
                     onSeen: { store.markSeen(postID: currentPost.id) },
                     onMedia: { page in
                         selectedMediaPage = page
                         isMediaViewerPresented = true
-                    }
+                    },
+                    onCommunityOpen: { router.push(.community(currentPost.community)) },
+                    communityOpenAccessibilityHint: "Opens the subreddit"
                 )
                 .padding(.top, 4)
 
@@ -87,7 +91,7 @@ struct PostDetailView: View {
                     .padding(.top, 8)
                 }
 
-                if dependencies.settings.showPostSummaries {
+                if dependencies.settings.showPostSummaries, postSummaryEligible {
                     SummaryCardView(
                         title: "Post Summary",
                         input: .post(
@@ -95,20 +99,19 @@ struct PostDetailView: View {
                         ),
                         intelligence: dependencies.intelligence,
                         automatic: dependencies.settings.automaticVisibleSummaries,
-                        eligible: postSummaryEligible,
                         useFallback: dependencies.settings.keyExcerptsFallback
                     )
                 }
-                    if dependencies.settings.showCommentSummaries,
-                       store.detailState == .loaded,
-                       SummaryEligibility.comments(summaryComments) {
-                        SummaryCardView(
+                if dependencies.settings.showCommentSummaries,
+                   store.detailState == .loaded,
+                   SummaryEligibility.comments(summaryComments) {
+                    SummaryCardView(
                         title: "Comments Summary",
                         input: .comments(
-                            CommentSummaryInput(postID: currentPost.id, comments: summaryComments)),
+                            CommentSummaryInput(postID: currentPost.id, comments: summaryComments)
+                        ),
                         intelligence: dependencies.intelligence,
                         automatic: dependencies.settings.automaticCommentSummaries,
-                            eligible: true,
                         useFallback: dependencies.settings.keyExcerptsFallback
                     )
                 }
@@ -180,12 +183,17 @@ struct PostDetailView: View {
                         }
                     }
                     Button {
-                        openURL(currentPost.shareURL)
+                        UIApplication.shared.open(currentPost.shareURL)
                     } label: {
                         Label("Open in Browser", systemImage: "safari")
                     }
                     ShareLink(item: currentPost.shareURL) {
                         Label("Share Link", systemImage: "square.and.arrow.up")
+                    }
+                    Button {
+                        browserDestination = OctonautBrowserDestination(url: currentPost.crosspostURL)
+                    } label: {
+                        Label("Crosspost", systemImage: "arrow.triangle.branch")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -197,6 +205,10 @@ struct PostDetailView: View {
         }
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
+        }
+        .sheet(item: $browserDestination) { destination in
+            OctonautBrowserView(url: destination.url)
+                .ignoresSafeArea()
         }
         .fullScreenCover(isPresented: $isMediaViewerPresented) {
             OctonautMediaViewer(

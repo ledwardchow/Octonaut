@@ -41,13 +41,13 @@
 		7FF3CF3BC85886741124899E /* RedditClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D10FEC800F46435E917A2D81 /* RedditClient.swift */; };
 		85E1D81EFB6FC808E3C48BE0 /* SettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DCAEC32043F4E3095B10E2A /* SettingsTests.swift */; };
 		8AE0E56E1FCD5CC25142CF45 /* OctonautMediaComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2227B15B7D816A2D13625A96 /* OctonautMediaComponents.swift */; };
-		B1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift */; };
 		8DFB14BCAFAA44026BEC3C5E /* Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A3935FC274589D0153848F /* Fixtures.swift */; };
 		8ED05769FF6F711A6199A531 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 16D534688C88C6BD7A41D954 /* Assets.xcassets */; };
 		961D5430D9B54A609F2DBB89 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57F3561C8E40A24723D434F2 /* ComposerView.swift */; };
 		A10118D11EF095C44B6C0D7D /* AccountViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9719DD5BF3279C9729B541ED /* AccountViews.swift */; };
 		A41918354551C42A127015C0 /* SemanticFilterSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CE854523A6E969A1F390C5 /* SemanticFilterSettingsView.swift */; };
 		A4EC7E48A86EA39A69395697 /* CoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56C76713C22D86A4C65BD107 /* CoreModels.swift */; };
+		B1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift */; };
 		B600E72E45D4995BE8ECA4AD /* KeychainSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59DBE427E9F718C336F15D05 /* KeychainSecretStore.swift */; };
 		BBB6EADD4D3333F8F7237262 /* AuthenticatedRedditService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54C2BC48600A50CD5582D170 /* AuthenticatedRedditService.swift */; };
 		BF50C89C8E61B1A952BB21A5 /* NOTES.md in Resources */ = {isa = PBXBuildFile; fileRef = 91192762FCDA17BB617946AE /* NOTES.md */; };
@@ -83,7 +83,6 @@
 		1970066AA56F197B0996D80D /* FixtureRedditClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureRedditClient.swift; sourceTree = "<group>"; };
 		1A8A0B349EB70BF91E43C452 /* InboxViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxViews.swift; sourceTree = "<group>"; };
 		2227B15B7D816A2D13625A96 /* OctonautMediaComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautMediaComponents.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautImageCache.swift; sourceTree = "<group>"; };
 		22BC5E9A904D43A93FEE8DF2 /* RedditSessionValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditSessionValidator.swift; sourceTree = "<group>"; };
 		242DDCD5C118F9FF65F62AB0 /* GalleryPagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GalleryPagerView.swift; sourceTree = "<group>"; };
 		274A59F5B87C251E8FB7A606 /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
@@ -115,6 +114,7 @@
 		99BAF70BB044AF9E1AD69D1E /* SwiftDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataModels.swift; sourceTree = "<group>"; };
 		99CED08BA2A607B044074805 /* RedditModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditModels.swift; sourceTree = "<group>"; };
 		A03AD458002CBC7ED2F08CEB /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D4E5F60718293A4B5C /* OctonautImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautImageCache.swift; sourceTree = "<group>"; };
 		A9D03C5C0664CE00664AB03A /* IntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntelligenceTests.swift; sourceTree = "<group>"; };
 		B0C4482B43C636739A28423F /* PersistenceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStore.swift; sourceTree = "<group>"; };
 		B2210C0C24DFF792FE8DC5BB /* PostsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PostsViews.swift; sourceTree = "<group>"; };
@@ -563,12 +563,14 @@
 				INFOPLIST_FILE = OctonautApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves images and videos you choose to your photo library.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.leddytech.octonaut;
+				PRODUCT_NAME = Octonaut;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -736,12 +738,14 @@
 				INFOPLIST_FILE = OctonautApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves images and videos you choose to your photo library.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.leddytech.octonaut;
+				PRODUCT_NAME = Octonaut;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};

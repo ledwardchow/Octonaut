@@ -4,6 +4,7 @@ import SwiftUI
 struct SearchRootView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    @Environment(AppDependencies.self) private var dependencies
     @State private var query = ""
     @State private var scope: FeatureSearchScope = .posts
     @State private var submittedQuery = ""
@@ -97,7 +98,10 @@ struct SearchRootView: View {
             case .posts:
                 ForEach(model.posts) { post in
                     NavigationLink(value: FeatureRoute.post(post)) {
-                        OctonautPostRow(post: post)
+                        OctonautPostRow(
+                            post: post,
+                            showsFlair: dependencies.settings.showPostFlair
+                        )
                     }
                     .listRowInsets(EdgeInsets())
                     .onAppear {

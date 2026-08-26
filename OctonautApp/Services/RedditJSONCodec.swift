@@ -90,7 +90,8 @@ enum RedditJSONCodec {
 
     static func decodeUserProfile(_ data: Data) throws -> UserProfile {
         let root = try JSONDecoder().decode(RedditJSONValue.self, from: data)
-        guard let object = root.objectValue,
+        let payload = root.objectValue?["data"]?.objectValue ?? root.objectValue
+        guard let object = payload,
               let username = object["name"]?.stringValue,
               !username.isEmpty else {
             throw RedditClientError.malformedResponse
@@ -176,19 +177,20 @@ enum RedditJSONCodec {
             ?? url(object["url"]?.stringValue)
         let postHint = object["post_hint"]?.stringValue
         let media: PostMedia
-        let galleryItems = galleryItems(object)
+        let mediaCandidates = mediaCandidates(object)
+        let galleryItems = mediaCandidates.lazy.map(galleryItems).first { !$0.isEmpty } ?? []
         if !galleryItems.isEmpty {
             media = .gallery(items: galleryItems)
         } else if let video = videoMedia(object, targetURL: targetURL) {
             media = video
         } else if let bodyVideo {
             media = bodyVideo
-        } else if postHint == "image", let targetURL {
-            media = .image(url: targetURL, thumbnailURL: thumbnail(object), width: nil, height: nil)
+        } else if let image = imageMedia(object, targetURL: targetURL, postHint: postHint) {
+            media = image
         } else if let bodyImageURL {
             media = .image(url: bodyImageURL, thumbnailURL: thumbnail(object), width: nil, height: nil)
         } else if let targetURL, !isSelfPost(object) {
-            media = .link(url: targetURL, metadata: nil)
+            media = .link(url: targetURL, metadata: linkMetadata(object, targetURL: targetURL))
         } else {
             media = .none
         }
@@ -206,6 +208,7 @@ enum RedditJSONCodec {
             permalink: permalink,
             community: community,
             author: object["author"]?.stringValue.map(UserReference.init(username:)),
+            authorFlair: mapAuthorFlair(object),
             title: title,
             body: body,
             flair: mapFlair(object),
@@ -300,6 +303,7 @@ enum RedditJSONCodec {
             fullname: fullname,
             parentFullname: parent,
             author: object["author"]?.stringValue.map(UserReference.init(username:)),
+            authorFlair: mapAuthorFlair(object),
             body: body,
             createdAt: date(object["created_utc"]),
             score: score(object),
@@ -349,6 +353,24 @@ enum RedditJSONCodec {
         )
     }
 
+    private static func mapAuthorFlair(_ object: [String: RedditJSONValue]) -> Flair? {
+        let richText = object["author_flair_richtext"]?.arrayValue?
+            .compactMap { value in
+                let segment = value.objectValue
+                return segment?["t"]?.stringValue ?? segment?["a"]?.stringValue
+            }
+            .joined()
+        let plainText = object["author_flair_text"]?.stringValue
+        guard let text = plainText.flatMap({ $0.isEmpty ? nil : $0 }) ?? richText,
+              !text.isEmpty else { return nil }
+        return Flair(
+            id: object["author_flair_template_id"]?.stringValue ?? text,
+            text: stripHTML(text),
+            backgroundColor: object["author_flair_background_color"]?.stringValue,
+            textColor: object["author_flair_text_color"]?.stringValue
+        )
+    }
+
     private static func richText(plainText: String?, html: String?) -> RichText? {
         let source = plainText ?? html.map(stripHTML)
         guard let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
@@ -380,7 +402,80 @@ enum RedditJSONCodec {
     }
 
     private static func thumbnail(_ object: [String: RedditJSONValue]) -> URL? {
-        url(object["thumbnail"]?.stringValue) ?? previewImageURL(object)
+        url(object["thumbnail"]?.stringValue) ?? previewImageURL(object) ?? oEmbedThumbnailURL(object)
+    }
+
+    private static func mediaCandidates(
+        _ object: [String: RedditJSONValue]
+    ) -> [[String: RedditJSONValue]] {
+        let crossposts = object["crosspost_parent_list"]?.arrayValue?.compactMap(\.objectValue) ?? []
+        return [object] + crossposts
+    }
+
+    /// Image posts do not reliably include `post_hint`. Direct image URLs are
+    /// authoritative, while a Reddit wrapper URL may keep the actual image in
+    /// `preview` or the crosspost parent payload.
+    private static func imageMedia(
+        _ object: [String: RedditJSONValue],
+        targetURL: URL?,
+        postHint: String?
+    ) -> PostMedia? {
+        let candidates = mediaCandidates(object)
+
+        // Prefer an authoritative source URL from either the wrapper or its
+        // crosspost parent before falling back to a generated preview image.
+        for (index, candidate) in candidates.enumerated() {
+            let candidateURL = url(candidate["url_overridden_by_dest"]?.stringValue)
+                ?? url(candidate["url"]?.stringValue)
+                ?? (index == 0 ? targetURL : nil)
+
+            if let candidateURL, isDirectImageURL(candidateURL) {
+                return .image(
+                    url: candidateURL,
+                    thumbnailURL: thumbnail(candidate),
+                    width: nil,
+                    height: nil
+                )
+            }
+        }
+
+        for (index, candidate) in candidates.enumerated() {
+            let candidateURL = url(candidate["url_overridden_by_dest"]?.stringValue)
+                ?? url(candidate["url"]?.stringValue)
+                ?? (index == 0 ? targetURL : nil)
+            let candidateHint = candidate["post_hint"]?.stringValue ?? (index == 0 ? postHint : nil)
+
+            if let previewURL = previewImageURL(candidate),
+               candidateHint == "image" || candidateURL.map(isRedditPageURL) == true {
+                let dimensions = previewImageDimensions(candidate)
+                return .image(
+                    url: previewURL,
+                    thumbnailURL: thumbnail(candidate),
+                    width: dimensions?.width,
+                    height: dimensions?.height
+                )
+            }
+        }
+        return nil
+    }
+
+    private static func linkMetadata(
+        _ object: [String: RedditJSONValue],
+        targetURL: URL
+    ) -> LinkMetadata? {
+        let candidates = mediaCandidates(object)
+        let embeddedMetadata = candidates.lazy.compactMap { oEmbed($0) }.first
+        let imageURL = candidates.lazy.compactMap {
+            previewImageURL($0) ?? oEmbedThumbnailURL($0)
+        }.first
+        let metadata = LinkMetadata(
+            title: embeddedMetadata?["title"]?.stringValue,
+            description: nil,
+            siteName: embeddedMetadata?["provider_name"]?.stringValue ?? targetURL.host,
+            imageURL: imageURL,
+            canonicalURL: targetURL
+        )
+        return metadata.title == nil && metadata.siteName == nil && metadata.imageURL == nil ? nil : metadata
     }
 
     /// Native Reddit video posts expose a playable fallback under `secure_media`
@@ -389,10 +484,7 @@ enum RedditJSONCodec {
         _ object: [String: RedditJSONValue],
         targetURL: URL?
     ) -> PostMedia? {
-        let crossposts = object["crosspost_parent_list"]?.arrayValue?.compactMap(\.objectValue) ?? []
-        let candidates = [object] + crossposts
-
-        for candidate in candidates {
+        for candidate in mediaCandidates(object) {
             let redditVideo = candidate["secure_media"]?.objectValue?["reddit_video"]?.objectValue
                 ?? candidate["media"]?.objectValue?["reddit_video"]?.objectValue
                 ?? candidate["preview"]?.objectValue?["reddit_video_preview"]?.objectValue
@@ -437,6 +529,32 @@ enum RedditJSONCodec {
         object["preview"]?.objectValue?["images"]?.arrayValue?.first?
             .objectValue?["source"]?.objectValue?["url"]?.stringValue
             .flatMap(url)
+    }
+
+    private static func previewImageDimensions(
+        _ object: [String: RedditJSONValue]
+    ) -> (width: Int?, height: Int?)? {
+        guard let source = object["preview"]?.objectValue?["images"]?.arrayValue?.first?
+            .objectValue?["source"]?.objectValue else {
+            return nil
+        }
+        return (int(source["width"]), int(source["height"]))
+    }
+
+    private static func oEmbed(
+        _ object: [String: RedditJSONValue]
+    ) -> [String: RedditJSONValue]? {
+        object["secure_media"]?.objectValue?["oembed"]?.objectValue
+            ?? object["media"]?.objectValue?["oembed"]?.objectValue
+    }
+
+    private static func oEmbedThumbnailURL(_ object: [String: RedditJSONValue]) -> URL? {
+        url(oEmbed(object)?["thumbnail_url"]?.stringValue)
+    }
+
+    private static func isRedditPageURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return host == "redd.it" || host == "reddit.com" || host.hasSuffix(".reddit.com")
     }
 
     private static func redditAudioURL(for fallbackURL: URL) -> URL? {

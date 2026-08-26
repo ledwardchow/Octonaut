@@ -16,7 +16,6 @@ struct SummaryCardView: View {
     let input: SummaryInput
     let intelligence: any IntelligenceService
     let automatic: Bool
-    let eligible: Bool
     let useFallback: Bool
 
     @State private var state: SummaryCardState = .idle
@@ -77,7 +76,7 @@ struct SummaryCardView: View {
         .task(id: input.id) {
             state = .idle
             hasRequested = false
-            guard automatic, eligible, !hasRequested else { return }
+            guard automatic, !hasRequested else { return }
             await requestSummary()
         }
     }
@@ -86,18 +85,9 @@ struct SummaryCardView: View {
     private var content: some View {
         switch state {
         case .idle:
-            if eligible {
-                Button("Summarize") { Task { await requestSummary() } }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-            } else {
-                Text("This content is short. You can still request a summary manually.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Button("Summarize") { Task { await requestSummary() } }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-            }
+            Button("Summarize") { Task { await requestSummary() } }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
         case .loading:
             HStack(spacing: 8) {
                 ProgressView()

@@ -50,14 +50,20 @@ private actor OctonautMediaSaveCoordinator {
     }
 
     func saveToPhotos(fileURL: URL, isVideo: Bool) async throws {
+        try await saveToPhotos(fileURLs: [fileURL], isVideo: isVideo)
+    }
+
+    func saveToPhotos(fileURLs: [URL], isVideo: Bool) async throws {
         let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard authorization == .authorized || authorization == .limited else {
             throw SaveError.photoAccessDenied
         }
 
         try await PHPhotoLibrary.shared().performChanges {
-            let request = PHAssetCreationRequest.forAsset()
-            request.addResource(with: isVideo ? .video : .photo, fileURL: fileURL, options: nil)
+            for fileURL in fileURLs {
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: isVideo ? .video : .photo, fileURL: fileURL, options: nil)
+            }
         }
     }
 }
@@ -303,21 +309,18 @@ struct OctonautInlineMediaView: View {
                 .buttonStyle(.plain)
             } else if post.mediaKind == "link" {
                 let url = post.mediaURL ?? post.shareURL
-                Link(destination: url) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "link.circle.fill").font(.title2)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(post.mediaTitle.isEmpty ? "Open link" : post.mediaTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
-                            Text(url.host ?? url.absoluteString).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        Image(systemName: "arrow.up.right")
+                if post.isSensitive && !isRevealed {
+                    Button { isRevealed = true } label: {
+                        linkCard(url: url, isBlurred: true)
                     }
-                    .padding(13)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Sensitive link preview. Tap to reveal.")
+                } else {
+                    Link(destination: url) {
+                        linkCard(url: url, isBlurred: false)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             } else if post.mediaKind == "unsupported" {
                 Link(destination: post.mediaURL ?? post.shareURL) {
                     HStack(spacing: 10) {
@@ -363,6 +366,38 @@ struct OctonautInlineMediaView: View {
         Button { isRevealed = true } label: { sensitiveOverlay }
             .buttonStyle(.plain)
             .accessibilityLabel("Sensitive media. Tap to reveal.")
+    }
+
+    private func linkCard(url: URL, isBlurred: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let thumbnailURL = post.thumbnailURL {
+                ZStack {
+                    OctonautAsyncImage(url: thumbnailURL, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: galleryHeight)
+                        .background(.black.opacity(0.04))
+                        .blur(radius: isBlurred ? 12 : 0)
+                    if isBlurred { sensitiveOverlay }
+                }
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "link.circle.fill").font(.title2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(post.mediaTitle.isEmpty ? "Open link" : post.mediaTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                    Text(url.host ?? url.absoluteString)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: isBlurred ? "eye" : "arrow.up.right")
+            }
+            .padding(13)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
     }
 
     private func openOrReveal(at index: Int = 0) {
@@ -737,6 +772,11 @@ struct OctonautMediaViewer: View {
                                 Button { saveMedia(mediaURL, destination: .photos) } label: {
                                     Label("Save to Photos", systemImage: "photo.badge.arrow.down")
                                 }
+                                if mediaURLs.count > 1 {
+                                    Button { saveAllMediaToPhotos() } label: {
+                                        Label("Save All Media to Photos", systemImage: "photo.stack")
+                                    }
+                                }
                                 Button { saveMedia(mediaURL, destination: .files) } label: {
                                     Label("Save to Files", systemImage: "folder.badge.plus")
                                 }
@@ -884,21 +924,9 @@ struct OctonautMediaViewer: View {
         guard !isSaving else { return }
         isSaving = true
         Task {
+            defer { isSaving = false }
             do {
-                let localURL: URL
-                if isVideo {
-                    let job = try await dependencies.media.exportVideo(
-                        source: sourceURL,
-                        audio: post.audioURL,
-                        cleanupDate: .now.addingTimeInterval(24 * 60 * 60)
-                    )
-                    guard let outputURL = job.outputURL else {
-                        throw OctonautMediaSaveCoordinator.SaveError.downloadFailed
-                    }
-                    localURL = outputURL
-                } else {
-                    localURL = try await saveCoordinator.downloadImage(from: sourceURL)
-                }
+                let localURL = try await prepareMediaForSaving(sourceURL)
                 guard !Task.isCancelled else { return }
 
                 switch destination {
@@ -913,8 +941,46 @@ struct OctonautMediaViewer: View {
             } catch {
                 saveError = error.localizedDescription
             }
-            isSaving = false
         }
+    }
+
+    private func saveAllMediaToPhotos() {
+        guard !isSaving, mediaURLs.count > 1 else { return }
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                var localURLs: [URL] = []
+                localURLs.reserveCapacity(mediaURLs.count)
+                for sourceURL in mediaURLs {
+                    localURLs.append(try await prepareMediaForSaving(sourceURL))
+                }
+                guard !Task.isCancelled else { return }
+
+                try await saveCoordinator.saveToPhotos(fileURLs: localURLs, isVideo: isVideo)
+                let mediaType = isVideo ? "videos" : "images"
+                saveConfirmation = "All \(localURLs.count) \(mediaType) were added to Photos."
+            } catch is CancellationError {
+                return
+            } catch {
+                saveError = error.localizedDescription
+            }
+        }
+    }
+
+    private func prepareMediaForSaving(_ sourceURL: URL) async throws -> URL {
+        if isVideo {
+            let job = try await dependencies.media.exportVideo(
+                source: sourceURL,
+                audio: post.audioURL,
+                cleanupDate: .now.addingTimeInterval(24 * 60 * 60)
+            )
+            guard let outputURL = job.outputURL else {
+                throw OctonautMediaSaveCoordinator.SaveError.downloadFailed
+            }
+            return outputURL
+        }
+        return try await saveCoordinator.downloadImage(from: sourceURL)
     }
 }
 

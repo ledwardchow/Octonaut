@@ -99,6 +99,17 @@ struct OctonautTabsView: View {
         .onOpenURL { url in
             handleIncomingURL(url)
         }
+        .environment(\.openURL, OpenURLAction { url in
+            guard dependencies.settings.openRedditLinksInOctonaut,
+                  let route = OctonautFeatureURLRouter.route(url),
+                  route.isRedditPost
+            else {
+                return .systemAction
+            }
+
+            handleIncomingURL(url)
+            return .handled
+        })
     }
 
     private var accountStateKey: String {
@@ -124,6 +135,13 @@ struct OctonautTabsView: View {
             selectedTab = .posts
             postsRouter.push(route)
         }
+    }
+}
+
+private extension FeatureRoute {
+    var isRedditPost: Bool {
+        if case .postURL = self { return true }
+        return false
     }
 }
 

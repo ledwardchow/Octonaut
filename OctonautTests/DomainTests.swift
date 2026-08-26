@@ -3,6 +3,14 @@ import XCTest
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
+    func testPostCardBuildsRedditWebCrosspostURL() {
+        let post = PostCardModel(post: FixtureData.posts[0])
+        XCTAssertEqual(
+            post.crosspostURL.absoluteString,
+            "https://www.reddit.com/submit?source_id=\(FixtureData.posts[0].fullname)"
+        )
+    }
+
     func testMarkdownLinksRenderAsLinkedDisplayText() throws {
         let url = try XCTUnwrap(URL(string: "https://www.instagram.com/p/example/"))
         let attributed = OctonautMarkdown.attributedString(
@@ -23,6 +31,59 @@ final class DomainTests: XCTestCase {
 
         XCTAssertEqual(String(labelledLink.characters), "Source Next")
         XCTAssertEqual(String(bareLink.characters), "https://streamable.com/example Next")
+    }
+
+    func testMarkdownPreservesParagraphBreaksAndHeadingText() {
+        let attributed = OctonautMarkdown.attributedString(
+            from: "Hello everyone!\n\n## Google Employee Flair\n\nDetails here.\n\nThanks!"
+        )
+
+        XCTAssertEqual(
+            String(attributed.characters),
+            "Hello everyone!\n\nGoogle Employee Flair\n\nDetails here.\n\nThanks!"
+        )
+    }
+
+    func testPostCardPreservesRedditFlairMetadata() throws {
+        let data = Data(
+            ##"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"flair1","name":"t3_flair1","permalink":"/r/google_antigravity/comments/flair1/update/","title":"Update","subreddit":"google_antigravity","selftext":"Body","link_flair_text":"News / Updates","link_flair_template_id":"news","link_flair_background_color":"#1478DB","link_flair_text_color":"light"}}]}}"##.utf8
+        )
+
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+        let flair = try XCTUnwrap(PostCardModel(post: post).flair)
+
+        XCTAssertEqual(flair.text, "News / Updates")
+        XCTAssertEqual(flair.backgroundColor, "#1478DB")
+        XCTAssertEqual(flair.textColor, "light")
+    }
+
+    func testPostCardPreservesAuthorFlairMetadata() throws {
+        let data = Data(
+            ##"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"author-flair","name":"t3_author-flair","permalink":"/r/swift/comments/author-flair/update/","title":"Update","subreddit":"swift","author":"octonaut_reader","author_flair_text":"iOS Engineer","author_flair_template_id":"ios-engineer","author_flair_background_color":"#1478DB","author_flair_text_color":"light"}}]}}"##.utf8
+        )
+
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+        let flair = try XCTUnwrap(PostCardModel(post: post).authorFlair)
+
+        XCTAssertEqual(flair.text, "iOS Engineer")
+        XCTAssertEqual(flair.backgroundColor, "#1478DB")
+        XCTAssertEqual(flair.textColor, "light")
+    }
+
+    func testCommentCardPreservesAuthorFlairMetadata() throws {
+        let data = Data(
+            ##"[{"data":{"children":[{"kind":"t3","data":{"id":"thread","name":"t3_thread","permalink":"/r/swift/comments/thread/update/","title":"Update","subreddit":"swift"}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"comment","name":"t1_comment","parent_id":"t3_thread","author":"octonaut_reader","author_flair_text":"Contributor","author_flair_background_color":"#FF9500","author_flair_text_color":"dark","body":"Hello","created_utc":1724000000,"replies":""}}]}}]"##.utf8
+        )
+
+        let thread = try RedditJSONCodec.decodeThread(data)
+        guard case .comment(let comment) = try XCTUnwrap(thread.comments.first) else {
+            return XCTFail("Expected a comment node")
+        }
+        let flair = try XCTUnwrap(CommentCardModel(comment: comment).authorFlair)
+
+        XCTAssertEqual(flair.text, "Contributor")
+        XCTAssertEqual(flair.backgroundColor, "#FF9500")
+        XCTAssertEqual(flair.textColor, "dark")
     }
 
     func testStreamableLinkInSelfTextBecomesEmbeddedVideo() throws {
@@ -102,6 +163,52 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(store.communitiesState, .loaded)
     }
 
+    @MainActor
+    func testSubscribedCommunitiesFinishCachingWhenViewTaskIsCancelled() async throws {
+        let accountID = AccountID()
+        await SubscribedCommunitiesCache.shared.remove(for: accountID)
+        defer {
+            Task { await SubscribedCommunitiesCache.shared.remove(for: accountID) }
+        }
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","display_name_prefixed":"r/Swift","subscribers":300000,"user_is_subscriber":true}}]}}"#.utf8
+        )
+        let client = FixtureRedditClient(
+            communitiesData: data,
+            subscribedCommunitiesDelay: .milliseconds(100)
+        )
+        let store = OctonautFeatureStore(reddit: client, accountID: accountID)
+
+        let viewTask = Task { await store.refreshCommunities() }
+        try await Task.sleep(for: .milliseconds(10))
+        viewTask.cancel()
+        await viewTask.value
+
+        XCTAssertEqual(store.communities.map(\.name), ["swift"])
+        XCTAssertEqual(store.communitiesState, .loaded)
+        await store.refreshCommunities()
+        let requestCount = await client.subscribedCommunitiesRequests()
+        XCTAssertEqual(requestCount, 1)
+    }
+
+    @MainActor
+    func testHomeFeedReturnsFromMemoryCacheWithoutAnotherRequest() async throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"home1","name":"t3_home1","permalink":"/r/swift/comments/home1/example/","title":"Cached home post","subreddit":"swift","is_self":true}}]}}"#.utf8
+        )
+        let client = FixtureRedditClient(listingData: data)
+        let store = OctonautFeatureStore(reddit: client, accountID: AccountID())
+
+        await store.refreshPosts(for: .home)
+        await store.refreshPosts(for: .popular)
+        await store.refreshPosts(for: .home)
+
+        XCTAssertEqual(store.posts.map(\.id), ["home1"])
+        XCTAssertEqual(store.feedState, .loaded)
+        let requestCount = await client.listingRequests()
+        XCTAssertEqual(requestCount, 2)
+    }
+
     func testCommunityNamesNormalizeForFeedIdentity() {
         let descriptor = FeedDescriptor(destination: .combined(["Swift", "r/iOS", "swift"]))
         XCTAssertEqual(descriptor.normalizedKey, "combined:swift+ios+swift")
@@ -151,6 +258,19 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(routedPost, postURL)
         XCTAssertEqual(community, "Swift")
         XCTAssertEqual(PostCardModel(deepLinkURL: routedPost).id, "abc123")
+    }
+
+    func testRedditCommentPermalinkBecomesInAppPostRoute() throws {
+        let commentURL = try XCTUnwrap(
+            URL(string: "https://www.reddit.com/r/swift/comments/abc123/a-title/def456/?context=3")
+        )
+
+        guard case .postURL(let routedURL) = OctonautFeatureURLRouter.route(commentURL) else {
+            return XCTFail("Expected a Reddit comment permalink to use the in-app post route")
+        }
+
+        XCTAssertEqual(routedURL, commentURL)
+        XCTAssertEqual(PostCardModel(deepLinkURL: routedURL).id, "abc123")
     }
 
     func testShortAndDirectMediaLinksBecomeNativeRoutes() throws {
@@ -227,6 +347,33 @@ final class DomainTests: XCTestCase {
         )
 
         XCTAssertTrue(PostCardModel(post: post).body.isEmpty)
+    }
+
+    func testPostCardRemovesDisplayedImageURLButKeepsFollowingBodyText() throws {
+        let imageURL = try XCTUnwrap(
+            URL(string: "https://preview.redd.it/example.png?width=786&format=png&auto=webp")
+        )
+        let post = Post(
+            id: "image-url-and-body",
+            permalink: URL(string: "https://www.reddit.com/r/swift/comments/image-url-and-body")!,
+            community: CommunityReference(name: "swift"),
+            title: "Image with explanation",
+            body: RichText(
+                plainText: "https://preview.redd.it/example.png?width=786&amp;format=png&amp;auto=webp\nIt might repeat dozens of times."
+            ),
+            flair: Flair(
+                id: "bug",
+                text: "Bug / Troubleshooting",
+                backgroundColor: "#EA4335",
+                textColor: "light"
+            ),
+            media: .image(url: imageURL, thumbnailURL: nil, width: nil, height: nil)
+        )
+
+        let card = PostCardModel(post: post)
+
+        XCTAssertEqual(card.body, "It might repeat dozens of times.")
+        XCTAssertEqual(card.flair?.text, "Bug / Troubleshooting")
     }
 
     func testRedditGalleryMetadataBecomesOrderedNativeMedia() async throws {
@@ -339,6 +486,44 @@ final class DomainTests: XCTestCase {
         XCTAssertTrue(card.body.isEmpty)
     }
 
+    func testDirectImageURLDoesNotRequirePostHint() throws {
+        let imageURL = "https://i.redd.it/no-hint.jpeg"
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"image-no-hint","name":"t3_image-no-hint","permalink":"/r/pics/comments/image-no-hint/post/","title":"Image without a hint","subreddit":"pics","is_self":false,"url_overridden_by_dest":"\#(imageURL)"}}]}}"#.utf8)
+
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+        guard case .image(let decodedURL, _, _, _) = post.media else {
+            return XCTFail("Expected a direct image URL to become native image media")
+        }
+        XCTAssertEqual(decodedURL.absoluteString, imageURL)
+    }
+
+    func testCrosspostParentImageBecomesNativeMedia() throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"crosspost-image","name":"t3_crosspost-image","permalink":"/r/yeoreum/comments/crosspost-image/update/","title":"Instagram update","subreddit":"yeoreum","is_self":false,"url":"https://www.reddit.com/r/elsewhere/comments/source/update/","crosspost_parent_list":[{"post_hint":"image","url_overridden_by_dest":"https://i.redd.it/source-image.jpg","preview":{"images":[{"source":{"url":"https://preview.redd.it/source-image.jpg?width=1080&amp;format=pjpg","width":1080,"height":1350}}]}}]}}]}}"#.utf8)
+
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+        guard case .image(let imageURL, let thumbnailURL, _, _) = post.media else {
+            return XCTFail("Expected the crosspost parent image to become native media")
+        }
+        XCTAssertEqual(imageURL.absoluteString, "https://i.redd.it/source-image.jpg")
+        XCTAssertEqual(thumbnailURL?.host, "preview.redd.it")
+    }
+
+    func testExternalLinkKeepsRedditPreviewImage() throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"external-preview","name":"t3_external-preview","permalink":"/r/apple/comments/external-preview/story/","title":"A story","subreddit":"apple","is_self":false,"url_overridden_by_dest":"https://example.com/story","secure_media":{"oembed":{"provider_name":"Example","thumbnail_url":"https://cdn.example.com/story.jpg"}},"preview":{"images":[{"source":{"url":"https://preview.redd.it/story.jpg?width=1080&amp;format=pjpg","width":1080,"height":720}}]}}}]}}"#.utf8)
+
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+        guard case .link(let url, let metadata) = post.media else {
+            return XCTFail("Expected an external destination to remain a link")
+        }
+        XCTAssertEqual(url.absoluteString, "https://example.com/story")
+        XCTAssertEqual(metadata?.siteName, "Example")
+        XCTAssertEqual(metadata?.imageURL?.host, "preview.redd.it")
+        XCTAssertEqual(PostCardModel(post: post).thumbnailURL?.host, "preview.redd.it")
+    }
+
     func testUserProfileCodecPreservesKarmaAndAbout() throws {
         let data = Data(
             #"""
@@ -359,6 +544,79 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(profile.about?.plainText, "Swift and native UI.")
         XCTAssertTrue(profile.isFollowing)
         XCTAssertEqual(profile.avatarURL?.host, "example.com")
+    }
+
+    func testUserProfileCodecHandlesWrappedThingEnvelope() throws {
+        let data = Data(
+            #"""
+            {
+              "kind": "t2",
+              "data": {
+                "name": "Maranthis",
+                "icon_img": "https://example.com/maranthis.png",
+                "created_utc": 1700000000,
+                "total_karma": 9999,
+                "subreddit": {"public_description": "Hello world"},
+                "is_friend": false
+              }
+            }
+            """#.utf8)
+
+        let profile = try RedditJSONCodec.decodeUserProfile(data)
+
+        XCTAssertEqual(profile.reference.username, "Maranthis")
+        XCTAssertEqual(profile.karma, 9_999)
+        XCTAssertEqual(profile.about?.plainText, "Hello world")
+        XCTAssertFalse(profile.isFollowing)
+        XCTAssertEqual(profile.avatarURL?.host, "example.com")
+    }
+
+    func testUserProfileCacheKeepsPostsAndMediaFreshForOneHour() async throws {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let cache = UserProfileCache(directoryURL: directoryURL)
+        let storedAt = Date(timeIntervalSince1970: 1_000_000)
+        let profile = UserProfile(
+            reference: UserReference(username: "swift_reader"),
+            avatarURL: URL(string: "https://example.com/avatar.png"),
+            createdAt: storedAt,
+            karma: 42,
+            about: nil,
+            isBlocked: false,
+            isFollowing: false
+        )
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"image1","name":"t3_image1","permalink":"/r/swift/comments/image1/example/","title":"Example","subreddit":"swift","url":"https://i.redd.it/image1.jpg","post_hint":"image","is_self":false}}]}}"#.utf8
+        )
+        let post = try XCTUnwrap(RedditJSONCodec.decodePosts(data).items.first)
+
+        await cache.store(
+            profile: profile,
+            posts: [post],
+            comments: [],
+            for: "Swift_Reader",
+            account: nil,
+            now: storedAt
+        )
+
+        let freshValue = await cache.value(
+            for: "swift_reader",
+            account: nil,
+            now: storedAt.addingTimeInterval(60 * 60 - 1)
+        )
+        let fresh = try XCTUnwrap(freshValue)
+        XCTAssertTrue(fresh.isFresh)
+        XCTAssertEqual(fresh.posts.map(\.id), ["image1"])
+        XCTAssertEqual(PostCardModel(post: fresh.posts[0]).mediaURL?.absoluteString, "https://i.redd.it/image1.jpg")
+
+        let staleValue = await cache.value(
+            for: "swift_reader",
+            account: nil,
+            now: storedAt.addingTimeInterval(60 * 60 + 1)
+        )
+        let stale = try XCTUnwrap(staleValue)
+        XCTAssertFalse(stale.isFresh)
     }
 
     func testUserCommentsCodecPreservesParentPostRoute() throws {

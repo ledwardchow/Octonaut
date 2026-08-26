@@ -336,6 +336,7 @@ struct SettingsDetailView: View {
                     responseCacheBytes = 0
                     Task {
                         await SubscribedCommunitiesCache.shared.removeAll()
+                        await UserProfileCache.shared.removeAll()
                         await OctonautImageCache.removeAll()
                         imageCacheBytes = 0
                     }
