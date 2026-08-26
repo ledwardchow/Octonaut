@@ -171,14 +171,43 @@ struct OctonautUserFlairPill: View {
     }
 
     var body: some View {
-        Text(flair.text)
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(foregroundColor)
-            .lineLimit(1)
+        HStack(spacing: 2) {
+            ForEach(Array(flair.emojiURLs.enumerated()), id: \.offset) { _, url in
+                OctonautFlairEmoji(url: url)
+            }
+            if !flair.text.isEmpty {
+                Text(flair.text)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(foregroundColor)
+                    .lineLimit(1)
+            }
+        }
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(backgroundColor, in: Capsule())
-            .accessibilityLabel("User flair: \(flair.text)")
+            .accessibilityLabel(flair.text.isEmpty ? "User flair with custom emoji" : "User flair: \(flair.text)")
+    }
+}
+
+private struct OctonautFlairEmoji: View {
+    let url: URL
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+        .task(id: url) {
+            image = try? await OctonautImageCache.image(for: url)
+        }
     }
 }
 

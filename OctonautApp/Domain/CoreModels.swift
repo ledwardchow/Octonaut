@@ -147,6 +147,34 @@ struct Flair: Codable, Hashable, Sendable, Identifiable {
     var text: String
     var backgroundColor: String?
     var textColor: String?
+    var emojiURLs: [URL]
+
+    init(
+        id: String,
+        text: String,
+        backgroundColor: String? = nil,
+        textColor: String? = nil,
+        emojiURLs: [URL] = []
+    ) {
+        self.id = id
+        self.text = text
+        self.backgroundColor = backgroundColor
+        self.textColor = textColor
+        self.emojiURLs = emojiURLs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, text, backgroundColor, textColor, emojiURLs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        backgroundColor = try container.decodeIfPresent(String.self, forKey: .backgroundColor)
+        textColor = try container.decodeIfPresent(String.self, forKey: .textColor)
+        emojiURLs = try container.decodeIfPresent([URL].self, forKey: .emojiURLs) ?? []
+    }
 }
 
 enum VoteState: String, Codable, Hashable, Sendable {

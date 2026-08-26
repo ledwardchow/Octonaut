@@ -354,20 +354,33 @@ enum RedditJSONCodec {
     }
 
     private static func mapAuthorFlair(_ object: [String: RedditJSONValue]) -> Flair? {
-        let richText = object["author_flair_richtext"]?.arrayValue?
+        let richSegments = object["author_flair_richtext"]?.arrayValue ?? []
+        let richText = richSegments
             .compactMap { value in
                 let segment = value.objectValue
-                return segment?["t"]?.stringValue ?? segment?["a"]?.stringValue
+                guard segment?["e"]?.stringValue == "text" else { return nil }
+                return segment?["t"]?.stringValue
             }
             .joined()
-        let plainText = object["author_flair_text"]?.stringValue
-        guard let text = plainText.flatMap({ $0.isEmpty ? nil : $0 }) ?? richText,
-              !text.isEmpty else { return nil }
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let emojiURLs = richSegments.compactMap { value -> URL? in
+            let segment = value.objectValue
+            guard segment?["e"]?.stringValue == "emoji" else { return nil }
+            return url(segment?["u"]?.stringValue)
+        }
+        let plainText = object["author_flair_text"]?.stringValue?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = richSegments.isEmpty ? (plainText ?? "") : richText
+        guard !text.isEmpty || !emojiURLs.isEmpty else { return nil }
+        let identifier = object["author_flair_template_id"]?.stringValue
+            ?? plainText.flatMap { $0.isEmpty ? nil : $0 }
+            ?? text
         return Flair(
-            id: object["author_flair_template_id"]?.stringValue ?? text,
+            id: identifier,
             text: stripHTML(text),
             backgroundColor: object["author_flair_background_color"]?.stringValue,
-            textColor: object["author_flair_text_color"]?.stringValue
+            textColor: object["author_flair_text_color"]?.stringValue,
+            emojiURLs: emojiURLs
         )
     }
 

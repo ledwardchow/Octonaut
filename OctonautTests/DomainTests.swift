@@ -72,7 +72,7 @@ final class DomainTests: XCTestCase {
 
     func testCommentCardPreservesAuthorFlairMetadata() throws {
         let data = Data(
-            ##"[{"data":{"children":[{"kind":"t3","data":{"id":"thread","name":"t3_thread","permalink":"/r/swift/comments/thread/update/","title":"Update","subreddit":"swift"}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"comment","name":"t1_comment","parent_id":"t3_thread","author":"octonaut_reader","author_flair_text":"Contributor","author_flair_background_color":"#FF9500","author_flair_text_color":"dark","body":"Hello","created_utc":1724000000,"replies":""}}]}}]"##.utf8
+            ##"[{"data":{"children":[{"kind":"t3","data":{"id":"thread","name":"t3_thread","permalink":"/r/swift/comments/thread/update/","title":"Update","subreddit":"swift"}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"comment","name":"t1_comment","parent_id":"t3_thread","author":"octonaut_reader","author_flair_text":":swift: Contributor","author_flair_richtext":[{"e":"emoji","a":":swift:","u":"https://emoji.redditmedia.com/example/swift"},{"e":"text","t":" Contributor"}],"author_flair_background_color":"#FF9500","author_flair_text_color":"dark","body":"Hello","created_utc":1724000000,"replies":""}}]}}]"##.utf8
         )
 
         let thread = try RedditJSONCodec.decodeThread(data)
@@ -84,6 +84,18 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(flair.text, "Contributor")
         XCTAssertEqual(flair.backgroundColor, "#FF9500")
         XCTAssertEqual(flair.textColor, "dark")
+        XCTAssertEqual(flair.emojiURLs.map(\.absoluteString), ["https://emoji.redditmedia.com/example/swift"])
+    }
+
+    func testPreviouslyStoredFlairWithoutEmojiURLsStillDecodes() throws {
+        let data = Data(
+            ##"{"id":"contributor","text":"Contributor","backgroundColor":"#FF9500","textColor":"dark"}"##.utf8
+        )
+
+        let flair = try JSONDecoder().decode(Flair.self, from: data)
+
+        XCTAssertEqual(flair.text, "Contributor")
+        XCTAssertTrue(flair.emojiURLs.isEmpty)
     }
 
     func testStreamableLinkInSelfTextBecomesEmbeddedVideo() throws {
