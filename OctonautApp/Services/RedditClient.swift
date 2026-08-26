@@ -255,7 +255,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {
-        let request = mutationRequest(for: action)
+        let request = Self.mutationRequest(for: action)
         let data = try await requestData(
             method: request.method,
             path: request.path,
@@ -457,7 +457,7 @@ actor URLSessionRedditClient: RedditClient {
         return path
     }
 
-    private func mutationRequest(for action: RedditAction) -> (method: String, path: String, query: [URLQueryItem], fields: [String: String]) {
+    static func mutationRequest(for action: RedditAction) -> (method: String, path: String, query: [URLQueryItem], fields: [String: String]) {
         switch action {
         case .vote(let fullname, let direction):
             return ("POST", "/api/vote", [], ["id": fullname, "dir": String(max(-1, min(direction, 1)))])
@@ -490,6 +490,20 @@ actor URLSessionRedditClient: RedditClient {
             if let text, !text.isEmpty { fields["text"] = text }
             if let link { fields["url"] = link.absoluteString }
             return ("POST", "/api/submit", [], fields)
+        case .crosspost(let community, let title, let sourceFullname, let sendReplies):
+            return (
+                "POST",
+                "/api/submit",
+                [],
+                [
+                    "sr": community,
+                    "title": title,
+                    "kind": "crosspost",
+                    "crosspost_fullname": sourceFullname,
+                    "sendreplies": sendReplies ? "true" : "false",
+                    "api_type": "json"
+                ]
+            )
         case .block(let username, let blocked):
             return ("POST", "/api/block_user", [], ["name": username, "container": blocked ? "" : "unblock"])
         case .follow(let username, let following):

@@ -15,6 +15,17 @@ enum AutoplayVideo: String, Codable, Hashable, Sendable, CaseIterable {
     case never
     case wifi
     case always
+
+    func shouldAutoplay(isConnectedViaWiFi: Bool) -> Bool {
+        switch self {
+        case .never:
+            false
+        case .wifi:
+            isConnectedViaWiFi
+        case .always:
+            true
+        }
+    }
 }
 
 enum DataMode: String, Codable, Hashable, Sendable, CaseIterable {

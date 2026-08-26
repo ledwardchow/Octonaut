@@ -1,14 +1,107 @@
+import AVFoundation
 import XCTest
 
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
-    func testPostCardBuildsRedditWebCrosspostURL() {
-        let post = PostCardModel(post: FixtureData.posts[0])
-        XCTAssertEqual(
-            post.crosspostURL.absoluteString,
-            "https://www.reddit.com/submit?source_id=\(FixtureData.posts[0].fullname)"
+    @MainActor
+    func testVideoPlayerDoesNotPublishSystemNowPlayingControls() {
+        let controller = OctonautSystemIsolatedVideoPlayer.makeViewController(
+            player: AVPlayer(),
+            showsPlaybackControls: true
         )
+
+        XCTAssertFalse(controller.updatesNowPlayingInfoCenter)
+        XCTAssertFalse(controller.allowsPictureInPicturePlayback)
+    }
+
+    func testVideoAutoplayPolicyHonorsSettingAndConnection() {
+        XCTAssertFalse(AutoplayVideo.never.shouldAutoplay(isConnectedViaWiFi: true))
+        XCTAssertFalse(AutoplayVideo.wifi.shouldAutoplay(isConnectedViaWiFi: false))
+        XCTAssertTrue(AutoplayVideo.wifi.shouldAutoplay(isConnectedViaWiFi: true))
+        XCTAssertTrue(AutoplayVideo.always.shouldAutoplay(isConnectedViaWiFi: false))
+    }
+
+    func testRedditMediaDownloadUsesWebsiteHeadersWithoutCredentials() throws {
+        let url = try XCTUnwrap(URL(string: "https://v.redd.it/clip/DASH_720.mp4?source=fallback"))
+
+        let request = try MediaDownloadTransport.request(for: url)
+
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertNotNil(request.value(forHTTPHeaderField: "User-Agent"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://www.reddit.com/")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
+    }
+
+    func testMediaDownloadRejectsNonHTTPSURL() throws {
+        let url = try XCTUnwrap(URL(string: "http://v.redd.it/clip/DASH_720.mp4"))
+
+        XCTAssertThrowsError(try MediaDownloadTransport.request(for: url))
+    }
+
+    func testMediaDownloadRejectsPermissionResponse() throws {
+        let url = try XCTUnwrap(URL(string: "https://v.redd.it/clip/DASH_720.mp4"))
+        let response = try XCTUnwrap(
+            HTTPURLResponse(
+                url: url,
+                statusCode: 403,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "text/html"]
+            )
+        )
+
+        XCTAssertThrowsError(try MediaDownloadTransport.validate(response))
+    }
+
+    func testRedditDASHManifestSelectsHighestQualityTracks() throws {
+        let mediaURL = try XCTUnwrap(
+            URL(string: "https://v.redd.it/clip123/HLSPlaylist.m3u8?source=fallback")
+        )
+        let manifestURL = try XCTUnwrap(RedditDASHManifest.manifestURL(for: mediaURL))
+        let manifest = Data(
+            #"""
+            <MPD>
+              <Period>
+                <AdaptationSet mimeType="video/mp4">
+                  <Representation bandwidth="400000" height="360"><BaseURL>DASH_360.mp4</BaseURL></Representation>
+                  <Representation bandwidth="1200000" height="720"><BaseURL>DASH_720.mp4</BaseURL></Representation>
+                </AdaptationSet>
+                <AdaptationSet mimeType="audio/mp4">
+                  <Representation bandwidth="64000"><BaseURL>DASH_AUDIO_64.mp4</BaseURL></Representation>
+                  <Representation bandwidth="128000"><BaseURL>DASH_AUDIO_128.mp4</BaseURL></Representation>
+                </AdaptationSet>
+              </Period>
+            </MPD>
+            """#.utf8
+        )
+
+        let media = try XCTUnwrap(RedditDASHManifest.media(from: manifest, manifestURL: manifestURL))
+
+        XCTAssertEqual(manifestURL.absoluteString, "https://v.redd.it/clip123/DASHPlaylist.mpd")
+        XCTAssertEqual(media.video.absoluteString, "https://v.redd.it/clip123/DASH_720.mp4")
+        XCTAssertEqual(media.audio?.absoluteString, "https://v.redd.it/clip123/DASH_AUDIO_128.mp4")
+    }
+
+    func testCrosspostBuildsWebsiteSubmitRequest() {
+        let post = PostCardModel(post: FixtureData.posts[0])
+        let request = URLSessionRedditClient.mutationRequest(
+            for: .crosspost(
+                community: "swift",
+                title: post.title,
+                sourceFullname: post.fullname,
+                sendReplies: true
+            )
+        )
+
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/api/submit")
+        XCTAssertEqual(request.fields["sr"], "swift")
+        XCTAssertEqual(request.fields["title"], post.title)
+        XCTAssertEqual(request.fields["kind"], "crosspost")
+        XCTAssertEqual(request.fields["crosspost_fullname"], FixtureData.posts[0].fullname)
+        XCTAssertEqual(request.fields["sendreplies"], "true")
+        XCTAssertEqual(request.fields["api_type"], "json")
     }
 
     func testMarkdownLinksRenderAsLinkedDisplayText() throws {

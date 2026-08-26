@@ -1,5 +1,7 @@
 import AVKit
 import Foundation
+import Network
+import Observation
 import Photos
 import SwiftUI
 import UIKit
@@ -140,6 +142,7 @@ private enum OctonautAVPlayerFactory {
         let player = AVPlayer(playerItem: item)
         player.allowsExternalPlayback = false
         player.usesExternalPlaybackWhileExternalScreenIsActive = false
+        player.audiovisualBackgroundPlaybackPolicy = .pauses
         return player
     }
 }
@@ -204,9 +207,11 @@ struct OctonautAsyncImage: View {
 }
 
 struct OctonautInlineMediaView: View {
+    @Environment(AppDependencies.self) private var dependencies
     let post: PostCardModel
     var onOpen: ((Int) -> Void)?
     @State private var isRevealed = false
+    @State private var networkStatus = OctonautNetworkStatus.shared
 
     private let gallerySpacing: CGFloat = 4
     private let galleryHeight: CGFloat = 220
@@ -232,7 +237,15 @@ struct OctonautInlineMediaView: View {
                         .aspectRatio(16 / 9, contentMode: .fit)
                         sensitiveRevealButton
                     } else {
-                        OctonautVideoPlayer(url: url, audioURL: post.audioURL, muted: true)
+                        OctonautVideoPlayer(
+                            url: url,
+                            audioURL: post.audioURL,
+                            muted: true,
+                            autoplay: dependencies.settings.autoplayVideo.shouldAutoplay(
+                                isConnectedViaWiFi: networkStatus.isConnectedViaWiFi
+                            )
+                        )
+                        .overlay { openVideoButton }
                     }
                 }
             } else if post.mediaKind == "embeddedVideo", let url = post.mediaURL,
@@ -251,6 +264,7 @@ struct OctonautInlineMediaView: View {
                     } else {
                         OctonautEmbeddedVideoView(url: embedURL)
                             .aspectRatio(16 / 9, contentMode: .fit)
+                            .overlay { openVideoButton }
                     }
                 }
             } else if post.mediaKind == "gallery" || post.galleryURLs.count > 1 {
@@ -368,6 +382,15 @@ struct OctonautInlineMediaView: View {
             .accessibilityLabel("Sensitive media. Tap to reveal.")
     }
 
+    private var openVideoButton: some View {
+        Button { openOrReveal(at: 0) } label: {
+            Color.clear
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open video full screen")
+    }
+
     private func linkCard(url: URL, isBlurred: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if let thumbnailURL = post.thumbnailURL {
@@ -435,13 +458,18 @@ struct OctonautVideoPlayer: View {
     let url: URL
     var audioURL: URL?
     var muted = true
+    var autoplay = false
     @State private var player: AVPlayer?
     @State private var aspectRatio: CGFloat = 16 / 9
+
+    private var playbackRequest: PlaybackRequest {
+        PlaybackRequest(url: url, audioURL: audioURL, muted: muted, autoplay: autoplay)
+    }
 
     var body: some View {
         Group {
             if let player {
-                VideoPlayer(player: player)
+                OctonautSystemIsolatedVideoPlayer(player: player, showsPlaybackControls: false)
                     .background(.black)
                     .aspectRatio(aspectRatio, contentMode: .fit)
             } else {
@@ -452,16 +480,88 @@ struct OctonautVideoPlayer: View {
                 .aspectRatio(aspectRatio, contentMode: .fit)
             }
         }
-        .task(id: url) {
+        .task(id: playbackRequest) {
+            player?.pause()
+            player = nil
             let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
+            guard !Task.isCancelled else { return }
             playback.player.isMuted = muted
             aspectRatio = playback.aspectRatio
             player = playback.player
+            if autoplay {
+                playback.player.play()
+            }
+        }
+        .onChange(of: autoplay) { _, shouldAutoplay in
+            if shouldAutoplay {
+                player?.play()
+            } else {
+                player?.pause()
+            }
         }
         .onDisappear {
             player?.pause()
         }
         .accessibilityLabel("Video")
+    }
+
+    private struct PlaybackRequest: Hashable {
+        let url: URL
+        let audioURL: URL?
+        let muted: Bool
+        let autoplay: Bool
+    }
+}
+
+struct OctonautSystemIsolatedVideoPlayer: UIViewControllerRepresentable {
+    let player: AVPlayer
+    var showsPlaybackControls = true
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        Self.makeViewController(player: player, showsPlaybackControls: showsPlaybackControls)
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        controller.player = player
+        controller.showsPlaybackControls = showsPlaybackControls
+        controller.updatesNowPlayingInfoCenter = false
+        controller.allowsPictureInPicturePlayback = false
+    }
+
+    static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Void) {
+        controller.player = nil
+    }
+
+    static func makeViewController(
+        player: AVPlayer,
+        showsPlaybackControls: Bool
+    ) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = showsPlaybackControls
+        controller.updatesNowPlayingInfoCenter = false
+        controller.allowsPictureInPicturePlayback = false
+        return controller
+    }
+}
+
+@MainActor
+@Observable
+private final class OctonautNetworkStatus {
+    static let shared = OctonautNetworkStatus()
+
+    private(set) var isConnectedViaWiFi = false
+    @ObservationIgnored private let monitor = NWPathMonitor()
+    @ObservationIgnored private let queue = DispatchQueue(label: "com.octonaut.network-status")
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            let isConnectedViaWiFi = path.status == .satisfied && path.usesInterfaceType(.wifi)
+            Task { @MainActor [weak self] in
+                self?.isConnectedViaWiFi = isConnectedViaWiFi
+            }
+        }
+        monitor.start(queue: queue)
     }
 }
 
@@ -533,17 +633,7 @@ struct OctonautZoomableImage: View {
         MagnificationGesture()
             .onChanged { value in
                 let proposedScale = min(max(baseScale * value, 1), 8)
-                let minimumZoomScale = fillScale(
-                    imageSize: imageSize,
-                    viewportSize: viewportSize
-                )
-                if baseScale > 1, proposedScale < minimumZoomScale * 0.85 {
-                    scale = 1
-                } else if proposedScale > 1 {
-                    scale = max(proposedScale, minimumZoomScale)
-                } else {
-                    scale = 1
-                }
+                scale = proposedScale
                 offset = clampedOffset(
                     baseOffset,
                     scale: scale,
@@ -720,6 +810,25 @@ struct OctonautMediaViewer: View {
                                     Group {
                                         if post.mediaKind == "video" || post.mediaKind == "gif" {
                                             OctonautVideoDetailView(url: url, audioURL: post.audioURL)
+                                        } else if post.mediaKind == "embeddedVideo",
+                                                  let embedURL = EmbeddedVideoURL.embedURL(for: url) {
+                                            ZStack {
+                                                OctonautEmbeddedVideoView(url: embedURL)
+                                                    .aspectRatio(16 / 9, contentMode: .fit)
+                                                if post.isSensitive && !isRevealed {
+                                                    Button { isRevealed = true } label: {
+                                                        VStack(spacing: 7) {
+                                                            Image(systemName: "eye.slash")
+                                                            Text("Tap to reveal")
+                                                                .font(.caption.weight(.semibold))
+                                                        }
+                                                        .foregroundStyle(.white)
+                                                        .padding(18)
+                                                        .background(.black.opacity(0.68), in: RoundedRectangle(cornerRadius: 12))
+                                                    }
+                                                    .buttonStyle(.plain)
+                                                }
+                                            }
                                         } else {
                                             ZStack {
                                                 OctonautZoomableImage(
@@ -989,94 +1098,27 @@ struct OctonautVideoDetailView: View {
     let url: URL
     var audioURL: URL?
     @State private var player: AVPlayer?
-    @State private var aspectRatio: CGFloat = 16 / 9
-    @State private var currentTime: Double = 0
-    @State private var duration: Double = 1
-    @State private var isMuted = true
-    @State private var isPlaying = false
-    @State private var speed = 1.0
 
     var body: some View {
-        VStack(spacing: 12) {
+        ZStack {
+            Color.black
             if let player {
-                VideoPlayer(player: player)
-                    .background(.black)
-                    .frame(maxWidth: .infinity)
-                    .aspectRatio(aspectRatio, contentMode: .fit)
-                    .onTapGesture { togglePlayback() }
+                OctonautSystemIsolatedVideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ProgressView().tint(.white).frame(maxWidth: .infinity).aspectRatio(aspectRatio, contentMode: .fit)
+                ProgressView()
+                    .tint(.white)
             }
-            VStack(spacing: 8) {
-                Slider(value: Binding(get: { currentTime }, set: { value in
-                    currentTime = value
-                    player?.seek(to: CMTime(seconds: value, preferredTimescale: 600))
-                }), in: 0...max(duration, 1))
-                HStack {
-                    Text(formatTime(currentTime))
-                    Spacer()
-                    Text("-\(formatTime(max(duration - currentTime, 0)))")
-                }
-                .font(.caption.monospacedDigit())
-                HStack(spacing: 22) {
-                    Button { seek(by: -10) } label: { Image(systemName: "gobackward.10") }
-                    Button { togglePlayback() } label: { Image(systemName: isPlaying ? "pause.fill" : "play.fill") }
-                        .font(.title2)
-                    Button { seek(by: 10) } label: { Image(systemName: "goforward.10") }
-                    Button { isMuted.toggle(); player?.isMuted = isMuted } label: { Image(systemName: isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") }
-                    Menu {
-                        ForEach([0.5, 1.0, 1.5, 2.0], id: \.self) { value in
-                            Button { speed = value; player?.rate = isPlaying ? Float(value) : 0 } label: {
-                                if speed == value { Label("\(value, specifier: "%g")×", systemImage: "checkmark") } else { Text("\(value, specifier: "%g")×") }
-                            }
-                        }
-                    } label: { Text("\(speed, specifier: "%g")×").font(.caption.weight(.semibold)) }
-                }
-                .font(.title3)
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: url) {
             let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
-            playback.player.isMuted = isMuted
-            aspectRatio = playback.aspectRatio
+            playback.player.isMuted = true
             player = playback.player
-            if let asset = playback.player.currentItem?.asset,
-               let loadedDuration = try? await asset.load(.duration).seconds,
-               loadedDuration.isFinite,
-               loadedDuration > 0 {
-                duration = loadedDuration
-            }
-        }
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
-            guard let player else { return }
-            let seconds = player.currentTime().seconds
-            if seconds.isFinite { currentTime = seconds }
-            if let itemDuration = player.currentItem?.duration.seconds, itemDuration.isFinite, itemDuration > 0 { duration = itemDuration }
-            isPlaying = player.timeControlStatus == .playing
         }
         .onDisappear { player?.pause() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Video player")
-    }
-
-    private func togglePlayback() {
-        guard let player else { return }
-        if player.timeControlStatus == .playing { player.pause() } else { player.rate = Float(speed); player.play() }
-        isPlaying = player.timeControlStatus == .playing
-    }
-
-    private func seek(by seconds: Double) {
-        let target = min(max(currentTime + seconds, 0), max(duration, 1))
-        currentTime = target
-        player?.seek(to: CMTime(seconds: target, preferredTimescale: 600))
-    }
-
-    private func formatTime(_ time: Double) -> String {
-        guard time.isFinite else { return "0:00" }
-        let total = max(Int(time), 0)
-        return "\(total / 60):\(String(format: "%02d", total % 60))"
     }
 }
 

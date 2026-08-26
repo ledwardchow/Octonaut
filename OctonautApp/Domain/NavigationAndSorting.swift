@@ -250,6 +250,7 @@ enum RedditAction: Hashable, Codable, Sendable {
     case markAllRead
     case composeMessage(to: String, subject: String, text: String)
     case submitPost(community: String, title: String, text: String?, link: URL?, sendReplies: Bool)
+    case crosspost(community: String, title: String, sourceFullname: String, sendReplies: Bool)
     case block(username: String, blocked: Bool)
     case follow(username: String, following: Bool)
 }

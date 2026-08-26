@@ -208,3 +208,116 @@ struct ComposerView: View {
         try? await dependencies.persistence.saveDraft(draft)
     }
 }
+
+@MainActor
+struct CrosspostComposerView: View {
+    let post: PostCardModel
+
+    @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.dismiss) private var dismiss
+    @State private var community = ""
+    @State private var title: String
+    @State private var sendReplies = true
+    @State private var sending = false
+    @State private var errorMessage: String?
+
+    init(post: PostCardModel) {
+        self.post = post
+        _title = State(initialValue: post.title)
+    }
+
+    private var canSubmit: Bool {
+        !normalizedCommunity.isEmpty
+            && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !sending
+    }
+
+    private var normalizedCommunity: String {
+        let trimmed = community.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("r/") {
+            return String(trimmed.dropFirst(2))
+        }
+        return trimmed
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Destination") {
+                    TextField("Community, for example apple", text: $community)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                }
+                Section("Title") {
+                    TextField("Crosspost title", text: $title, axis: .vertical)
+                        .lineLimit(2...5)
+                }
+                Section("Original post") {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(post.title)
+                            .font(.body.weight(.medium))
+                        Text("r/\(post.community) · u/\(post.author)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    Toggle("Send me reply notifications", isOn: $sendReplies)
+                }
+            }
+            .navigationTitle("Crosspost")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(sending ? "Posting…" : "Post") { submit() }
+                        .disabled(!canSubmit)
+                }
+            }
+        }
+        .interactiveDismissDisabled(sending)
+        .alert("Crosspost failed", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "Reddit could not create the crosspost.")
+        }
+    }
+
+    private func submit() {
+        guard canSubmit,
+              let account = dependencies.accounts.selectedAccount,
+              account.health == .healthy else {
+            errorMessage = "Sign in to Reddit before creating a crosspost."
+            return
+        }
+
+        let accountID = account.id
+        let action = RedditAction.crosspost(
+            community: normalizedCommunity,
+            title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+            sourceFullname: post.fullname,
+            sendReplies: sendReplies
+        )
+        sending = true
+        Task {
+            do {
+                _ = try await dependencies.authenticated.perform(action, accountID: accountID)
+                sending = false
+                dismiss()
+            } catch let error as RedditClientError where error == .authenticationRequired {
+                await dependencies.accounts.markNeedsLogin(accountID)
+                sending = false
+                errorMessage = error.errorDescription
+            } catch {
+                sending = false
+                errorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? "Reddit could not create the crosspost."
+            }
+        }
+    }
+}

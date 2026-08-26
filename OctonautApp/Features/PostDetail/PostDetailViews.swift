@@ -12,7 +12,7 @@ struct PostDetailView: View {
     @State private var isMediaViewerPresented = false
     @State private var selectedMediaPage = 0
     @State private var showingLogin = false
-    @State private var browserDestination: OctonautBrowserDestination?
+    @State private var crosspostPost: PostCardModel?
 
     private var currentPost: PostCardModel {
         guard let detailPost = store.detailPost, detailPost.id == post.id else { return post }
@@ -191,7 +191,7 @@ struct PostDetailView: View {
                         Label("Share Link", systemImage: "square.and.arrow.up")
                     }
                     Button {
-                        browserDestination = OctonautBrowserDestination(url: currentPost.crosspostURL)
+                        beginCrosspost()
                     } label: {
                         Label("Crosspost", systemImage: "arrow.triangle.branch")
                     }
@@ -206,9 +206,8 @@ struct PostDetailView: View {
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
         }
-        .sheet(item: $browserDestination) { destination in
-            OctonautBrowserView(url: destination.url)
-                .ignoresSafeArea()
+        .sheet(item: $crosspostPost) { post in
+            CrosspostComposerView(post: post)
         }
         .fullScreenCover(isPresented: $isMediaViewerPresented) {
             OctonautMediaViewer(
@@ -223,6 +222,14 @@ struct PostDetailView: View {
 
     private var postSummaryEligible: Bool {
         SummaryEligibility.post(title: currentPost.title, body: currentPost.body)
+    }
+
+    private func beginCrosspost() {
+        guard dependencies.accounts.selectedAccount?.health == .healthy else {
+            showingLogin = true
+            return
+        }
+        crosspostPost = currentPost
     }
 
     @ViewBuilder

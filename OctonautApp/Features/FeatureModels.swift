@@ -58,11 +58,6 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
 
     var isSensitive: Bool { isNSFW || isSpoiler }
     var fullname: String { IDNormalization.fullname(id, kind: "t3") }
-    var crosspostURL: URL {
-        var components = URLComponents(string: "https://www.reddit.com/submit")!
-        components.queryItems = [URLQueryItem(name: "source_id", value: fullname)]
-        return components.url!
-    }
 
     init(
         id: String,

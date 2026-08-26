@@ -162,7 +162,7 @@ struct FeedView: View {
     @State private var showingLogin = false
     @State private var selectedMediaPost: PostCardModel?
     @State private var selectedMediaPage = 0
-    @State private var browserDestination: OctonautBrowserDestination?
+    @State private var crosspostPost: PostCardModel?
 
     private var compactRows: Bool { dependencies.settings.feedLayout == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
@@ -210,7 +210,7 @@ struct FeedView: View {
                                         onComments: { router.push(.post(post)) },
                                         onCommunityOpen: { router.push(.post(post)) },
                                         onCrosspost: {
-                                            browserDestination = OctonautBrowserDestination(url: post.crosspostURL)
+                                            beginCrosspost(post)
                                         }
                                     )
                                 }
@@ -277,9 +277,8 @@ struct FeedView: View {
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
         }
-        .sheet(item: $browserDestination) { destination in
-            OctonautBrowserView(url: destination.url)
-                .ignoresSafeArea()
+        .sheet(item: $crosspostPost) { post in
+            CrosspostComposerView(post: post)
         }
         .fullScreenCover(item: $selectedMediaPost) { post in
             OctonautMediaViewer(
@@ -308,6 +307,14 @@ struct FeedView: View {
                 // The store has already restored the previous local value.
             }
         }
+    }
+
+    private func beginCrosspost(_ post: PostCardModel) {
+        guard dependencies.accounts.selectedAccount?.health == .healthy else {
+            showingLogin = true
+            return
+        }
+        crosspostPost = post
     }
 
     private func performSave(postID: String) {
