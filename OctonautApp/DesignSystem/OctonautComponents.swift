@@ -392,8 +392,8 @@ struct OctonautPostRow: View {
 
     private var bodyText: some View {
         Text(OctonautMarkdown.attributedString(from: post.body))
-            .font(.body)
-            .foregroundStyle(theme.secondaryText)
+            .font(.subheadline)
+            .foregroundStyle(theme.primaryText)
             .tint(theme.accent)
             .lineLimit(bodyLineLimit)
             .multilineTextAlignment(.leading)

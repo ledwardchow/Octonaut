@@ -49,6 +49,10 @@ struct ContentSummary: Hashable, Sendable {
 }
 
 struct OpenAICompatibleSummaryConfiguration: Sendable, Equatable {
+    private static let openRouterHost = "openrouter.ai"
+    private static let openRouterAppURL = "https://github.com/ledwardchow/octonaut"
+    private static let openRouterAppTitle = "Octonaut"
+
     let endpoint: String
     let model: String
 
@@ -69,6 +73,13 @@ struct OpenAICompatibleSummaryConfiguration: Sendable, Equatable {
 
     var isValid: Bool {
         chatCompletionsURL != nil && !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    func addOpenRouterAttributionHeaders(to request: inout URLRequest) {
+        guard let host = request.url?.host?.lowercased(),
+              host == Self.openRouterHost || host.hasSuffix(".\(Self.openRouterHost)") else { return }
+        request.setValue(Self.openRouterAppURL, forHTTPHeaderField: "HTTP-Referer")
+        request.setValue(Self.openRouterAppTitle, forHTTPHeaderField: "X-OpenRouter-Title")
     }
 }
 
@@ -648,6 +659,7 @@ actor ConfiguredIntelligenceService: IntelligenceService {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        configuration.addOpenRouterAttributionHeaders(to: &request)
         request.httpBody = try JSONEncoder().encode(body)
 
         do {

@@ -145,7 +145,7 @@ struct SummaryCardView: View {
             ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                 Label(line, systemImage: "circle.fill")
                     .labelStyle(SummaryBulletLabelStyle())
-                    .font(.body)
+                    .font(.subheadline)
             }
         }
     }

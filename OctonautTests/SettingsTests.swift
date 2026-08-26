@@ -91,4 +91,33 @@ final class SettingsTests: XCTestCase {
         )
         XCTAssertTrue(configuration.isValid)
     }
+
+    func testOpenRouterRequestsIdentifyOctonaut() throws {
+        let configuration = OpenAICompatibleSummaryConfiguration(
+            endpoint: "https://openrouter.ai/api/v1",
+            model: "openai/gpt-5.6-luna"
+        )
+        var request = URLRequest(url: try XCTUnwrap(configuration.chatCompletionsURL))
+
+        configuration.addOpenRouterAttributionHeaders(to: &request)
+
+        XCTAssertEqual(
+            request.value(forHTTPHeaderField: "HTTP-Referer"),
+            "https://github.com/ledwardchow/octonaut"
+        )
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-OpenRouter-Title"), "Octonaut")
+    }
+
+    func testOtherProvidersDoNotReceiveOpenRouterIdentification() throws {
+        let configuration = OpenAICompatibleSummaryConfiguration(
+            endpoint: "https://example.test/v1",
+            model: "summary-model"
+        )
+        var request = URLRequest(url: try XCTUnwrap(configuration.chatCompletionsURL))
+
+        configuration.addOpenRouterAttributionHeaders(to: &request)
+
+        XCTAssertNil(request.value(forHTTPHeaderField: "HTTP-Referer"))
+        XCTAssertNil(request.value(forHTTPHeaderField: "X-OpenRouter-Title"))
+    }
 }
