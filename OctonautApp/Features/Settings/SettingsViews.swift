@@ -195,6 +195,8 @@ struct SettingsDetailView: View {
     @State private var showingReset = false
     @State private var imageCacheBytes = 0
     @State private var responseCacheBytes = 0
+    @State private var usageStatistics = UsageStatistics()
+    @State private var statisticsError: String?
 
     var body: some View {
         Form {
@@ -224,7 +226,9 @@ struct SettingsDetailView: View {
         .formStyle(.grouped)
         .navigationTitle(destination.title)
         .confirmationDialog("Reset statistics?", isPresented: $showingReset, titleVisibility: .visible) {
-            Button("Reset Statistics", role: .destructive) { showingReset = false }
+            Button("Reset Statistics", role: .destructive) {
+                Task { await resetStatistics() }
+            }
             Button("Cancel", role: .cancel) {}
         }
         .task {
@@ -232,6 +236,9 @@ struct SettingsDetailView: View {
             if destination == .dataUse {
                 imageCacheBytes = await OctonautImageCache.diskUsage()
                 responseCacheBytes = RedditResponseCache.diskUsage
+            }
+            if destination == .statistics {
+                await loadStatistics()
             }
         }
     }
@@ -349,13 +356,36 @@ struct SettingsDetailView: View {
         Group {
             Section {
                 Toggle("Collect local usage statistics", isOn: Binding(get: { dependencies.settings.collectLocalUsageStatistics }, set: { dependencies.settings.collectLocalUsageStatistics = $0 }))
-                LabeledContent("Posts viewed", value: "0")
-                LabeledContent("Community visits", value: "0")
-                LabeledContent("Scroll distance", value: "0 m")
+                LabeledContent("Posts viewed", value: usageStatistics.postsViewed.formatted())
+                LabeledContent("Community visits", value: usageStatistics.communityVisits.formatted())
+                LabeledContent("Scroll distance", value: usageStatistics.scrollDistanceMeters.formatted(.number.precision(.fractionLength(1))) + " m")
+                if let statisticsError {
+                    Text(statisticsError).font(.footnote).foregroundStyle(.red)
+                }
             }
             Section {
                 Button("Reset Statistics", role: .destructive) { showingReset = true }
             }
+        }
+    }
+
+    private func loadStatistics() async {
+        do {
+            usageStatistics = try await dependencies.persistence.loadUsageStatistics()
+            statisticsError = nil
+        } catch {
+            statisticsError = "Statistics could not be loaded."
+        }
+    }
+
+    private func resetStatistics() async {
+        showingReset = false
+        do {
+            try await dependencies.persistence.resetUsageStatistics()
+            usageStatistics = UsageStatistics()
+            statisticsError = nil
+        } catch {
+            statisticsError = "Statistics could not be reset."
         }
     }
 

@@ -5,6 +5,9 @@ actor InMemoryPersistenceStore: PersistenceStore {
     private var accounts: [AccountID: Account] = [:]
     private var seen: [String: Date] = [:]
     private var drafts: [UUID: Draft] = [:]
+    private var statistics: [UsageStatistic: Int] = [:]
+    private var communityVisits: [String: Int] = [:]
+    private var communitiesVisitedThisSession: Set<String> = []
 
     func loadAccounts() async throws -> [Account] {
         accounts.values.sorted { ($0.lastUsedAt ?? $0.createdAt) > ($1.lastUsedAt ?? $1.createdAt) }
@@ -61,12 +64,42 @@ actor InMemoryPersistenceStore: PersistenceStore {
     func clearDrafts(accountID: AccountID?) async throws {
         drafts = drafts.filter { $0.value.accountID != accountID }
     }
+
+    func loadUsageStatistics() async throws -> UsageStatistics {
+        UsageStatistics(
+            postsViewed: statistics[.postsViewed, default: 0],
+            communityVisits: communityVisits.values.reduce(0, +),
+            feedScrollPoints: statistics[.feedScrollPoints, default: 0]
+        )
+    }
+
+    func incrementStatistic(_ counter: UsageStatistic, by amount: Int = 1) async throws {
+        guard amount > 0 else { return }
+        statistics[counter, default: 0] += amount
+    }
+
+    func beginUsageSession() async {
+        communitiesVisitedThisSession.removeAll()
+    }
+
+    func recordCommunityVisit(_ community: String) async throws {
+        let normalized = IDNormalization.community(community)
+        guard !normalized.isEmpty, communitiesVisitedThisSession.insert(normalized).inserted else { return }
+        communityVisits[normalized, default: 0] += 1
+    }
+
+    func resetUsageStatistics() async throws {
+        statistics.removeAll()
+        communityVisits.removeAll()
+        communitiesVisitedThisSession.removeAll()
+    }
 }
 
 @MainActor
 final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     let container: ModelContainer
     private let context: ModelContext
+    private var communitiesVisitedThisSession: Set<String> = []
 
     init(container: ModelContainer) {
         self.container = container
@@ -158,6 +191,51 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     func clearDrafts(accountID: AccountID?) async throws {
         let key = accountID?.description
         try context.fetch(FetchDescriptor<DraftRecord>()).filter { $0.accountIDString == key }.forEach(context.delete)
+        try context.save()
+    }
+
+    func loadUsageStatistics() async throws -> UsageStatistics {
+        let counters = try context.fetch(FetchDescriptor<StatisticRecord>())
+        let values = Dictionary(uniqueKeysWithValues: counters.map { ($0.counterName, $0.value) })
+        let visits = try context.fetch(FetchDescriptor<CommunityVisitRecord>())
+        return UsageStatistics(
+            postsViewed: values[UsageStatistic.postsViewed.rawValue, default: 0],
+            communityVisits: visits.reduce(0) { $0 + $1.visitCount },
+            feedScrollPoints: values[UsageStatistic.feedScrollPoints.rawValue, default: 0]
+        )
+    }
+
+    func incrementStatistic(_ counter: UsageStatistic, by amount: Int = 1) async throws {
+        guard amount > 0 else { return }
+        let records = try context.fetch(FetchDescriptor<StatisticRecord>())
+        if let existing = records.first(where: { $0.counterName == counter.rawValue }) {
+            existing.value += amount
+        } else {
+            context.insert(StatisticRecord(counterName: counter.rawValue, value: amount))
+        }
+        try context.save()
+    }
+
+    func beginUsageSession() async {
+        communitiesVisitedThisSession.removeAll()
+    }
+
+    func recordCommunityVisit(_ community: String) async throws {
+        let normalized = IDNormalization.community(community)
+        guard !normalized.isEmpty, communitiesVisitedThisSession.insert(normalized).inserted else { return }
+        let records = try context.fetch(FetchDescriptor<CommunityVisitRecord>())
+        if let existing = records.first(where: { $0.normalizedCommunity == normalized }) {
+            existing.visitCount += 1
+        } else {
+            context.insert(CommunityVisitRecord(normalizedCommunity: normalized, visitCount: 1))
+        }
+        try context.save()
+    }
+
+    func resetUsageStatistics() async throws {
+        try context.fetch(FetchDescriptor<StatisticRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<CommunityVisitRecord>()).forEach(context.delete)
+        communitiesVisitedThisSession.removeAll()
         try context.save()
     }
 }

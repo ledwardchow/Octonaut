@@ -1521,6 +1521,21 @@ final class OctonautFeatureStore {
         }
     }
 
+    func recordPostViewed() async {
+        guard settings?.collectLocalUsageStatistics != false, let persistence else { return }
+        try? await persistence.incrementStatistic(.postsViewed, by: 1)
+    }
+
+    func recordCommunityVisit(_ community: String) async {
+        guard settings?.collectLocalUsageStatistics != false, let persistence else { return }
+        try? await persistence.recordCommunityVisit(community)
+    }
+
+    func recordFeedScroll(points: Int) async {
+        guard points > 0, settings?.collectLocalUsageStatistics != false, let persistence else { return }
+        try? await persistence.incrementStatistic(.feedScrollPoints, by: points)
+    }
+
     func toggleFavorite(communityID: String) {
         guard let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
         communities[index].isFavorite.toggle()

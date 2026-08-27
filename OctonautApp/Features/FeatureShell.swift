@@ -26,6 +26,7 @@ struct OctonautTabsView: View {
     /// optional preserves the fixture-backed preview and isolated feature tests.
     let reddit: (any RedditClient)?
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: AppTab = .posts
     @State private var postsRouter = OctonautFeatureRouter(path: [.feed(.home)])
     @State private var inboxRouter = OctonautFeatureRouter()
@@ -98,6 +99,10 @@ struct OctonautTabsView: View {
         }
         .onOpenURL { url in
             handleIncomingURL(url)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await dependencies.persistence.beginUsageSession() }
         }
         .environment(\.openURL, OpenURLAction { url in
             guard dependencies.settings.openRedditLinksInOctonaut,

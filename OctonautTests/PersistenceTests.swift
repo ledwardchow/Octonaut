@@ -37,4 +37,39 @@ final class PersistenceTests: XCTestCase {
         let drafts = try await store.loadDrafts(accountID: account.id)
         XCTAssertTrue(drafts.isEmpty)
     }
+
+    func testUsageStatisticsIncrementAndReset() async throws {
+        let store = InMemoryPersistenceStore()
+        try await store.incrementStatistic(.postsViewed, by: 2)
+        try await store.incrementStatistic(.feedScrollPoints, by: 625)
+        try await store.recordCommunityVisit("Swift")
+        try await store.recordCommunityVisit("r/swift")
+        try await store.recordCommunityVisit("iPhone")
+
+        let values = try await store.loadUsageStatistics()
+        XCTAssertEqual(values.postsViewed, 2)
+        XCTAssertEqual(values.communityVisits, 2)
+        XCTAssertEqual(values.scrollDistanceMeters, 0.1, accuracy: 0.0001)
+
+        await store.beginUsageSession()
+        try await store.recordCommunityVisit("swift")
+        let nextSessionValues = try await store.loadUsageStatistics()
+        XCTAssertEqual(nextSessionValues.communityVisits, 3)
+
+        try await store.resetUsageStatistics()
+        let resetValues = try await store.loadUsageStatistics()
+        XCTAssertEqual(resetValues, UsageStatistics())
+    }
+
+    @MainActor
+    func testSwiftDataUsageStatisticsPersist() async throws {
+        let container = try PersistenceSchema.makeContainer(inMemory: true)
+        let store = SwiftDataPersistenceStore(container: container)
+        try await store.incrementStatistic(.postsViewed, by: 3)
+        try await store.recordCommunityVisit("swift")
+
+        let values = try await store.loadUsageStatistics()
+        XCTAssertEqual(values.postsViewed, 3)
+        XCTAssertEqual(values.communityVisits, 1)
+    }
 }

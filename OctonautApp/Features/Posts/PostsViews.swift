@@ -163,6 +163,7 @@ struct FeedView: View {
     @State private var selectedMediaPost: PostCardModel?
     @State private var selectedMediaPage = 0
     @State private var crosspostPost: PostCardModel?
+    @State private var pendingScrollPoints: CGFloat = 0
 
     private var compactRows: Bool { dependencies.settings.feedLayout == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
@@ -235,6 +236,15 @@ struct FeedView: View {
                     .onChange(of: visiblePosts.first?.id) { _, firstID in
                         guard let firstID else { return }
                         proxy.scrollTo(firstID, anchor: .top)
+                    }
+                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.contentOffset.y + geometry.contentInsets.top
+                    } action: { oldOffset, newOffset in
+                        pendingScrollPoints += abs(newOffset - oldOffset)
+                        guard pendingScrollPoints >= 100 else { return }
+                        let points = Int(pendingScrollPoints.rounded())
+                        pendingScrollPoints = 0
+                        Task { await store.recordFeedScroll(points: points) }
                     }
                 }
             }
@@ -355,6 +365,9 @@ struct CommunityView: View {
                         }
                     }
                 }
+            }
+            .task(id: IDNormalization.community(name)) {
+                await store.recordCommunityVisit(name)
             }
     }
 }

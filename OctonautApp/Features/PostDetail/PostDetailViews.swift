@@ -218,6 +218,9 @@ struct PostDetailView: View {
         .task(id: "\(post.id):\(commentSort):\(store.accountContextKey)") {
             await store.loadPostDetail(for: post, sort: commentSort)
         }
+        .task(id: post.id) {
+            await store.recordPostViewed()
+        }
     }
 
     private var postSummaryEligible: Bool {
