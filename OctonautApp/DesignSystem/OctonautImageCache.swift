@@ -87,7 +87,7 @@ enum OctonautImageCache {
     }()
 
     static func image(for url: URL) async throws -> UIImage {
-        if let image = decodedImages.object(forKey: url as NSURL) {
+        if let image = cachedImage(for: url) {
             return image
         }
 
@@ -96,6 +96,10 @@ enum OctonautImageCache {
         guard let image = UIImage(data: data) else { throw URLError(.cannotDecodeContentData) }
         decodedImages.setObject(image, forKey: url as NSURL, cost: data.count)
         return image
+    }
+
+    static func cachedImage(for url: URL) -> UIImage? {
+        decodedImages.object(forKey: url as NSURL)
     }
 
     static func configure(diskCapacityMB: Int) async {

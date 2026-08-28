@@ -180,6 +180,33 @@ final class DomainTests: XCTestCase {
         )
     }
 
+    func testMarkdownRendersFencedCodeAsLiteralMonospacedText() {
+        let attributed = OctonautMarkdown.attributedString(
+            from: "Before\n```swift\nlet value = **literal**\nprint(value)\n```\nAfter"
+        )
+
+        XCTAssertEqual(
+            String(attributed.characters),
+            "Before\nlet value = **literal**\nprint(value)\nAfter"
+        )
+        XCTAssertTrue(attributed.runs.contains { $0.font != nil })
+    }
+
+    func testMarkdownSupportsTildeAndUnclosedCodeFences() {
+        let tildeFence = OctonautMarkdown.attributedString(
+            from: "~~~json\n{\"enabled\": true}\n~~~"
+        )
+        let unclosedFence = OctonautMarkdown.attributedString(
+            from: "Text\n```\n[not a link](https://example.com)"
+        )
+
+        XCTAssertEqual(String(tildeFence.characters), "{\"enabled\": true}")
+        XCTAssertEqual(
+            String(unclosedFence.characters),
+            "Text\n[not a link](https://example.com)"
+        )
+    }
+
     func testPostCardPreservesRedditFlairMetadata() throws {
         let data = Data(
             ##"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"flair1","name":"t3_flair1","permalink":"/r/google_antigravity/comments/flair1/update/","title":"Update","subreddit":"google_antigravity","selftext":"Body","link_flair_text":"News / Updates","link_flair_template_id":"news","link_flair_background_color":"#1478DB","link_flair_text_color":"light"}}]}}"##.utf8

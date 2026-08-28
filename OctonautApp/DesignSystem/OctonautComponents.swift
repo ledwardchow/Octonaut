@@ -203,6 +203,7 @@ struct OctonautPostRow: View {
     let post: PostCardModel
     var bodyLineLimit: Int? = 4
     var showsFlair = true
+    var mediaPreloader: OctonautFeedMediaPreloader?
     var onVote: ((Int) -> Void)?
     var onSave: (() -> Void)?
     var onSeen: (() -> Void)?
@@ -237,7 +238,11 @@ struct OctonautPostRow: View {
                 postBody
             }
             if post.hasMedia {
-                OctonautInlineMediaView(post: post, onOpen: onMedia)
+                OctonautInlineMediaView(
+                    post: post,
+                    onOpen: onMedia,
+                    preloader: mediaPreloader
+                )
             }
             HStack(spacing: 0) {
                 OctonautVoteControls(score: post.score, vote: post.vote, onVote: onVote)
@@ -413,8 +418,7 @@ private extension View {
 
 enum OctonautMarkdown {
     static func attributedString(from source: String) -> AttributedString {
-        let normalizedSource = insertingMissingLinkSpacing(in: source)
-        let lines = normalizedSource
+        let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
             .split(separator: "\n", omittingEmptySubsequences: false)
@@ -423,17 +427,39 @@ enum OctonautMarkdown {
         var index = 0
 
         while index < lines.count {
+            if let fence = openingFence(in: lines[index]) {
+                index += 1
+                while index < lines.count, !isClosingFence(lines[index], matching: fence) {
+                    renderedLines.append(renderCode(lines[index]))
+                    index += 1
+                }
+                if index < lines.count { index += 1 }
+                continue
+            }
+            if index + 1 < lines.count,
+               shouldJoinLinkLine(lines[index], to: lines[index + 1]) {
+                renderedLines.append(renderInline(lines[index] + " " + lines[index + 1]))
+                index += 2
+                continue
+            }
             if index + 1 < lines.count,
                let level = setextHeadingLevel(for: lines[index + 1]),
                !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-                renderedLines.append(renderInline(lines[index], headingLevel: level))
+                renderedLines.append(
+                    renderInline(insertingMissingLinkSpacing(in: lines[index]), headingLevel: level)
+                )
                 index += 2
                 continue
             }
             if let heading = atxHeading(in: lines[index]) {
-                renderedLines.append(renderInline(heading.text, headingLevel: heading.level))
+                renderedLines.append(
+                    renderInline(
+                        insertingMissingLinkSpacing(in: heading.text),
+                        headingLevel: heading.level
+                    )
+                )
             } else {
-                renderedLines.append(renderInline(lines[index]))
+                renderedLines.append(renderInline(insertingMissingLinkSpacing(in: lines[index])))
             }
             index += 1
         }
@@ -444,6 +470,50 @@ enum OctonautMarkdown {
             result.append(line)
         }
         return result
+    }
+
+    private struct Fence {
+        let marker: Character
+        let length: Int
+    }
+
+    private static func openingFence(in line: String) -> Fence? {
+        let content = line.drop(while: { $0 == " " })
+        guard line.count - content.count <= 3,
+              let marker = content.first,
+              marker == "`" || marker == "~" else { return nil }
+        let length = content.prefix(while: { $0 == marker }).count
+        guard length >= 3 else { return nil }
+
+        let info = content.dropFirst(length)
+        guard marker != "`" || !info.contains("`") else { return nil }
+        return Fence(marker: marker, length: length)
+    }
+
+    private static func isClosingFence(_ line: String, matching fence: Fence) -> Bool {
+        let content = line.drop(while: { $0 == " " })
+        guard line.count - content.count <= 3 else { return false }
+        let length = content.prefix(while: { $0 == fence.marker }).count
+        guard length >= fence.length else { return false }
+        return content.dropFirst(length).allSatisfy { $0 == " " || $0 == "\t" }
+    }
+
+    private static func renderCode(_ source: String) -> AttributedString {
+        var result = AttributedString(source)
+        result.font = .system(.subheadline, design: .monospaced)
+        return result
+    }
+
+    private static func shouldJoinLinkLine(_ line: String, to followingLine: String) -> Bool {
+        guard let nextCharacter = followingLine.first,
+              nextCharacter.isLetter || nextCharacter.isNumber,
+              let expression = try? NSRegularExpression(
+                pattern: #"(?:\[[^\]\r\n]+\]\([^)]+\)|https?://[^\s<>]+)$"#
+              ) else { return false }
+        return expression.firstMatch(
+            in: line,
+            range: NSRange(line.startIndex..., in: line)
+        ) != nil
     }
 
     private static func renderInline(_ source: String, headingLevel: Int? = nil) -> AttributedString {

@@ -72,7 +72,7 @@ private actor OctonautMediaSaveCoordinator {
 
 @MainActor
 private enum OctonautAVPlayerFactory {
-    struct Playback {
+    fileprivate struct Playback {
         let player: AVPlayer
         let aspectRatio: CGFloat
     }
@@ -147,6 +147,112 @@ private enum OctonautAVPlayerFactory {
     }
 }
 
+/// Warms the small media window immediately around the visible feed rows.
+/// Prepared players stay paused until their row reports that it is on screen.
+@MainActor
+final class OctonautFeedMediaPreloader {
+    private struct VideoKey: Hashable {
+        let url: URL
+        let audioURL: URL?
+    }
+
+    private enum MediaKey: Hashable {
+        case image(URL)
+        case video(VideoKey)
+    }
+
+    private let maximumMedia = 120
+    private var imageTasks: [URL: Task<Void, Never>] = [:]
+    private var videoTasks: [VideoKey: Task<OctonautAVPlayerFactory.Playback, Never>] = [:]
+    private var mediaOrder: [MediaKey] = []
+
+    func preload(posts: some Sequence<PostCardModel>, compact: Bool) {
+        for post in posts {
+            for url in imageURLs(for: post, compact: compact) {
+                prepareImage(at: url)
+            }
+            if !compact,
+               post.mediaKind == "video" || post.mediaKind == "gif",
+               let url = post.mediaURL {
+                prepareVideo(at: url, audioURL: post.audioURL)
+            }
+        }
+    }
+
+    fileprivate func playback(videoURL: URL, audioURL: URL?) async -> OctonautAVPlayerFactory.Playback {
+        let key = VideoKey(url: videoURL, audioURL: audioURL)
+        if let task = videoTasks[key] {
+            return await task.value
+        }
+        return await prepareVideo(at: videoURL, audioURL: audioURL).value
+    }
+
+    private func prepareImage(at url: URL) {
+        guard imageTasks[url] == nil else { return }
+        imageTasks[url] = Task { @MainActor in
+            _ = try? await OctonautImageCache.image(for: url)
+        }
+        mediaOrder.append(.image(url))
+        trimPreparedMedia()
+    }
+
+    @discardableResult
+    private func prepareVideo(
+        at url: URL,
+        audioURL: URL?
+    ) -> Task<OctonautAVPlayerFactory.Playback, Never> {
+        let key = VideoKey(url: url, audioURL: audioURL)
+        if let task = videoTasks[key] { return task }
+
+        let task = Task { @MainActor in
+            let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
+            _ = try? await playback.player.currentItem?.asset.load(.isPlayable)
+            if playback.player.status == .readyToPlay {
+                _ = await playback.player.preroll(atRate: 1)
+            }
+            playback.player.pause()
+            return playback
+        }
+        videoTasks[key] = task
+        mediaOrder.append(.video(key))
+        trimPreparedMedia()
+        return task
+    }
+
+    private func trimPreparedMedia() {
+        while mediaOrder.count > maximumMedia {
+            switch mediaOrder.removeFirst() {
+            case .image(let expiredURL):
+                imageTasks.removeValue(forKey: expiredURL)?.cancel()
+            case .video(let expiredKey):
+                // A visible row may still own this player. Removing the cache's
+                // reference is enough; the row controls its playback lifecycle.
+                videoTasks.removeValue(forKey: expiredKey)
+            }
+        }
+    }
+
+    private func imageURLs(for post: PostCardModel, compact: Bool) -> [URL] {
+        if compact {
+            if let thumbnailURL = post.thumbnailURL { return [thumbnailURL] }
+            if let galleryURL = post.galleryURLs.first { return [galleryURL] }
+            if post.mediaKind == "image", let mediaURL = post.mediaURL { return [mediaURL] }
+            return []
+        }
+
+        switch post.mediaKind {
+        case "gallery":
+            return Array(post.galleryURLs.prefix(2))
+        case "image":
+            return post.mediaURL.map { [$0] } ?? []
+        case "video", "gif", "embeddedVideo", "link":
+            return post.thumbnailURL.map { [$0] } ?? []
+        default:
+            return []
+        }
+    }
+}
+
 /// A cached remote image with stable loading and failure states.
 struct OctonautAsyncImage: View {
     let url: URL?
@@ -159,8 +265,8 @@ struct OctonautAsyncImage: View {
     var body: some View {
         Group {
             if url != nil {
-                if let image {
-                    Image(uiImage: image)
+                if let displayedImage {
+                    Image(uiImage: displayedImage)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
                         .transition(.opacity)
@@ -204,13 +310,19 @@ struct OctonautAsyncImage: View {
             }
         }
     }
+
+    private var displayedImage: UIImage? {
+        image ?? url.flatMap(OctonautImageCache.cachedImage(for:))
+    }
 }
 
 struct OctonautInlineMediaView: View {
     @Environment(AppDependencies.self) private var dependencies
     let post: PostCardModel
     var onOpen: ((Int) -> Void)?
+    var preloader: OctonautFeedMediaPreloader?
     @State private var isRevealed = false
+    @State private var isVisibleInFeed = false
     @State private var networkStatus = OctonautNetworkStatus.shared
 
     private let gallerySpacing: CGFloat = 4
@@ -243,7 +355,8 @@ struct OctonautInlineMediaView: View {
                             muted: true,
                             autoplay: dependencies.settings.autoplayVideo.shouldAutoplay(
                                 isConnectedViaWiFi: networkStatus.isConnectedViaWiFi
-                            )
+                            ) && (preloader == nil || isVisibleInFeed),
+                            preloader: preloader
                         )
                         .overlay { openVideoButton }
                     }
@@ -362,6 +475,12 @@ struct OctonautInlineMediaView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 9))
+        .onScrollVisibilityChange(threshold: 0.01) { isVisible in
+            isVisibleInFeed = isVisible
+        }
+        .onDisappear {
+            isVisibleInFeed = false
+        }
     }
 
     private var sensitiveOverlay: some View {
@@ -459,11 +578,13 @@ struct OctonautVideoPlayer: View {
     var audioURL: URL?
     var muted = true
     var autoplay = false
+    var preloader: OctonautFeedMediaPreloader?
     @State private var player: AVPlayer?
     @State private var aspectRatio: CGFloat = 16 / 9
+    @State private var playbackRequested = false
 
     private var playbackRequest: PlaybackRequest {
-        PlaybackRequest(url: url, audioURL: audioURL, muted: muted, autoplay: autoplay)
+        PlaybackRequest(url: url, audioURL: audioURL)
     }
 
     var body: some View {
@@ -481,18 +602,25 @@ struct OctonautVideoPlayer: View {
             }
         }
         .task(id: playbackRequest) {
+            playbackRequested = autoplay
             player?.pause()
             player = nil
-            let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
+            let playback: OctonautAVPlayerFactory.Playback
+            if let preloader {
+                playback = await preloader.playback(videoURL: url, audioURL: audioURL)
+            } else {
+                playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
+            }
             guard !Task.isCancelled else { return }
             playback.player.isMuted = muted
             aspectRatio = playback.aspectRatio
             player = playback.player
-            if autoplay {
+            if playbackRequested {
                 playback.player.play()
             }
         }
         .onChange(of: autoplay) { _, shouldAutoplay in
+            playbackRequested = shouldAutoplay
             if shouldAutoplay {
                 player?.play()
             } else {
@@ -500,6 +628,7 @@ struct OctonautVideoPlayer: View {
             }
         }
         .onDisappear {
+            playbackRequested = false
             player?.pause()
         }
         .accessibilityLabel("Video")
@@ -508,8 +637,6 @@ struct OctonautVideoPlayer: View {
     private struct PlaybackRequest: Hashable {
         let url: URL
         let audioURL: URL?
-        let muted: Bool
-        let autoplay: Bool
     }
 }
 

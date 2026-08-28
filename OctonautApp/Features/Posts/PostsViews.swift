@@ -164,6 +164,9 @@ struct FeedView: View {
     @State private var selectedMediaPage = 0
     @State private var crosspostPost: PostCardModel?
     @State private var pendingScrollPoints: CGFloat = 0
+    @State private var mediaPreloader = OctonautFeedMediaPreloader()
+
+    private let mediaPreloadDistance = 20
 
     private var compactRows: Bool { dependencies.settings.feedLayout == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
@@ -198,6 +201,7 @@ struct FeedView: View {
                                     OctonautPostRow(
                                         post: post,
                                         showsFlair: dependencies.settings.showPostFlair,
+                                        mediaPreloader: mediaPreloader,
                                         onVote: { value in
                                             performVote(postID: post.id, value: value)
                                         },
@@ -220,6 +224,7 @@ struct FeedView: View {
                             .listRowSeparator(.hidden)
                             .id(post.id)
                             .onAppear {
+                                preloadMedia(after: index)
                                 if dependencies.settings.autoMarkSeenWhileScrolling, !post.isSeen {
                                     store.markSeen(postID: post.id)
                                 }
@@ -284,6 +289,12 @@ struct FeedView: View {
         .task(id: "\(descriptor.kind.rawValue):\(descriptor.name):\(descriptor.sort):\(store.accountContextKey)") {
             await store.refreshPosts(for: descriptor)
         }
+        .task(id: visiblePosts.map(\.id)) {
+            mediaPreloader.preload(
+                posts: visiblePosts.prefix(mediaPreloadDistance),
+                compact: compactRows
+            )
+        }
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
         }
@@ -317,6 +328,13 @@ struct FeedView: View {
                 // The store has already restored the previous local value.
             }
         }
+    }
+
+    private func preloadMedia(after index: Int) {
+        let posts = visiblePosts
+        guard posts.indices.contains(index) else { return }
+        let end = min(posts.count, index + mediaPreloadDistance + 1)
+        mediaPreloader.preload(posts: posts[index..<end], compact: compactRows)
     }
 
     private func beginCrosspost(_ post: PostCardModel) {
