@@ -10,55 +10,165 @@ struct SettingsRootView: View {
         Form {
             Section {
                 NavigationLink(value: FeatureRoute.settings(.general)) { Label("General", systemImage: "slider.horizontal.3") }
-                NavigationLink(value: FeatureRoute.settings(.guide)) { Label("Guide", systemImage: "book") }
                 NavigationLink(value: FeatureRoute.settings(.theme)) { Label("Theme", systemImage: "paintpalette") }
                 NavigationLink(value: FeatureRoute.settings(.appearance)) { Label("Appearance", systemImage: "rectangle.3.group") }
+                NavigationLink(value: FeatureRoute.settings(.intelligence)) { Label("Intelligence", systemImage: "sparkles") }
             }
             Section {
                 NavigationLink(value: FeatureRoute.settings(.account)) { Label("Account", systemImage: "person.crop.circle") }
                 NavigationLink(value: FeatureRoute.settings(.dataUse)) { Label("Data Use", systemImage: "antenna.radiowaves.left.and.right") }
                 NavigationLink(value: FeatureRoute.settings(.statistics)) { Label("Statistics", systemImage: "chart.bar") }
-                NavigationLink(value: FeatureRoute.settings(.privacy)) { Label("Privacy", systemImage: "hand.raised") }
             }
             Section {
                 NavigationLink(value: FeatureRoute.settings(.advanced)) { Label("Advanced", systemImage: "wrench.and.screwdriver") }
                 NavigationLink(value: FeatureRoute.settings(.about)) { Label("About Octonaut", systemImage: "info.circle") }
             }
+            Section {
+                Text("Octonaut keeps preferences, drafts, filters, summaries, and statistics on this device. Reddit session secrets are stored in Keychain.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Settings")
+    }
+}
+
+@MainActor
+struct SettingsDetailView: View {
+    let destination: SettingsDestination
+    let store: OctonautFeatureStore
+    let router: OctonautFeatureRouter
+    @Environment(AppDependencies.self) private var dependencies
+    @AppStorage("appearance.showUsername") private var showUsername = true
+    @State private var showingReset = false
+    @State private var imageCacheBytes = 0
+    @State private var responseCacheBytes = 0
+    @State private var usageStatistics = UsageStatistics()
+    @State private var statisticsError: String?
+    @State private var summaryAvailability: IntelligenceAvailability = .unsupported
+    @State private var summaryAPIKey = ""
+    @State private var apiKeySaved = false
+    @State private var apiKeyMessage: String?
+
+    var body: some View {
+        Form {
+            switch destination {
+            case .general:
+                general
+            case .theme:
+                theme
+            case .appearance:
+                appearance
+            case .intelligence:
+                intelligence
+            case .account:
+                account
+            case .dataUse:
+                dataUse
+            case .statistics:
+                statistics
+            case .advanced:
+                advanced
+            case .about:
+                about
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle(destination.title)
+        .confirmationDialog("Reset statistics?", isPresented: $showingReset, titleVisibility: .visible) {
+            Button("Reset Statistics", role: .destructive) {
+                Task { await resetStatistics() }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .task(id: destination) {
+            intelligenceAvailability = await dependencies.intelligence.availability
+            if destination == .intelligence {
+                await refreshIntelligenceSettings()
+            }
+            if destination == .dataUse {
+                imageCacheBytes = await OctonautImageCache.diskUsage()
+                responseCacheBytes = RedditResponseCache.diskUsage
+            }
+            if destination == .statistics {
+                await loadStatistics()
+            }
+        }
+        .onChange(of: dependencies.settings.configurationRevision) { _, _ in
+            guard destination == .intelligence else { return }
+            Task { summaryAvailability = await dependencies.intelligence.summaryAvailability }
+        }
+    }
+
+    private var general: some View {
+        Group {
+            Section("Startup") {
+                Picker("Startup tab", selection: Binding(get: { dependencies.settings.startupTab }, set: { dependencies.settings.startupTab = $0 })) {
+                    Text("Posts").tag(AppTab.posts); Text("Inbox").tag(AppTab.inbox); Text("Accounts").tag(AppTab.account)
+                }
+                Picker("Startup destination", selection: startupDestination) {
+                    Text("Home").tag("home"); Text("Popular").tag("popular"); Text("All").tag("all")
+                }
+                Toggle("Restore last screen", isOn: Binding(get: { dependencies.settings.restoreLastScreen }, set: { dependencies.settings.restoreLastScreen = $0 }))
+            }
+            Section("Sorting") {
+                Picker("Default post sort", selection: Binding(get: { dependencies.settings.defaultPostSort }, set: { dependencies.settings.defaultPostSort = $0 })) {
+                    ForEach(["default", "best", "hot", "new", "top", "rising", "controversial"], id: \.self) { value in Text(value.capitalized).tag(PostSort(rawValue: value)) }
+                }
+                Picker("Default comment sort", selection: Binding(get: { dependencies.settings.defaultCommentSort }, set: { dependencies.settings.defaultCommentSort = $0 })) {
+                    ForEach(["best", "new", "top", "controversial", "old", "qa"], id: \.self) { value in Text(value == "qa" ? "Q&A" : value.capitalized).tag(CommentSort(rawValue: value)) }
+                }
+                Toggle("Remember sort per community", isOn: Binding(get: { dependencies.settings.rememberSortPerCommunity }, set: { dependencies.settings.rememberSortPerCommunity = $0 }))
+            }
+        }
+    }
+
+    private var theme: some View {
+        Section {
+            Picker("Theme", selection: Binding(get: { dependencies.settings.theme }, set: { dependencies.settings.theme = $0 })) {
+                Text("System").tag(ThemeChoice.system); Text("Light").tag(ThemeChoice.light); Text("Dark").tag(ThemeChoice.dark); Text("Midnight").tag(ThemeChoice.midnight); Text("Deep Ocean").tag(ThemeChoice.deepOcean); Text("Aurora").tag(ThemeChoice.aurora)
+            }
+            Toggle("Pure black background", isOn: Binding(get: { dependencies.settings.pureBlackBackground }, set: { dependencies.settings.pureBlackBackground = $0 }))
+            Toggle("Tint follows community", isOn: Binding(get: { dependencies.settings.tintFollowsCommunity }, set: { dependencies.settings.tintFollowsCommunity = $0 }))
+            Text("Custom themes are checked for readable text contrast before saving.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private var appearance: some View {
+        Group {
             Section("Reading") {
-                Toggle("Compact feed rows", isOn: Binding(
-                    get: { dependencies.settings.feedLayout == .compact },
-                    set: { dependencies.settings.feedLayout = $0 ? .compact : .full }
-                ))
-                Toggle("Blur spoilers", isOn: Binding(
-                    get: { dependencies.settings.blurSpoilers },
-                    set: { dependencies.settings.blurSpoilers = $0 }
-                ))
-                Toggle("Blur NSFW media", isOn: Binding(
-                    get: { dependencies.settings.blurNSFWMedia },
-                    set: { dependencies.settings.blurNSFWMedia = $0 }
-                ))
-                Toggle("Hide seen posts", isOn: Binding(
-                    get: { dependencies.settings.hideSeenPosts },
-                    set: { dependencies.settings.hideSeenPosts = $0 }
-                ))
-                Toggle("Mark posts seen while scrolling", isOn: Binding(
-                    get: { dependencies.settings.autoMarkSeenWhileScrolling },
-                    set: { dependencies.settings.autoMarkSeenWhileScrolling = $0 }
-                ))
-                Toggle("Show filter count", isOn: Binding(
-                    get: { dependencies.settings.showFilterCount },
-                    set: { dependencies.settings.showFilterCount = $0 }
-                ))
-                Picker("Video autoplay", selection: Binding(
-                    get: { dependencies.settings.autoplayVideo },
-                    set: { dependencies.settings.autoplayVideo = $0 }
-                )) {
+                Picker("Feed layout", selection: Binding(get: { dependencies.settings.feedLayout }, set: { dependencies.settings.feedLayout = $0 })) { Text("Full").tag(FeedLayout.full); Text("Compact").tag(FeedLayout.compact) }
+                Picker("Thumbnail side", selection: Binding(get: { dependencies.settings.compactThumbnailSide }, set: { dependencies.settings.compactThumbnailSide = $0 })) { Text("Left").tag(CompactThumbnailSide.left); Text("Right").tag(CompactThumbnailSide.right) }
+                Toggle("Show community icons", isOn: Binding(get: { dependencies.settings.showCommunityIcons }, set: { dependencies.settings.showCommunityIcons = $0 }))
+                Toggle("Show post flair", isOn: Binding(get: { dependencies.settings.showPostFlair }, set: { dependencies.settings.showPostFlair = $0 }))
+                Toggle("Blur spoilers", isOn: Binding(get: { dependencies.settings.blurSpoilers }, set: { dependencies.settings.blurSpoilers = $0 }))
+                Toggle("Blur NSFW media", isOn: Binding(get: { dependencies.settings.blurNSFWMedia }, set: { dependencies.settings.blurNSFWMedia = $0 }))
+                Toggle("Hide seen posts", isOn: Binding(get: { dependencies.settings.hideSeenPosts }, set: { dependencies.settings.hideSeenPosts = $0 }))
+                Toggle("Mark posts seen while scrolling", isOn: Binding(get: { dependencies.settings.autoMarkSeenWhileScrolling }, set: { dependencies.settings.autoMarkSeenWhileScrolling = $0 }))
+                Toggle("Show filter count", isOn: Binding(get: { dependencies.settings.showFilterCount }, set: { dependencies.settings.showFilterCount = $0 }))
+                Picker("Video autoplay", selection: Binding(get: { dependencies.settings.autoplayVideo }, set: { dependencies.settings.autoplayVideo = $0 })) {
                     Text("Never").tag(AutoplayVideo.never)
                     Text("Wi-Fi").tag(AutoplayVideo.wifi)
                     Text("Always").tag(AutoplayVideo.always)
                 }
             }
-            Section("Intelligence") {
+            Section("iPad") {
+                Toggle("Use split view", isOn: Binding(
+                    get: { dependencies.settings.useSplitViewOnIPad },
+                    set: { dependencies.settings.useSplitViewOnIPad = $0 }
+                ))
+                Text("Shows communities, the selected feed, and post details in separate columns when space allows.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var intelligence: some View {
+        Group {
+            Section("Summaries") {
                 Picker("Summary provider", selection: Binding(
                     get: { dependencies.settings.summaryProvider },
                     set: { dependencies.settings.summaryProvider = $0 }
@@ -98,7 +208,7 @@ struct SettingsRootView: View {
                 } else {
                     Label("Apple Intelligence", systemImage: "sparkles")
                 }
-                Text(intelligenceAvailability.userMessage)
+                Text(summaryAvailability.userMessage)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 if let apiKeyMessage {
@@ -106,50 +216,23 @@ struct SettingsRootView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
-                Toggle("Show post summaries", isOn: Binding(
-                    get: { dependencies.settings.showPostSummaries },
-                    set: { dependencies.settings.showPostSummaries = $0 }
-                ))
-                Toggle("Show comment summaries", isOn: Binding(
-                    get: { dependencies.settings.showCommentSummaries },
-                    set: { dependencies.settings.showCommentSummaries = $0 }
-                ))
-                Toggle("Automatically summarize comments", isOn: Binding(
+                Toggle("Show post summaries", isOn: Binding(get: { dependencies.settings.showPostSummaries }, set: { dependencies.settings.showPostSummaries = $0 }))
+                Toggle("Show comment summaries", isOn: Binding(get: { dependencies.settings.showCommentSummaries }, set: { dependencies.settings.showCommentSummaries = $0 }))
+                Toggle("Automatically summarise posts", isOn: Binding(get: { dependencies.settings.automaticVisibleSummaries }, set: { dependencies.settings.automaticVisibleSummaries = $0 }))
+                Toggle("Automatically summarise comments", isOn: Binding(
                     get: { dependencies.settings.automaticCommentSummaries },
                     set: {
                         dependencies.settings.automaticCommentSummaries = $0
                         if $0 { dependencies.settings.showCommentSummaries = true }
                     }
                 ))
-                Toggle("Summarize eligible content automatically", isOn: Binding(
-                    get: { dependencies.settings.automaticVisibleSummaries },
-                    set: { dependencies.settings.automaticVisibleSummaries = $0 }
-                ))
-                Toggle("Use Key excerpts if unavailable", isOn: Binding(
-                    get: { dependencies.settings.keyExcerptsFallback },
-                    set: { dependencies.settings.keyExcerptsFallback = $0 }
-                ))
+                Toggle("Use Key excerpts if unavailable", isOn: Binding(get: { dependencies.settings.keyExcerptsFallback }, set: { dependencies.settings.keyExcerptsFallback = $0 }))
             }
-            Section {
-                Text("Octonaut keeps preferences, drafts, filters, summaries, and statistics on this device. Reddit session secrets are stored in Keychain.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            Section("Filters") {
+                SemanticFilterSettingsView(intelligence: dependencies.intelligence)
             }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Settings")
-        .task {
-            await refreshIntelligenceSettings()
-        }
-        .onChange(of: dependencies.settings.configurationRevision) { _, _ in
-            Task { intelligenceAvailability = await dependencies.intelligence.summaryAvailability }
         }
     }
-
-    @State private var intelligenceAvailability: IntelligenceAvailability = .unsupported
-    @State private var summaryAPIKey = ""
-    @State private var apiKeySaved = false
-    @State private var apiKeyMessage: String?
 
     private func refreshIntelligenceSettings() async {
         do {
@@ -157,7 +240,7 @@ struct SettingsRootView: View {
         } catch {
             apiKeyMessage = error.localizedDescription
         }
-        intelligenceAvailability = await dependencies.intelligence.summaryAvailability
+        summaryAvailability = await dependencies.intelligence.summaryAvailability
     }
 
     private func saveSummaryAPIKey() async {
@@ -166,7 +249,7 @@ struct SettingsRootView: View {
             summaryAPIKey = ""
             apiKeySaved = true
             apiKeyMessage = "API key saved."
-            intelligenceAvailability = await dependencies.intelligence.summaryAvailability
+            summaryAvailability = await dependencies.intelligence.summaryAvailability
         } catch {
             apiKeyMessage = error.localizedDescription
         }
@@ -178,124 +261,9 @@ struct SettingsRootView: View {
             summaryAPIKey = ""
             apiKeySaved = false
             apiKeyMessage = "API key removed."
-            intelligenceAvailability = await dependencies.intelligence.summaryAvailability
+            summaryAvailability = await dependencies.intelligence.summaryAvailability
         } catch {
             apiKeyMessage = error.localizedDescription
-        }
-    }
-}
-
-@MainActor
-struct SettingsDetailView: View {
-    let destination: SettingsDestination
-    let store: OctonautFeatureStore
-    let router: OctonautFeatureRouter
-    @Environment(AppDependencies.self) private var dependencies
-    @AppStorage("appearance.showUsername") private var showUsername = true
-    @State private var showingReset = false
-    @State private var imageCacheBytes = 0
-    @State private var responseCacheBytes = 0
-    @State private var usageStatistics = UsageStatistics()
-    @State private var statisticsError: String?
-
-    var body: some View {
-        Form {
-            switch destination {
-            case .general:
-                general
-            case .guide:
-                HelpGuideView(intelligence: dependencies.intelligence)
-            case .theme:
-                theme
-            case .appearance:
-                appearance
-            case .account:
-                account
-            case .dataUse:
-                dataUse
-            case .statistics:
-                statistics
-            case .privacy:
-                privacy
-            case .advanced:
-                advanced
-            case .about:
-                about
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle(destination.title)
-        .confirmationDialog("Reset statistics?", isPresented: $showingReset, titleVisibility: .visible) {
-            Button("Reset Statistics", role: .destructive) {
-                Task { await resetStatistics() }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .task {
-            intelligenceAvailability = await dependencies.intelligence.availability
-            if destination == .dataUse {
-                imageCacheBytes = await OctonautImageCache.diskUsage()
-                responseCacheBytes = RedditResponseCache.diskUsage
-            }
-            if destination == .statistics {
-                await loadStatistics()
-            }
-        }
-    }
-
-    private var general: some View {
-        Group {
-            Section("Startup") {
-                Picker("Startup tab", selection: Binding(get: { dependencies.settings.startupTab }, set: { dependencies.settings.startupTab = $0 })) {
-                    Text("Posts").tag(AppTab.posts); Text("Inbox").tag(AppTab.inbox); Text("Accounts").tag(AppTab.account)
-                }
-                Picker("Startup destination", selection: startupDestination) {
-                    Text("Home").tag("home"); Text("Popular").tag("popular"); Text("All").tag("all")
-                }
-                Toggle("Restore last screen", isOn: Binding(get: { dependencies.settings.restoreLastScreen }, set: { dependencies.settings.restoreLastScreen = $0 }))
-            }
-            Section("Sorting") {
-                Picker("Default post sort", selection: Binding(get: { dependencies.settings.defaultPostSort }, set: { dependencies.settings.defaultPostSort = $0 })) {
-                    ForEach(["default", "best", "hot", "new", "top", "rising", "controversial"], id: \.self) { value in Text(value.capitalized).tag(PostSort(rawValue: value)) }
-                }
-                Picker("Default comment sort", selection: Binding(get: { dependencies.settings.defaultCommentSort }, set: { dependencies.settings.defaultCommentSort = $0 })) {
-                    ForEach(["best", "new", "top", "controversial", "old", "qa"], id: \.self) { value in Text(value == "qa" ? "Q&A" : value.capitalized).tag(CommentSort(rawValue: value)) }
-                }
-                Toggle("Remember sort per community", isOn: Binding(get: { dependencies.settings.rememberSortPerCommunity }, set: { dependencies.settings.rememberSortPerCommunity = $0 }))
-            }
-        }
-    }
-
-    private var guide: some View {
-        Section {
-            ForEach(["Getting Started", "Accounts and Login", "Reading", "Posting", "Gestures", "Filters", "On-device Intelligence", "Privacy", "Troubleshooting"], id: \.self) { title in
-                Label(title, systemImage: "book.closed")
-            }
-            Text("Help content is bundled with the app and can be searched without a network connection.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-    }
-
-    private var theme: some View {
-        Section {
-            Picker("Theme", selection: Binding(get: { dependencies.settings.theme }, set: { dependencies.settings.theme = $0 })) {
-                Text("System").tag(ThemeChoice.system); Text("Light").tag(ThemeChoice.light); Text("Dark").tag(ThemeChoice.dark); Text("Midnight").tag(ThemeChoice.midnight); Text("Deep Ocean").tag(ThemeChoice.deepOcean); Text("Aurora").tag(ThemeChoice.aurora)
-            }
-            Toggle("Pure black background", isOn: Binding(get: { dependencies.settings.pureBlackBackground }, set: { dependencies.settings.pureBlackBackground = $0 }))
-            Toggle("Tint follows community", isOn: Binding(get: { dependencies.settings.tintFollowsCommunity }, set: { dependencies.settings.tintFollowsCommunity = $0 }))
-            Text("Custom themes are checked for readable text contrast before saving.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-    }
-
-    private var appearance: some View {
-        Group {
-            Section("Feed") {
-                Picker("Feed layout", selection: Binding(get: { dependencies.settings.feedLayout }, set: { dependencies.settings.feedLayout = $0 })) { Text("Full").tag(FeedLayout.full); Text("Compact").tag(FeedLayout.compact) }
-                Picker("Thumbnail side", selection: Binding(get: { dependencies.settings.compactThumbnailSide }, set: { dependencies.settings.compactThumbnailSide = $0 })) { Text("Left").tag(CompactThumbnailSide.left); Text("Right").tag(CompactThumbnailSide.right) }
-                Toggle("Show community icons", isOn: Binding(get: { dependencies.settings.showCommunityIcons }, set: { dependencies.settings.showCommunityIcons = $0 }))
-                Toggle("Show post flair", isOn: Binding(get: { dependencies.settings.showPostFlair }, set: { dependencies.settings.showPostFlair = $0 }))
-            }
         }
     }
 
@@ -388,28 +356,8 @@ struct SettingsDetailView: View {
         }
     }
 
-    private var privacy: some View {
-        Section {
-            Label("Reddit session", systemImage: "key.fill")
-            Label("Account metadata", systemImage: "person.crop.circle")
-            Label("Drafts and seen IDs", systemImage: "doc.text")
-            Label("Filters and preferences", systemImage: "line.3.horizontal.decrease.circle")
-            Label("Summary provider settings", systemImage: "sparkles")
-            Text("Octonaut does not send browsing history or summary text to a Octonaut server. If an off-device provider is selected, the post or comments being summarized are sent directly to that provider.")
-                .font(.footnote).foregroundStyle(.secondary)
-        }
-    }
-
     private var advanced: some View {
         Group {
-            Section("Diagnostics") {
-                LabeledContent("App version", value: "1.0")
-                LabeledContent("SDK", value: "iOS 27")
-                LabeledContent("Transport", value: "Reddit web session")
-                ShareLink(item: "Octonaut 1.0\niOS 27 SDK\nTransport: Reddit web session\nApple Intelligence: \(intelligenceAvailability.userMessage)") {
-                    Label("Export Diagnostics", systemImage: "square.and.arrow.up")
-                }
-            }
             Section("Intelligence") {
                 LabeledContent("Summary provider", value: dependencies.settings.summaryProvider.title)
                 LabeledContent("On-device model", value: intelligenceAvailability == .available ? "Available" : "Unavailable")
@@ -417,7 +365,6 @@ struct SettingsDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 LabeledContent("Summary cache", value: "0 MB")
-                SemanticFilterSettingsView(intelligence: dependencies.intelligence)
             }
             Section("Reset") {
                 Button("Reset Settings to Defaults", role: .destructive) { dependencies.settings.resetToDefaults() }

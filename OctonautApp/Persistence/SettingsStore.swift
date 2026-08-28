@@ -215,7 +215,7 @@ final class SettingsStore {
         showCommentSummaries = defaults.object(forKey: Keys.showCommentSummaries) as? Bool ?? false
         automaticVisibleSummaries = defaults.object(forKey: Keys.automaticVisibleSummaries) as? Bool ?? true
         automaticCommentSummaries = defaults.object(forKey: Keys.automaticCommentSummaries) as? Bool ?? false
-        keyExcerptsFallback = defaults.object(forKey: Keys.keyExcerptsFallback) as? Bool ?? true
+        keyExcerptsFallback = defaults.object(forKey: Keys.keyExcerptsFallback) as? Bool ?? false
         cacheSummaries = defaults.object(forKey: Keys.cacheSummaries) as? Bool ?? true
         summaryProvider = SummaryProvider(rawValue: defaults.string(forKey: Keys.summaryProvider) ?? "openAICompatible") ?? .openAICompatible
         summaryEndpoint = defaults.string(forKey: Keys.summaryEndpoint) ?? "https://openrouter.ai/api/v1"

@@ -5,6 +5,29 @@ import XCTest
 
 final class DomainTests: XCTestCase {
     @MainActor
+    func testPostsSplitStateRoutesFeedsAndPostsToTheirColumns() throws {
+        let state = PostsSplitState()
+        let post = PostCardModel.sample
+
+        XCTAssertFalse(state.select(.post(post)))
+        XCTAssertEqual(state.sidebarCommunity, post.community)
+
+        XCTAssertTrue(state.select(.community("swift")))
+        XCTAssertEqual(state.selectedFeed.kind, .community)
+        XCTAssertEqual(state.selectedFeed.name, "swift")
+        XCTAssertEqual(state.sidebarCommunity, "swift")
+
+        let url = try XCTUnwrap(URL(string: "https://www.reddit.com/r/apple/comments/example"))
+        XCTAssertFalse(state.select(.postURL(url)))
+        XCTAssertEqual(state.sidebarCommunity, "apple")
+        XCTAssertFalse(state.select(.web(url)))
+        XCTAssertEqual(state.sidebarCommunity, "apple")
+
+        state.updateContext(for: nil)
+        XCTAssertEqual(state.sidebarCommunity, "swift")
+    }
+
+    @MainActor
     func testVideoPlayerDoesNotPublishSystemNowPlayingControls() {
         let controller = OctonautSystemIsolatedVideoPlayer.makeViewController(
             player: AVPlayer(),

@@ -189,7 +189,11 @@ Rows should be visually flat with deliberate separators. Avoid enclosing every p
 
 ## Adaptive layout
 
-`UI-IPAD-001` On regular-width iPad, the Posts tab may use `NavigationSplitView` with feed in the content column and selected post in detail. Selecting a row changes detail without losing feed position. Other tabs use appropriate wider forms and lists. When split view is disabled, use the same push navigation as iPhone.
+`UI-IPAD-001` On regular-width iPad, top-level tabs appear only in a floating control at the bottom of the window. The regular-width shell keeps each tab's content alive so switching tabs preserves its navigation and scroll state. Compact layouts continue to use the system `TabView`.
+
+The Posts tab uses a website-style layout. Feed and community navigation stays on the left. The selected feed or post uses the main column. Selecting a post pushes it over the feed so returning to the feed preserves its position. A subreddit panel appears on the right while a subreddit feed or post is open. It shows community identity, member count when available, join and favorite controls, and community actions.
+
+When split view is disabled or the window becomes compact, use the same push navigation as iPhone. Other tabs use appropriate wider forms and lists.
 
 Sheets use form sheets on iPad and appropriate detents on iPhone. Context menus remain available with pointer and keyboard. Support standard keyboard commands for Search, Refresh, New Post, Back, and switching tabs.
 

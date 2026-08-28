@@ -638,19 +638,18 @@ enum ComposerKind: String, CaseIterable, Identifiable, Hashable, Sendable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case general, guide, theme, appearance, account, dataUse, statistics, privacy, advanced, about
+    case general, theme, appearance, intelligence, account, dataUse, statistics, advanced, about
 
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: "General"
-        case .guide: "Guide"
         case .theme: "Theme"
         case .appearance: "Appearance"
+        case .intelligence: "Intelligence"
         case .account: "Account"
         case .dataUse: "Data Use"
         case .statistics: "Statistics"
-        case .privacy: "Privacy"
         case .advanced: "Advanced"
         case .about: "About"
         }

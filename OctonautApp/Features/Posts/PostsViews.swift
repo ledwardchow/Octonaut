@@ -4,6 +4,8 @@ import SwiftUI
 struct PostsRootView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var onSelectFeed: ((FeedDescriptorModel) -> Void)? = nil
+    var selectedFeed: FeedDescriptorModel? = nil
     @Environment(AppDependencies.self) private var dependencies
     @State private var communityQuery = ""
     @AppStorage("posts.sections.feeds.expanded") private var feedsExpanded = true
@@ -19,15 +21,9 @@ struct PostsRootView: View {
         List {
             Section {
                 if feedsExpanded {
-                    NavigationLink(value: FeatureRoute.feed(.home)) {
-                        Label("Home", systemImage: "house.fill")
-                    }
-                    NavigationLink(value: FeatureRoute.feed(.popular)) {
-                        Label("Popular", systemImage: "flame.fill")
-                    }
-                    NavigationLink(value: FeatureRoute.feed(.all)) {
-                        Label("All", systemImage: "globe")
-                    }
+                    feedLink(.home, title: "Home", systemImage: "house.fill")
+                    feedLink(.popular, title: "Popular", systemImage: "flame.fill")
+                    feedLink(.all, title: "All", systemImage: "globe")
                 }
             } header: {
                 collapsibleHeader("Feeds", count: 3, systemImage: "rectangle.stack", isExpanded: $feedsExpanded)
@@ -77,7 +73,7 @@ struct PostsRootView: View {
         .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
             switch sheet {
             case .composer(let kind): ComposerView(kind: kind, store: store)
-            case .quickCommunitySearch: QuickCommunitySearchView(store: store, router: router)
+            case .quickCommunitySearch: QuickCommunitySearchView(store: store, router: router, onSelectFeed: onSelectFeed)
             case .quickAccountSwitcher: QuickAccountSwitcherView(store: store)
             }
         }
@@ -140,16 +136,56 @@ struct PostsRootView: View {
 
     @ViewBuilder
     private func communityLink(_ community: CommunityCardModel) -> some View {
-        NavigationLink(value: FeatureRoute.community(community.name)) {
-            OctonautCommunityRow(
-                community: community,
-                onFavorite: { store.toggleFavorite(communityID: community.id) },
-                onSubscribe: { store.toggleSubscribe(communityID: community.id) }
-            )
+        let row = OctonautCommunityRow(
+            community: community,
+            onFavorite: { store.toggleFavorite(communityID: community.id) },
+            onSubscribe: { store.toggleSubscribe(communityID: community.id) }
+        )
+        Group {
+            if let onSelectFeed {
+                Button {
+                    onSelectFeed(FeedDescriptorModel(kind: .community, name: community.name))
+                } label: {
+                    row
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink(value: FeatureRoute.community(community.name)) {
+                    row
+                }
+            }
         }
+        .listRowBackground(isSelected(FeedDescriptorModel(kind: .community, name: community.name)) ? Color.accentColor.opacity(0.12) : Color.clear)
         // Keep the system disclosure indicator on the same trailing line as
         // the section controls while the row content still spans the width.
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
+    }
+
+    @ViewBuilder
+    private func feedLink(_ descriptor: FeedDescriptorModel, title: String, systemImage: String) -> some View {
+        Group {
+            if let onSelectFeed {
+                Button {
+                    onSelectFeed(descriptor)
+                } label: {
+                    Label(title, systemImage: systemImage)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            } else {
+                NavigationLink(value: FeatureRoute.feed(descriptor)) {
+                    Label(title, systemImage: systemImage)
+                }
+            }
+        }
+        .listRowBackground(isSelected(descriptor) ? Color.accentColor.opacity(0.12) : Color.clear)
+    }
+
+    private func isSelected(_ descriptor: FeedDescriptorModel) -> Bool {
+        guard onSelectFeed != nil, let selectedFeed else { return false }
+        return selectedFeed.kind == descriptor.kind
+            && selectedFeed.name.caseInsensitiveCompare(descriptor.name) == .orderedSame
     }
 }
 
@@ -158,6 +194,7 @@ struct FeedView: View {
     let descriptor: FeedDescriptorModel
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var onSelectPost: ((PostCardModel) -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingLogin = false
     @State private var selectedMediaPost: PostCardModel?
@@ -196,7 +233,7 @@ struct FeedView: View {
                         ForEach(Array(visiblePosts.enumerated()), id: \.element.id) { index, post in
                             Group {
                                 if compactRows {
-                                    OctonautCompactPostRow(post: post, thumbnailOnRight: thumbnailOnRight, showsFlair: dependencies.settings.showPostFlair, onVote: { value in performVote(postID: post.id, value: value) }, onSave: { performSave(postID: post.id) }, onOpen: { router.push(.post(post)) }, onCommunityOpen: { router.push(.post(post)) })
+                                    OctonautCompactPostRow(post: post, thumbnailOnRight: thumbnailOnRight, showsFlair: dependencies.settings.showPostFlair, onVote: { value in performVote(postID: post.id, value: value) }, onSave: { performSave(postID: post.id) }, onOpen: { open(post) }, onCommunityOpen: { open(post) })
                                 } else {
                                     OctonautPostRow(
                                         post: post,
@@ -211,9 +248,9 @@ struct FeedView: View {
                                             selectedMediaPage = page
                                             selectedMediaPost = post
                                         },
-                                        onOpen: { router.push(.post(post)) },
-                                        onComments: { router.push(.post(post)) },
-                                        onCommunityOpen: { router.push(.post(post)) },
+                                        onOpen: { open(post) },
+                                        onComments: { open(post) },
+                                        onCommunityOpen: { open(post) },
                                         onCrosspost: {
                                             beginCrosspost(post)
                                         }
@@ -306,7 +343,7 @@ struct FeedView: View {
                 post: post,
                 initialPage: selectedMediaPage,
                 onSave: { performSave(postID: post.id) },
-                onOpenPost: { router.push(.post(post)) }
+                onOpenPost: { open(post) }
             )
         }
     }
@@ -327,6 +364,14 @@ struct FeedView: View {
             } catch {
                 // The store has already restored the previous local value.
             }
+        }
+    }
+
+    private func open(_ post: PostCardModel) {
+        if let onSelectPost {
+            onSelectPost(post)
+        } else {
+            router.push(.post(post))
         }
     }
 
@@ -370,11 +415,17 @@ struct CommunityView: View {
     let name: String
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var onSelectPost: ((PostCardModel) -> Void)? = nil
 
     private var community: CommunityCardModel? { store.communities.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } }
 
     var body: some View {
-        FeedView(descriptor: FeedDescriptorModel(kind: .community, name: name), store: store, router: router)
+        FeedView(
+            descriptor: FeedDescriptorModel(kind: .community, name: name),
+            store: store,
+            router: router,
+            onSelectPost: onSelectPost
+        )
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if let community {
@@ -394,6 +445,7 @@ struct CommunityView: View {
 struct QuickCommunitySearchView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var onSelectFeed: ((FeedDescriptorModel) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
 
@@ -402,7 +454,12 @@ struct QuickCommunitySearchView: View {
             List(store.communities.filter { query.isEmpty || $0.name.localizedStandardContains(query) }) { community in
                 Button {
                     dismiss()
-                    router.push(.community(community.name))
+                    let descriptor = FeedDescriptorModel(kind: .community, name: community.name)
+                    if let onSelectFeed {
+                        onSelectFeed(descriptor)
+                    } else {
+                        router.push(.community(community.name))
+                    }
                 } label: {
                     OctonautCommunityRow(community: community)
                 }

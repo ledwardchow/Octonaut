@@ -14,6 +14,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.summaryProvider, .openAICompatible)
         XCTAssertEqual(settings.summaryEndpoint, "https://openrouter.ai/api/v1")
         XCTAssertEqual(settings.summaryModel, "openai/gpt-5.6-luna")
+        XCTAssertFalse(settings.keyExcerptsFallback)
     }
 
     func testChangingFilterIncrementsFilterRevision() {
