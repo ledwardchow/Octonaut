@@ -104,6 +104,49 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(request.fields["api_type"], "json")
     }
 
+    func testUserSearchBuildsPublicWebsiteJSONRoute() {
+        let route = URLSessionRedditClient.userSearchRoute(
+            for: RedditUserSearchRequest(query: "swift reader", limit: 500)
+        )
+        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(route.path, "/users/search.json")
+        XCTAssertEqual(query["q"], "swift reader")
+        XCTAssertEqual(query["sort"], "relevance")
+        XCTAssertEqual(query["limit"], "100")
+        XCTAssertEqual(query["raw_json"], "1")
+    }
+
+    func testUserSearchCodecDecodesProfileSubredditListing() throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"u_swift_reader","display_name_prefixed":"u/Swift_Reader","title":"Swift_Reader","url":"/user/Swift_Reader/","icon_img":"https://styles.redditmedia.com/profile.png","public_description":"Writes about Swift."}}]}}"#.utf8
+        )
+
+        let listing = try RedditJSONCodec.decodeUserSearch(data)
+        let user = try XCTUnwrap(listing.items.first)
+
+        XCTAssertEqual(user.reference.username, "Swift_Reader")
+        XCTAssertEqual(user.avatarURL?.absoluteString, "https://styles.redditmedia.com/profile.png")
+        XCTAssertEqual(user.about?.plainText, "Writes about Swift.")
+    }
+
+    @MainActor
+    func testUserSearchModelReturnsNavigableProfiles() async {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name_prefixed":"u/Swift_Reader","title":"Swift_Reader","url":"/user/Swift_Reader/","public_description":"Writes about Swift."}}]}}"#.utf8
+        )
+        let model = SearchFeatureModel(reddit: FixtureRedditClient(usersData: data))
+
+        await model.submit(query: "swift", scope: .users)
+
+        XCTAssertEqual(model.state, .loaded)
+        XCTAssertEqual(model.users.map(\.reference.username), ["Swift_Reader"])
+        XCTAssertTrue(model.posts.isEmpty)
+        XCTAssertTrue(model.communities.isEmpty)
+    }
+
     func testMarkdownLinksRenderAsLinkedDisplayText() throws {
         let url = try XCTUnwrap(URL(string: "https://www.instagram.com/p/example/"))
         let attributed = OctonautMarkdown.attributedString(

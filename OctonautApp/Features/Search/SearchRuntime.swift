@@ -19,6 +19,7 @@ final class SearchFeatureModel {
 
     var posts: [PostCardModel] = []
     var communities: [CommunityCardModel] = []
+    var users: [UserProfile] = []
     var state: SearchLoadState = .idle
     var activeScope: FeatureSearchScope = .posts
     var activeQuery = ""
@@ -40,6 +41,7 @@ final class SearchFeatureModel {
         guard query.count >= 2 else {
             posts = []
             communities = []
+            users = []
             state = query.isEmpty ? .idle : .empty
             return
         }
@@ -53,6 +55,7 @@ final class SearchFeatureModel {
                 posts = listing.items.map(PostCardModel.init)
                 postsAfter = listing.after
                 communities = []
+                users = []
                 state = posts.isEmpty ? .empty : .loaded
             case .communities:
                 let listing = try await reddit.communities(RedditCommunitySearchRequest(query: query), account: nil)
@@ -61,11 +64,16 @@ final class SearchFeatureModel {
                 communities = listing.items.map(CommunityCardModel.init)
                 communitiesAfter = listing.after
                 posts = []
+                users = []
                 state = communities.isEmpty ? .empty : .loaded
             case .users:
+                let listing = try await reddit.users(RedditUserSearchRequest(query: query), account: nil)
+                guard generation == requestGeneration else { return }
+                paginationError = nil
                 posts = []
                 communities = []
-                state = .empty
+                users = listing.items
+                state = users.isEmpty ? .empty : .loaded
             }
         } catch is CancellationError {
             return

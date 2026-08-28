@@ -142,7 +142,6 @@ final class SettingsStore {
     var useSplitViewOnIPad: Bool { didSet { persist(useSplitViewOnIPad, key: Keys.useSplitViewOnIPad) } }
     var showCommunityHeader: Bool { didSet { persist(showCommunityHeader, key: Keys.showCommunityHeader) } }
     var showCommunityIcons: Bool { didSet { persist(showCommunityIcons, key: Keys.showCommunityIcons) } }
-    var titleMaximumLines: Int { didSet { titleMaximumLines = min(max(titleMaximumLines, 1), 10); persist(titleMaximumLines, key: Keys.titleMaximumLines) } }
     var selfTextPreviewLines: Int { didSet { selfTextPreviewLines = min(max(selfTextPreviewLines, 0), 20); persist(selfTextPreviewLines, key: Keys.selfTextPreviewLines) } }
     var linkDescriptionLines: Int { didSet { linkDescriptionLines = min(max(linkDescriptionLines, 0), 20); persist(linkDescriptionLines, key: Keys.linkDescriptionLines) } }
     var showPostFlair: Bool { didSet { persist(showPostFlair, key: Keys.showPostFlair) } }
@@ -207,7 +206,6 @@ final class SettingsStore {
         useSplitViewOnIPad = defaults.object(forKey: Keys.useSplitViewOnIPad) as? Bool ?? true
         showCommunityHeader = defaults.object(forKey: Keys.showCommunityHeader) as? Bool ?? true
         showCommunityIcons = defaults.object(forKey: Keys.showCommunityIcons) as? Bool ?? true
-        titleMaximumLines = defaults.object(forKey: Keys.titleMaximumLines) as? Int ?? 2
         selfTextPreviewLines = defaults.object(forKey: Keys.selfTextPreviewLines) as? Int ?? 3
         linkDescriptionLines = defaults.object(forKey: Keys.linkDescriptionLines) as? Int ?? 10
         showPostFlair = defaults.object(forKey: Keys.showPostFlair) as? Bool ?? true
@@ -265,7 +263,6 @@ final class SettingsStore {
         useSplitViewOnIPad = fresh.useSplitViewOnIPad
         showCommunityHeader = fresh.showCommunityHeader
         showCommunityIcons = fresh.showCommunityIcons
-        titleMaximumLines = fresh.titleMaximumLines
         selfTextPreviewLines = fresh.selfTextPreviewLines
         linkDescriptionLines = fresh.linkDescriptionLines
         showPostFlair = fresh.showPostFlair
@@ -336,7 +333,6 @@ final class SettingsStore {
         static let useSplitViewOnIPad = "appearance.useSplitViewOnIPad"
         static let showCommunityHeader = "appearance.showCommunityHeader"
         static let showCommunityIcons = "appearance.showCommunityIcons"
-        static let titleMaximumLines = "appearance.titleMaximumLines"
         static let selfTextPreviewLines = "appearance.selfTextPreviewLines"
         static let linkDescriptionLines = "appearance.linkDescriptionLines"
         static let showPostFlair = "appearance.showPostFlair"

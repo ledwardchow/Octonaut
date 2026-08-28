@@ -7,6 +7,7 @@ actor FixtureRedditClient: RedditClient {
     private let postData: Data?
     private let searchData: Data?
     private let communitiesData: Data?
+    private let usersData: Data?
     private let actionResult: ActionResult
     private let listingDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
@@ -18,6 +19,7 @@ actor FixtureRedditClient: RedditClient {
         postData: Data? = nil,
         searchData: Data? = nil,
         communitiesData: Data? = nil,
+        usersData: Data? = nil,
         listingDelay: Duration? = nil,
         subscribedCommunitiesDelay: Duration? = nil,
         actionResult: ActionResult = ActionResult(succeeded: true)
@@ -26,6 +28,7 @@ actor FixtureRedditClient: RedditClient {
         self.postData = postData
         self.searchData = searchData
         self.communitiesData = communitiesData
+        self.usersData = usersData
         self.listingDelay = listingDelay
         self.subscribedCommunitiesDelay = subscribedCommunitiesDelay
         self.actionResult = actionResult
@@ -41,6 +44,7 @@ actor FixtureRedditClient: RedditClient {
         self.postData = try read("post.json")
         self.searchData = try read("search.json")
         self.communitiesData = try read("communities.json")
+        self.usersData = try read("users.json")
         self.listingDelay = nil
         self.subscribedCommunitiesDelay = nil
         self.actionResult = ActionResult(succeeded: true)
@@ -72,6 +76,11 @@ actor FixtureRedditClient: RedditClient {
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID? = nil) async throws -> Listing<Community> {
         guard let communitiesData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeCommunities(communitiesData)
+    }
+
+    func users(_ request: RedditUserSearchRequest, account: AccountID? = nil) async throws -> Listing<UserProfile> {
+        guard let usersData else { return Listing(items: []) }
+        return try RedditJSONCodec.decodeUserSearch(usersData)
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {

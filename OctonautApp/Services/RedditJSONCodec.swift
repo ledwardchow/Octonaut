@@ -88,32 +88,30 @@ enum RedditJSONCodec {
         return Listing(items: communities, after: envelope.data.after, before: envelope.data.before)
     }
 
+    static func decodeUserSearch(_ data: Data) throws -> Listing<UserProfile> {
+        let envelope = try JSONDecoder().decode(RedditRawListing.self, from: data)
+        let users = envelope.data.children.compactMap { thing -> UserProfile? in
+            switch thing.kind {
+            case "t2":
+                return mapUserProfile(thing.data)
+            case "t5":
+                return mapUserProfileSubreddit(thing.data)
+            default:
+                return nil
+            }
+        }
+        return Listing(items: users, after: envelope.data.after, before: envelope.data.before)
+    }
+
     static func decodeUserProfile(_ data: Data) throws -> UserProfile {
         let root = try JSONDecoder().decode(RedditJSONValue.self, from: data)
         let payload = root.objectValue?["data"]?.objectValue ?? root.objectValue
-        guard let object = payload,
-              let username = object["name"]?.stringValue,
-              !username.isEmpty else {
+        guard let object = payload else {
             throw RedditClientError.malformedResponse
         }
 
-        let linkKarma = int(object["link_karma"])
-        let commentKarma = int(object["comment_karma"])
-        let totalKarma = int(object["total_karma"])
-            ?? [linkKarma, commentKarma].compactMap { $0 }.reduce(0, +)
-        let about = object["subreddit"]?.objectValue.flatMap { subreddit in
-            richText(plainText: subreddit["public_description"]?.stringValue, html: nil)
-        }
-
-        return UserProfile(
-            reference: UserReference(username: username),
-            avatarURL: url(object["icon_img"]?.stringValue),
-            createdAt: object["created_utc"].map { date($0) },
-            karma: totalKarma,
-            about: about,
-            isBlocked: object["block"]?.boolValue ?? false,
-            isFollowing: object["is_friend"]?.boolValue ?? false
-        )
+        guard let profile = mapUserProfile(object) else { throw RedditClientError.malformedResponse }
+        return profile
     }
 
     static func decodeUserComments(_ data: Data) throws -> Listing<UserComment> {
@@ -252,6 +250,54 @@ enum RedditJSONCodec {
             isBanned: false,
             rules: [],
             moderators: []
+        )
+    }
+
+    private static func mapUserProfile(_ object: [String: RedditJSONValue]) -> UserProfile? {
+        guard let username = object["name"]?.stringValue, !username.isEmpty else { return nil }
+        let linkKarma = int(object["link_karma"])
+        let commentKarma = int(object["comment_karma"])
+        let totalKarma = int(object["total_karma"])
+            ?? [linkKarma, commentKarma].compactMap { $0 }.reduce(0, +)
+        let about = object["subreddit"]?.objectValue.flatMap { subreddit in
+            richText(plainText: subreddit["public_description"]?.stringValue, html: nil)
+        }
+
+        return UserProfile(
+            reference: UserReference(username: username),
+            avatarURL: url(object["icon_img"]?.stringValue),
+            createdAt: object["created_utc"].map { date($0) },
+            karma: totalKarma,
+            about: about,
+            isBlocked: object["is_blocked"]?.boolValue ?? object["block"]?.boolValue ?? false,
+            isFollowing: object["is_friend"]?.boolValue ?? false
+        )
+    }
+
+    /// `/users/search.json` returns user-profile subreddits (`t5`) rather than
+    /// account things (`t2`). Keep that transport detail out of feature code.
+    private static func mapUserProfileSubreddit(_ object: [String: RedditJSONValue]) -> UserProfile? {
+        let prefixedName = object["display_name_prefixed"]?.stringValue.flatMap { value in
+            value.lowercased().hasPrefix("u/") ? String(value.dropFirst(2)) : nil
+        }
+        let pathName = object["url"]?.stringValue.flatMap { value -> String? in
+            let parts = value.split(separator: "/")
+            guard let userIndex = parts.firstIndex(where: { $0.lowercased() == "user" }),
+                  parts.indices.contains(userIndex + 1) else { return nil }
+            return String(parts[userIndex + 1])
+        }
+        guard let username = prefixedName ?? pathName ?? object["title"]?.stringValue,
+              !username.isEmpty else { return nil }
+
+        return UserProfile(
+            reference: UserReference(username: username),
+            avatarURL: url(object["icon_img"]?.stringValue)
+                ?? url(object["community_icon"]?.stringValue),
+            createdAt: nil,
+            karma: nil,
+            about: richText(plainText: object["public_description"]?.stringValue, html: nil),
+            isBlocked: false,
+            isFollowing: object["user_is_subscriber"]?.boolValue ?? false
         )
     }
 

@@ -104,6 +104,16 @@ public struct RedditCommunitySearchRequest: Sendable, Hashable {
     }
 }
 
+public struct RedditUserSearchRequest: Sendable, Hashable {
+    public var query: String
+    public var limit: Int
+
+    public init(query: String, limit: Int = 30) {
+        self.query = query
+        self.limit = min(max(limit, 1), 100)
+    }
+}
+
 public struct RedditListing<Item: Sendable & Hashable>: Sendable, Hashable {
     public let items: [Item]
     public let after: String?

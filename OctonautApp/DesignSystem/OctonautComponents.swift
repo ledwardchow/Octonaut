@@ -373,7 +373,7 @@ struct OctonautPostRow: View {
         Text(post.title)
             .font(.headline)
             .foregroundStyle(theme.primaryText)
-            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
     }
 
@@ -612,7 +612,7 @@ struct OctonautCompactPostRow: View {
         Text(post.title)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(theme.primaryText)
-            .lineLimit(3)
+            .fixedSize(horizontal: false, vertical: true)
             .multilineTextAlignment(.leading)
     }
 

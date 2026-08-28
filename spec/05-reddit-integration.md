@@ -83,6 +83,7 @@ Exact response decoding must be fixture-tested. Common targets are:
 | Global post search | `GET /search/.json` |
 | Community post search | `GET /r/{name}/search/.json` with `restrict_sr=on` |
 | Community discovery | `GET /subreddits/search.json`, trending endpoints when available |
+| User search | `GET /users/search.json` |
 | Community about | `GET /r/{name}/about.json` |
 | Rules | `GET /r/{name}/about/rules.json` |
 | Wiki | `GET /r/{name}/wiki/{page}.json` |

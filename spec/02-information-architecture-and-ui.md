@@ -81,7 +81,7 @@ Multireddit overflow actions: Gallery Mode and Share, plus edit actions from its
 `UI-POST-020` The full row uses this vertical order:
 
 1. Optional subreddit identity row with icon, subreddit, author, flair, and moderation/sticky indicators.
-2. Title, with configurable maximum lines.
+2. Complete title, wrapping across as many lines as needed.
 3. Optional self-text preview or external-link description.
 4. Inline media or link preview.
 5. Metadata row with vote score, comment count, relative time, saved state, and locked/archived state.

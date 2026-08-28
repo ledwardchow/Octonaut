@@ -293,7 +293,6 @@ struct SettingsDetailView: View {
             Section("Feed") {
                 Picker("Feed layout", selection: Binding(get: { dependencies.settings.feedLayout }, set: { dependencies.settings.feedLayout = $0 })) { Text("Full").tag(FeedLayout.full); Text("Compact").tag(FeedLayout.compact) }
                 Picker("Thumbnail side", selection: Binding(get: { dependencies.settings.compactThumbnailSide }, set: { dependencies.settings.compactThumbnailSide = $0 })) { Text("Left").tag(CompactThumbnailSide.left); Text("Right").tag(CompactThumbnailSide.right) }
-                Stepper("Title maximum lines: \(dependencies.settings.titleMaximumLines)", value: Binding(get: { dependencies.settings.titleMaximumLines }, set: { dependencies.settings.titleMaximumLines = $0 }), in: 1...10)
                 Toggle("Show community icons", isOn: Binding(get: { dependencies.settings.showCommunityIcons }, set: { dependencies.settings.showCommunityIcons = $0 }))
                 Toggle("Show post flair", isOn: Binding(get: { dependencies.settings.showPostFlair }, set: { dependencies.settings.showPostFlair = $0 }))
             }

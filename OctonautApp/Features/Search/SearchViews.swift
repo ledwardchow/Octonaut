@@ -119,7 +119,12 @@ struct SearchRootView: View {
                     }
                 }
             case .users:
-                ContentUnavailableView("No user results", systemImage: "person.crop.circle", description: Text("Reddit user search is not available in the public JSON endpoint."))
+                ForEach(model.users) { user in
+                    NavigationLink(value: FeatureRoute.account(user.reference.username)) {
+                        userRow(user)
+                    }
+                    .listRowInsets(EdgeInsets())
+                }
             }
             if let paginationError = model.paginationError {
                 VStack(alignment: .leading, spacing: 6) {
@@ -138,5 +143,40 @@ struct SearchRootView: View {
                 .accessibilityHidden(true)
         }
         .listStyle(.plain)
+    }
+
+    private func userRow(_ user: UserProfile) -> some View {
+        HStack(spacing: 12) {
+            Group {
+                if let avatarURL = user.avatarURL {
+                    OctonautAsyncImage(url: avatarURL)
+                } else {
+                    Image(systemName: "person.crop.circle.fill")
+                        .resizable()
+                        .foregroundStyle(.orange)
+                }
+            }
+            .frame(width: 38, height: 38)
+            .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(user.reference.displayName)
+                    .font(.body.weight(.semibold))
+                if let about = user.about?.plainText, !about.isEmpty {
+                    Text(about)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                } else {
+                    Text("Reddit user")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }

@@ -33,6 +33,7 @@ protocol RedditClient: Sendable {
     func post(_ permalink: URL, sort: CommentSort, account: AccountID?) async throws -> PostThread
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post>
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID?) async throws -> Listing<Community>
+    func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile>
     func subscribedCommunities(after: String?, account: AccountID) async throws -> Listing<Community>
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile
     func userComments(_ username: String, after: String?, account: AccountID?) async throws -> Listing<UserComment>
@@ -206,6 +207,19 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeCommunities(data)
+    }
+
+    func users(_ request: RedditUserSearchRequest, account: AccountID? = nil) async throws -> Listing<UserProfile> {
+        let route = Self.userSearchRoute(for: request)
+        let data = try await requestData(
+            method: "GET",
+            path: route.path,
+            query: route.query,
+            body: nil,
+            account: account,
+            retryable: true
+        )
+        return try RedditJSONCodec.decodeUserSearch(data)
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
@@ -509,6 +523,18 @@ actor URLSessionRedditClient: RedditClient {
         case .follow(let username, let following):
             return ("POST", "/api/friend", [], ["name": username, "note": following ? "" : "unfollow"])
         }
+    }
+
+    static func userSearchRoute(for request: RedditUserSearchRequest) -> (path: String, query: [URLQueryItem]) {
+        (
+            "/users/search.json",
+            [
+                URLQueryItem(name: "raw_json", value: "1"),
+                URLQueryItem(name: "q", value: request.query),
+                URLQueryItem(name: "sort", value: "relevance"),
+                URLQueryItem(name: "limit", value: String(request.limit)),
+            ]
+        )
     }
 
     private func accountFromScope(_ scope: AccountScope) -> AccountID? {

@@ -11,7 +11,6 @@ Every setting has a typed key, the default below, and a short explanation in the
 | Use split view on iPad | Bool, default On | Uses feed-detail `NavigationSplitView` in regular width. |
 | Show community header | Bool, default On | Shows icon/name above community feeds. |
 | Show community icons | Bool, default On | Applies unless data mode disables icon fetching. |
-| Title maximum lines | Integer 1 to 10, default 2 | `0` may be offered as unlimited. |
 | Self-text preview lines | Integer 0 to 20, default 3 | Zero hides self-text preview in feeds. |
 | Link-description lines | Integer 0 to 20, default 10 | Zero hides fetched descriptions. |
 | Show post flair | Bool, default On | Displays flair when present. |
