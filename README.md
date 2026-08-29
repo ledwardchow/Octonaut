@@ -2,7 +2,7 @@
 
 ![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
 
-Octonaut is a native SwiftUI iPhone/iPad client for Reddit. The underlying data access architecture is derived from [https://github.com/dmilin1/hydra/](https://github.com/dmilin1/hydra/) and uses Reddit's public website JSON routes for logged-out browsing.
+Octonaut is a native SwiftUI iPhone/iPad client for Reddit. The underlying data access architecture is derived from [https://github.com/dmilin1/hydra/](https://github.com/dmilin1/hydra/).
 
 ## ✨ Features
 
