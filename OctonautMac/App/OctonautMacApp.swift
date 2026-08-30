@@ -15,6 +15,7 @@ struct OctonautMacApp: App {
                 .frame(minWidth: 900, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
+        .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             SidebarCommands()

@@ -40,6 +40,7 @@ struct MacRootView: View {
             )
         } content: {
             contentColumn
+                .ignoresSafeArea(.container, edges: .top)
                 .navigationSplitViewColumnWidth(
                     min: 320,
                     ideal: CGFloat(contentWidth),
@@ -51,6 +52,7 @@ struct MacRootView: View {
                 store: store,
                 accounts: dependencies.accounts
             )
+            .ignoresSafeArea(.container, edges: .top)
         }
         .tint(.orange)
         .background {
@@ -191,10 +193,6 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: WindowReaderView, context: Context) {
-        context.coordinator.update(
-            sidebarWidth: sidebarWidth,
-            contentWidth: contentWidth
-        )
         view.onWindowChange = { window in
             context.coordinator.install(in: window)
         }
@@ -214,15 +212,12 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
         private weak var splitView: NSSplitView?
         private var isApplyingSavedWidths = false
         private var restoreGeneration = 0
+        private var splitViewResolutionAttempts = 0
+        private var pendingSplitViewResolution: DispatchWorkItem?
 
         init(sidebarWidth: Binding<Double>, contentWidth: Binding<Double>) {
             _sidebarWidth = sidebarWidth
             _contentWidth = contentWidth
-        }
-
-        func update(sidebarWidth: Double, contentWidth: Double) {
-            self.sidebarWidth = sidebarWidth
-            self.contentWidth = contentWidth
         }
 
         func install(in window: NSWindow?) {
@@ -230,6 +225,7 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
             if self.window !== window {
                 remove()
                 self.window = window
+                splitViewResolutionAttempts = 0
             }
 
             resolveSplitView(in: window)
@@ -237,7 +233,10 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
 
         func remove() {
             NotificationCenter.default.removeObserver(self)
+            pendingSplitViewResolution?.cancel()
+            pendingSplitViewResolution = nil
             restoreGeneration += 1
+            splitViewResolutionAttempts = 0
             splitView = nil
             window = nil
         }
@@ -272,14 +271,23 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
                 .max { $0.bounds.width < $1.bounds.width }
 
             guard let candidate else {
-                DispatchQueue.main.async { [weak self, weak window] in
+                guard pendingSplitViewResolution == nil,
+                      splitViewResolutionAttempts < 20 else { return }
+                splitViewResolutionAttempts += 1
+                let workItem = DispatchWorkItem { [weak self, weak window] in
                     guard let self, let window else { return }
+                    self.pendingSplitViewResolution = nil
                     self.resolveSplitView(in: window)
                 }
+                pendingSplitViewResolution = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: workItem)
                 return
             }
             guard splitView !== candidate else { return }
 
+            pendingSplitViewResolution?.cancel()
+            pendingSplitViewResolution = nil
+            splitViewResolutionAttempts = 0
             NotificationCenter.default.removeObserver(self)
             splitView = candidate
             candidate.autosaveName = nil
@@ -352,6 +360,7 @@ private struct MacWindowTitleAccessory: NSViewRepresentable {
     final class Coordinator {
         private weak var window: NSWindow?
         private var accessory: NSTitlebarAccessoryViewController?
+        private weak var titleLabel: NSTextField?
 
         func install(title: String, in window: NSWindow?) {
             guard let window else { return }
@@ -372,8 +381,8 @@ private struct MacWindowTitleAccessory: NSViewRepresentable {
         }
 
         func update(title: String) {
-            guard let accessory else { return }
-            accessory.view = makeTitleView(title)
+            guard let titleLabel, titleLabel.stringValue != title else { return }
+            titleLabel.stringValue = title
         }
 
         func remove() {
@@ -383,6 +392,7 @@ private struct MacWindowTitleAccessory: NSViewRepresentable {
             }
             self.window = nil
             self.accessory = nil
+            self.titleLabel = nil
         }
 
         private func makeTitleView(_ title: String) -> NSView {
@@ -400,6 +410,7 @@ private struct MacWindowTitleAccessory: NSViewRepresentable {
                 label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
             ])
             container.frame.size = NSSize(width: label.intrinsicContentSize.width + 14, height: 28)
+            titleLabel = label
             return container
         }
     }

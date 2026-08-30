@@ -411,33 +411,50 @@ struct MacPostDetailView: View {
                 }
             }
             .navigationTitle("r/\(displayedPost.community)")
-            .toolbar {
-                ToolbarItemGroup {
-                    Button {
-                        vote(displayedPost, value: displayedPost.vote == 1 ? 0 : 1)
-                    } label: {
-                        Label("Upvote", systemImage: "arrow.up")
-                    }
-                    .disabled(currentAccountID == nil)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                HStack {
+                    Spacer()
+                    ControlGroup {
+                        Button {
+                            vote(displayedPost, value: displayedPost.vote == 1 ? 0 : 1)
+                        } label: {
+                            Label("Upvote", systemImage: "arrow.up")
+                                .labelStyle(.iconOnly)
+                        }
+                        .disabled(currentAccountID == nil)
+                        .help("Upvote")
 
-                    Button {
-                        save(displayedPost)
-                    } label: {
-                        Label(
-                            displayedPost.isSaved ? "Unsave" : "Save",
-                            systemImage: displayedPost.isSaved ? "bookmark.fill" : "bookmark"
-                        )
-                    }
-                    .disabled(currentAccountID == nil)
+                        Button {
+                            save(displayedPost)
+                        } label: {
+                            Label(
+                                displayedPost.isSaved ? "Unsave" : "Save",
+                                systemImage: displayedPost.isSaved ? "bookmark.fill" : "bookmark"
+                            )
+                            .labelStyle(.iconOnly)
+                        }
+                        .disabled(currentAccountID == nil)
+                        .help(displayedPost.isSaved ? "Unsave" : "Save")
 
-                    ShareLink(item: displayedPost.shareURL)
+                        ShareLink(item: displayedPost.shareURL) {
+                            Label("Share", systemImage: "square.and.arrow.up")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Share")
 
-                    Button {
-                        NSWorkspace.shared.open(displayedPost.shareURL)
-                    } label: {
-                        Label("Open in Browser", systemImage: "safari")
+                        Button {
+                            NSWorkspace.shared.open(displayedPost.shareURL)
+                        } label: {
+                            Label("Open in Browser", systemImage: "safari")
+                                .labelStyle(.iconOnly)
+                        }
+                        .help("Open in Browser")
                     }
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.bar)
+                .overlay(alignment: .bottom) { Divider() }
             }
             .alert(
                 "Reddit action failed",
