@@ -16,7 +16,7 @@ enum IntelligenceAvailability: Equatable, Sendable {
         case .deviceNotEligible: return "This device cannot run Apple Intelligence on device."
         case .appleIntelligenceNotEnabled: return "Turn on Apple Intelligence in Settings to use on-device summaries."
         case .modelNotReady: return "The on-device language model is still downloading or preparing."
-        case .unsupported: return "On-device summaries are unavailable on this version of iOS."
+        case .unsupported: return "On-device summaries are unavailable on this operating system version."
         case .remoteAPIKeyMissing: return "Add an API key in Intelligence settings to use off-device summaries."
         case .invalidRemoteConfiguration: return "Check the summary endpoint and model in Intelligence settings."
         }
@@ -280,28 +280,28 @@ extension IntelligenceService {
 #if canImport(FoundationModels)
 import FoundationModels
 
-@available(iOS 27.0, *)
+@available(iOS 27.0, macOS 26.0, *)
 @Generable(description: "A concise summary made from the supplied Reddit text.")
 private struct FMGeneratedSummary {
     @Guide(description: "Two to five concise factual bullets.", .count(2...5))
     var bullets: [String]
 }
 
-@available(iOS 27.0, *)
+@available(iOS 27.0, macOS 26.0, *)
 @Generable
 private struct FMGeneratedFilterDecision {
     var itemID: String
     var shouldHide: Bool
 }
 
-@available(iOS 27.0, *)
+@available(iOS 27.0, macOS 26.0, *)
 @Generable
 private struct FMGeneratedFilterResults {
     @Guide(description: "One decision for each supplied item.", .maximumCount(100))
     var decisions: [FMGeneratedFilterDecision]
 }
 
-@available(iOS 27.0, *)
+@available(iOS 27.0, macOS 26.0, *)
 @Generable
 private struct FMGeneratedHelpAnswer {
     var answer: String
@@ -310,7 +310,7 @@ private struct FMGeneratedHelpAnswer {
 
 /// Foundation Models is isolated behind an actor. Every operation creates a
 /// clean session, so content from one Reddit task cannot leak into another.
-@available(iOS 27.0, *)
+@available(iOS 27.0, macOS 26.0, *)
 actor AppleIntelligenceService: IntelligenceService {
     private let model: SystemLanguageModel
     private let summaryModel: SystemLanguageModel
@@ -517,7 +517,7 @@ actor AppleIntelligenceService: IntelligenceService {
 }
 #endif
 
-/// Safe fallback for iOS 26 and for tests that intentionally simulate an
+/// Safe fallback for older operating systems and tests that intentionally simulate an
 /// unsupported device. It never attempts a remote model call.
 actor UnavailableIntelligenceService: IntelligenceService {
     var availability: IntelligenceAvailability { .unsupported }

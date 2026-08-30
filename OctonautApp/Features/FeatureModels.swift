@@ -58,6 +58,15 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
 
     var isSensitive: Bool { isNSFW || isSpoiler }
     var fullname: String { IDNormalization.fullname(id, kind: "t3") }
+    var prefersMediaFirstPresentation: Bool {
+        let mediaLedKinds = ["image", "gallery", "video", "gif", "embeddedVideo"]
+        let visibleBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return hasMedia
+            && mediaLedKinds.contains(mediaKind)
+            && (mediaURL != nil || !galleryURLs.isEmpty)
+            && visibleBody.count <= 280
+            && visibleBody.components(separatedBy: .newlines).count <= 3
+    }
 
     init(
         id: String,
@@ -440,6 +449,11 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     var isDeleted: Bool
     var moreCount: Int?
     var moreFailed: Bool
+
+    func isOriginalPoster(postAuthor: String) -> Bool {
+        guard !author.isEmpty, !postAuthor.isEmpty else { return false }
+        return author.caseInsensitiveCompare(postAuthor) == .orderedSame
+    }
 
     init(
         id: String,

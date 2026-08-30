@@ -324,9 +324,10 @@ private struct UserCommentProfileRow: View {
             Text(comment.postTitle)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(2)
-            Text(comment.body)
+            RedditMarkdownView(source: comment.body)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .tint(.accentColor)
                 .lineLimit(4)
         }
         .padding(.vertical, 8)

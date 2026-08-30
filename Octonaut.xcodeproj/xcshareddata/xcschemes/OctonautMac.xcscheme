@@ -14,9 +14,9 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "6813939EEF5681F07F2FC42B"
+               BlueprintIdentifier = "1624150B7D18E1D612B6A231"
                BuildableName = "Octonaut.app"
-               BlueprintName = "Octonaut"
+               BlueprintName = "OctonautMac"
                ReferencedContainer = "container:Octonaut.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -31,24 +31,13 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6813939EEF5681F07F2FC42B"
+            BlueprintIdentifier = "1624150B7D18E1D612B6A231"
             BuildableName = "Octonaut.app"
-            BlueprintName = "Octonaut"
+            BlueprintName = "OctonautMac"
             ReferencedContainer = "container:Octonaut.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
-         <TestableReference
-            skipped = "NO"
-            parallelizable = "NO">
-            <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "F97C7515901FE7DFD17E4021"
-               BuildableName = "OctonautTests.xctest"
-               BlueprintName = "OctonautTests"
-               ReferencedContainer = "container:Octonaut.xcodeproj">
-            </BuildableReference>
-         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -65,9 +54,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6813939EEF5681F07F2FC42B"
+            BlueprintIdentifier = "1624150B7D18E1D612B6A231"
             BuildableName = "Octonaut.app"
-            BlueprintName = "Octonaut"
+            BlueprintName = "OctonautMac"
             ReferencedContainer = "container:Octonaut.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -82,9 +71,9 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "6813939EEF5681F07F2FC42B"
+            BlueprintIdentifier = "1624150B7D18E1D612B6A231"
             BuildableName = "Octonaut.app"
-            BlueprintName = "Octonaut"
+            BlueprintName = "OctonautMac"
             ReferencedContainer = "container:Octonaut.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

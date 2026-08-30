@@ -2,7 +2,9 @@
 
 ## Technical baseline
 
-Octonaut is a Swift 6 application using SwiftUI, structured concurrency, Observation, SwiftData, Keychain Services, URLSession, WebKit, AVFoundation, VisionKit, NaturalLanguage, and Foundation Models. The deployment target is iOS and iPadOS 26. The implementation may use iOS 27 APIs behind availability checks. Do not put business logic in SwiftUI view bodies.
+Octonaut is a Swift 6 application using SwiftUI, structured concurrency, Observation, SwiftData, Keychain Services, URLSession, WebKit, AVFoundation, VisionKit, NaturalLanguage, and Foundation Models. The deployment targets are iOS and iPadOS 26, and macOS 26. Newer API use stays behind availability checks. Do not put business logic in SwiftUI view bodies.
+
+The iOS and macOS targets share domain models, Reddit transport, authentication, persistence, search, and intelligence services. Each platform has its own app entry point and interface shell.
 
 `ARCH-001` Build feature code against protocols. Live Reddit, local fixture, and test implementations must be replaceable through one dependency container.
 

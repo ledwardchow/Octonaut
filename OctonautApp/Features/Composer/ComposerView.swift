@@ -35,8 +35,11 @@ struct ComposerView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         if !title.isEmpty { Text(title).font(.title3.weight(.bold)) }
-                        Text(bodyText.isEmpty ? "Nothing to preview yet." : bodyText)
+                        RedditMarkdownView(
+                            source: bodyText.isEmpty ? "Nothing to preview yet." : bodyText
+                        )
                             .font(.body)
+                            .tint(.accentColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         if kind == .post, postType == "Link", !link.isEmpty { Label(link, systemImage: "link") .font(.caption).foregroundStyle(.secondary) }
                     }

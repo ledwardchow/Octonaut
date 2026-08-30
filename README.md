@@ -1,8 +1,8 @@
-# Octonaut - iOS Reddit client
+# Octonaut - native Reddit client for Apple platforms
 
 ![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)
 
-Octonaut is a native SwiftUI iPhone/iPad client for Reddit. The underlying data access architecture is derived from [https://github.com/dmilin1/hydra/](https://github.com/dmilin1/hydra/).
+Octonaut is a native SwiftUI Reddit client for iPhone, iPad, and Mac. The underlying data access architecture is derived from [https://github.com/dmilin1/hydra/](https://github.com/dmilin1/hydra/).
 
 ## ✨ Features
 
@@ -13,6 +13,7 @@ Octonaut is a native SwiftUI iPhone/iPad client for Reddit. The underlying data 
 - Use local filters, drafts, seen-post history, and usage statistics.
 - Generate summaries on device with an Apple Intelligence-supported device or with an optional OpenAI-compatible LLM provider.
 - Use native layouts for iPhone and iPad, including an iPad feed-detail split view.
+- Use a dedicated Mac interface with a sidebar, feed and detail columns, menus, keyboard shortcuts, and a native Settings window.
 
 ## 🚀 Getting Started
 
@@ -21,7 +22,7 @@ Octonaut is a native SwiftUI iPhone/iPad client for Reddit. The underlying data 
 Before you begin, make sure you have:
 
 - **macOS** with [Xcode 27](https://developer.apple.com/xcode/) or newer.
-- **iOS 26 or newer** on a simulator or device.
+- **iOS 26 or newer** on a simulator or device, or **macOS 26 or newer** for the Mac app.
 - **Git** for cloning the repository.
 - **XcodeGen** only if you plan to edit `project.yml`. Install it with `brew install xcodegen`.
 
@@ -44,10 +45,16 @@ The Xcode project is checked in and ready to build. There are no package install
 
 ### 3. Run the App
 
-1. Select the **Octonaut** scheme in Xcode.
-2. Choose an iOS 26 or newer simulator or connected device.
+1. Select the **Octonaut** scheme for iPhone/iPad, or **OctonautMac** for Mac.
+2. Choose an iOS 26 or newer simulator or connected device, or choose **My Mac**.
 3. If you are using a physical device, select your development team under **Signing & Capabilities**.
 4. Press **Run** or use ⌘R.
+
+For the Mac app, you can also build and launch from Terminal:
+
+```bash
+./script/build_and_run.sh
+```
 
 ### 4. Run the Tests
 
