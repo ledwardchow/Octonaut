@@ -67,13 +67,13 @@
 		8C808CE82834B7D368AB523C /* AppRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0A1AED5FAE445576968970C /* AppRootView.swift */; };
 		8CA23243F7DA2FF3E0B3F8F8 /* CoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAFC02501E15306D88C1557 /* CoreModels.swift */; };
 		8CD55353A7DBBB6CD6044E0E /* CoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAFC02501E15306D88C1557 /* CoreModels.swift */; };
-		A71D7A562FB1200100D5A001 /* RedditMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */; };
-		A71D7A572FB1200100D5A001 /* RedditMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */; };
 		8F67E8978EAB56139ADDFFB5 /* DeterministicExcerpts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 956BE1DAA7CF7A4589793448 /* DeterministicExcerpts.swift */; };
 		9A6B651A8ED84A5BDA336B88 /* CredentialVaultAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65FFA69A452BC8037ACCF243 /* CredentialVaultAdapter.swift */; };
 		9AC0CA6179F48600E3A25EA3 /* AccountCredentialVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90737E4E17F08A9D5702FDFB /* AccountCredentialVault.swift */; };
 		A56DD52680A9780141EF2773 /* MacRedditLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A40BD8CDE0AA06BEBDEF658 /* MacRedditLoginView.swift */; };
 		A5F56FEFF186D02D8FD352CD /* RedditModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6404DD225DDA45A486E4CBEE /* RedditModels.swift */; };
+		A71D7A562FB1200100D5A001 /* RedditMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */; };
+		A71D7A572FB1200100D5A001 /* RedditMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */; };
 		AA693968A3260586519F7447 /* SearchRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D430638EEFFA69BEE5F13F7C /* SearchRuntime.swift */; };
 		AB24571A2EE6EAEA3B32F7D4 /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85EF8FE6589B257568A4AE85 /* SettingsStore.swift */; };
 		B1B61E3AA2884886E66F2F8D /* FeatureLoadState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 008D4295D6BE53BBBF2036FC /* FeatureLoadState.swift */; };
@@ -83,6 +83,7 @@
 		B928A87382A758EF3E7D7360 /* Fixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF089A4CCA8AC63AE0A66A1 /* Fixtures.swift */; };
 		BD51694C0DF1A85ACBBEF508 /* ServiceContracts.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA6372E1E5B21136128D9A74 /* ServiceContracts.swift */; };
 		BF1C2786A748926187B88613 /* OctonautMediaComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7ECC0450C9C3B6FFD48B55D2 /* OctonautMediaComponents.swift */; };
+		C0DEC0DE0000000000000002 /* MacComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE0000000000000001 /* MacComposerView.swift */; };
 		CB3900206EF8532592D694A6 /* RedditJSONCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A76A0D2A830F71882833217 /* RedditJSONCodec.swift */; };
 		CC57C45AE2C8DC3FA229FEAE /* SettingsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85EF8FE6589B257568A4AE85 /* SettingsStore.swift */; };
 		D45DA5ECD551FE33012A820B /* FeatureModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E07930B4DE408F45C34596E /* FeatureModels.swift */; };
@@ -121,7 +122,6 @@
 /* Begin PBXFileReference section */
 		008D4295D6BE53BBBF2036FC /* FeatureLoadState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureLoadState.swift; sourceTree = "<group>"; };
 		0FAFC02501E15306D88C1557 /* CoreModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreModels.swift; sourceTree = "<group>"; };
-		A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditMarkdown.swift; sourceTree = "<group>"; };
 		131C7D7D8C76F8FE9AE80BCB /* AppleIntelligenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleIntelligenceService.swift; sourceTree = "<group>"; };
 		13C35C509F4DD5385D92BB6B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1415308689DC9AE1D0646C42 /* SettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTests.swift; sourceTree = "<group>"; };
@@ -165,12 +165,14 @@
 		9AF089A4CCA8AC63AE0A66A1 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		9C8D07C0486519FD2517A3F8 /* OctonautApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautApp.swift; sourceTree = "<group>"; };
 		9FCB290AAB8CBEEC89721872 /* MacSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSearchView.swift; sourceTree = "<group>"; };
+		A71D7A552FB1200100D5A001 /* RedditMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditMarkdown.swift; sourceTree = "<group>"; };
 		AFFF1958B3F1C9D16EF909B4 /* MacFeedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedViews.swift; sourceTree = "<group>"; };
 		B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B97B8C2326D533E9D1C7B982 /* NOTES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = NOTES.md; sourceTree = "<group>"; };
 		B9D975AB98754EF4264D93DB /* AppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDependencies.swift; sourceTree = "<group>"; };
 		BD910ECAEFEEC348BF2686C2 /* AVFoundationMediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVFoundationMediaService.swift; sourceTree = "<group>"; };
 		BF65D3D48202B73A6543DEA3 /* RedditSessionValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditSessionValidator.swift; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000001 /* MacComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerView.swift; sourceTree = "<group>"; };
 		C6E2CF45C950F812138A6C37 /* DomainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DomainTests.swift; sourceTree = "<group>"; };
 		C883878DD07372A87014F548 /* FixtureRedditClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FixtureRedditClient.swift; sourceTree = "<group>"; };
 		CA5E3982354927A2596DD01C /* RedditLoginModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditLoginModel.swift; sourceTree = "<group>"; };
@@ -325,6 +327,7 @@
 			isa = PBXGroup;
 			children = (
 				939DDB39F3750C0D8956D30E /* MacAccountsView.swift */,
+				C0DEC0DE0000000000000001 /* MacComposerView.swift */,
 				AFFF1958B3F1C9D16EF909B4 /* MacFeedViews.swift */,
 				2BD60AE6EEF0EFF6C9FEB556 /* MacRootView.swift */,
 				9FCB290AAB8CBEEC89721872 /* MacSearchView.swift */,
@@ -685,6 +688,7 @@
 				59E5E13297AA7F1A3C4AE539 /* Identifiers.swift in Sources */,
 				888C84FB421D40DC6C267CF7 /* KeychainSecretStore.swift in Sources */,
 				EB08AB4735E4C8516BBFE8C6 /* MacAccountsView.swift in Sources */,
+				C0DEC0DE0000000000000002 /* MacComposerView.swift in Sources */,
 				8AB4FB463802DB90E60765A7 /* MacFeedViews.swift in Sources */,
 				A56DD52680A9780141EF2773 /* MacRedditLoginView.swift in Sources */,
 				F22D2111B1F78058E0DE33F9 /* MacRootView.swift in Sources */,
@@ -741,6 +745,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -933,6 +939,8 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
