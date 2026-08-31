@@ -8,7 +8,9 @@ struct MacFeedListView: View {
     let descriptor: FeedDescriptorModel
     let store: OctonautFeatureStore
     @Binding var selectedPost: PostCardModel?
+    let onComposePost: () -> Void
     @Environment(AppDependencies.self) private var dependencies
+    @State private var actionError: String?
 
     var body: some View {
         Group {
@@ -42,9 +44,17 @@ struct MacFeedListView: View {
                     ForEach(store.posts) { post in
                         Group {
                             if dependencies.settings.feedLayout == .full {
-                                MacPostMediaCard(post: post)
+                                MacPostMediaCard(
+                                    post: post,
+                                    canVote: currentAccountID != nil,
+                                    onVote: { performVote(post, value: $0) }
+                                )
                             } else {
-                                MacPostRow(post: post)
+                                MacPostRow(
+                                    post: post,
+                                    canVote: currentAccountID != nil,
+                                    onVote: { performVote(post, value: $0) }
+                                )
                             }
                         }
                             .contentShape(Rectangle())
@@ -62,6 +72,15 @@ struct MacFeedListView: View {
                             .listRowSeparator(.visible)
                             .listRowSeparatorTint(.secondary.opacity(0.22))
                             .contextMenu {
+                                Button(post.vote == 1 ? "Remove Upvote" : "Upvote") {
+                                    performVote(post, value: post.vote == 1 ? 0 : 1)
+                                }
+                                .disabled(currentAccountID == nil)
+                                Button(post.vote == -1 ? "Remove Downvote" : "Downvote") {
+                                    performVote(post, value: post.vote == -1 ? 0 : -1)
+                                }
+                                .disabled(currentAccountID == nil)
+                                Divider()
                                 Button("Open in Browser") { NSWorkspace.shared.open(post.shareURL) }
                                 Button("Copy Link") {
                                     NSPasteboard.general.clearContents()
@@ -90,6 +109,12 @@ struct MacFeedListView: View {
                             .font(.headline)
                             .lineLimit(1)
                         Spacer(minLength: 12)
+                        Button(action: onComposePost) {
+                            Label("New Post", systemImage: "square.and.pencil")
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("New Post (Command-N)")
                         feedLayoutPicker
                         Button {
                             Task {
@@ -107,6 +132,36 @@ struct MacFeedListView: View {
                     .background(.bar)
                     .overlay(alignment: .bottom) { Divider() }
                 }
+            }
+        }
+        .alert(
+            "Reddit action failed",
+            isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionError ?? "Unknown error")
+        }
+    }
+
+    private var currentAccountID: AccountID? {
+        dependencies.accounts.selectedAccountID
+    }
+
+    private func performVote(_ post: PostCardModel, value: Int) {
+        guard let currentAccountID else { return }
+        Task {
+            do {
+                try await store.performVote(
+                    postID: post.id,
+                    value: value,
+                    accountID: currentAccountID
+                )
+            } catch {
+                actionError = error.localizedDescription
             }
         }
     }
@@ -130,6 +185,8 @@ struct MacFeedListView: View {
 
 private struct MacPostMediaCard: View {
     let post: PostCardModel
+    let canVote: Bool
+    let onVote: (Int) -> Void
     @Environment(AppDependencies.self) private var dependencies
     @State private var revealsSensitiveMedia = false
 
@@ -191,8 +248,12 @@ private struct MacPostMediaCard: View {
             }
 
             HStack(spacing: 14) {
-                Label(post.score.formatted(), systemImage: "arrow.up")
-                    .foregroundStyle(post.vote > 0 ? .orange : .secondary)
+                MacVoteControls(
+                    score: post.score,
+                    vote: post.vote,
+                    isEnabled: canVote,
+                    onVote: onVote
+                )
                 Label(post.comments.formatted(), systemImage: "bubble.left")
                 if post.isSaved {
                     Label("Saved", systemImage: "bookmark.fill")
@@ -318,17 +379,18 @@ private struct MacPostMediaCard: View {
 
 private struct MacPostRow: View {
     let post: PostCardModel
+    let canVote: Bool
+    let onVote: (Int) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 2) {
-                Text(post.score.formatted())
-                    .font(.caption.monospacedDigit().weight(.semibold))
-                Image(systemName: "arrow.up")
-                    .font(.caption)
-                    .foregroundStyle(post.vote > 0 ? .orange : .secondary)
-            }
-            .frame(width: 42)
+            MacVoteControls(
+                score: post.score,
+                vote: post.vote,
+                axis: .vertical,
+                isEnabled: canVote,
+                onVote: onVote
+            )
 
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
@@ -383,6 +445,7 @@ struct MacPostDetailView: View {
     let post: PostCardModel?
     let store: OctonautFeatureStore
     let accounts: AccountCoordinator
+    let onCompose: (MacComposerContext) -> Void
     @Environment(AppDependencies.self) private var dependencies
     @State private var actionError: String?
     @State private var isMediaFillingPane = false
@@ -416,13 +479,35 @@ struct MacPostDetailView: View {
                     Spacer()
                     ControlGroup {
                         Button {
+                            onCompose(
+                                .comment(postID: displayedPost.id, postTitle: displayedPost.title)
+                            )
+                        } label: {
+                            Label("Add Comment", systemImage: "bubble.left.and.pencil")
+                                .labelStyle(.iconOnly)
+                        }
+                        .disabled(currentAccountID == nil)
+                        .help("Add Comment")
+
+                        Button {
                             vote(displayedPost, value: displayedPost.vote == 1 ? 0 : 1)
                         } label: {
                             Label("Upvote", systemImage: "arrow.up")
                                 .labelStyle(.iconOnly)
                         }
+                        .foregroundStyle(displayedPost.vote == 1 ? .orange : .secondary)
                         .disabled(currentAccountID == nil)
-                        .help("Upvote")
+                        .help(displayedPost.vote == 1 ? "Remove upvote" : "Upvote")
+
+                        Button {
+                            vote(displayedPost, value: displayedPost.vote == -1 ? 0 : -1)
+                        } label: {
+                            Label("Downvote", systemImage: "arrow.down")
+                                .labelStyle(.iconOnly)
+                        }
+                        .foregroundStyle(displayedPost.vote == -1 ? .blue : .secondary)
+                        .disabled(currentAccountID == nil)
+                        .help(displayedPost.vote == -1 ? "Remove downvote" : "Downvote")
 
                         Button {
                             save(displayedPost)
@@ -513,11 +598,35 @@ struct MacPostDetailView: View {
 
                 if !store.comments.isEmpty {
                     Divider()
-                    Text("Comments")
-                        .font(.title2.weight(.semibold))
+                    HStack {
+                        Text("Comments")
+                            .font(.title2.weight(.semibold))
+                        Spacer()
+                        Button("Add Comment", systemImage: "bubble.left.and.pencil") {
+                            onCompose(.comment(postID: post.id, postTitle: post.title))
+                        }
+                        .disabled(currentAccountID == nil)
+                    }
 
                     ForEach(flattenedComments(store.comments)) { comment in
-                        MacCommentRow(comment: comment, postAuthor: post.author)
+                        MacCommentRow(
+                            comment: comment,
+                            postAuthor: post.author,
+                            canVote: currentAccountID != nil,
+                            onVote: { vote(comment, value: $0) },
+                            onReply: {
+                                onCompose(.reply(commentID: comment.id, author: comment.author))
+                            }
+                        )
+                    }
+                } else if store.detailState == .loaded {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No comments yet")
+                            .font(.title3.weight(.semibold))
+                        Button("Add the first comment", systemImage: "bubble.left.and.pencil") {
+                            onCompose(.comment(postID: post.id, postTitle: post.title))
+                        }
+                        .disabled(currentAccountID == nil)
                     }
                 }
             }
@@ -606,7 +715,12 @@ struct MacPostDetailView: View {
             }
 
             HStack(spacing: 16) {
-                Label(post.score.formatted(), systemImage: "arrow.up.arrow.down")
+                MacVoteControls(
+                    score: post.score,
+                    vote: post.vote,
+                    isEnabled: currentAccountID != nil,
+                    onVote: { vote(post, value: $0) }
+                )
                 Label(post.comments.formatted(), systemImage: "bubble.left")
             }
             .font(.subheadline)
@@ -638,6 +752,21 @@ struct MacPostDetailView: View {
         Task {
             do {
                 try await store.performSave(postID: post.id, accountID: currentAccountID)
+            } catch {
+                actionError = error.localizedDescription
+            }
+        }
+    }
+
+    private func vote(_ comment: CommentCardModel, value: Int) {
+        guard let currentAccountID else { return }
+        Task {
+            do {
+                try await store.performCommentVote(
+                    id: comment.id,
+                    value: value,
+                    accountID: currentAccountID
+                )
             } catch {
                 actionError = error.localizedDescription
             }
@@ -692,6 +821,7 @@ private struct MacMediaLightboxView: View {
                     }
                     .padding(.vertical, fillsPane ? 0 : 52)
                     .padding(.horizontal, fillsPane ? 0 : 12)
+                    .zIndex(0)
             } else {
                 ContentUnavailableView("Media unavailable", systemImage: "photo.slash")
                     .foregroundStyle(.white)
@@ -717,8 +847,22 @@ private struct MacMediaLightboxView: View {
                 Spacer()
                 lightboxFooter
             }
+            .zIndex(2)
         }
         .foregroundStyle(.white)
+        .focusable()
+        .onMoveCommand { direction in
+            switch direction {
+            case .left:
+                navigate(by: -1)
+            case .right:
+                navigate(by: 1)
+            default:
+                break
+            }
+        }
+        .onAppear(perform: keepPageInBounds)
+        .onChange(of: mediaURLs) { _, _ in keepPageInBounds() }
         .onChange(of: currentURL, initial: true) { _, newURL in
             guard isVideo, let newURL else {
                 player = nil
@@ -773,25 +917,11 @@ private struct MacMediaLightboxView: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2, perform: onTogglePaneFill)
         } else {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case .empty:
-                    ProgressView().tint(.white)
-                case .success(let image):
-                    if fillsPane {
-                        image.resizable().scaledToFill()
-                    } else {
-                        image.resizable().scaledToFit()
-                    }
-                case .failure:
-                    ContentUnavailableView("Image unavailable", systemImage: "photo.slash")
-                        .foregroundStyle(.white)
-                @unknown default:
-                    EmptyView()
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2, perform: onTogglePaneFill)
+            MacZoomableImage(
+                url: url,
+                accessibilityLabel: "Image \(page + 1) of \(mediaURLs.count)",
+                onNavigate: navigate(by:)
+            )
         }
     }
 
@@ -804,6 +934,12 @@ private struct MacMediaLightboxView: View {
                 Text("\(page + 1) / \(mediaURLs.count)")
                     .font(.caption.monospacedDigit())
             }
+            Button(fillsPane ? "Fit media in post" : "Fill detail pane", systemImage: fillsPane ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                onTogglePaneFill()
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.plain)
+            .help(fillsPane ? "Fit media in post" : "Fill detail pane")
             Menu {
                 Button("Save all to Photos", systemImage: "photo.stack") {
                     saveAll(to: .photos)
@@ -829,37 +965,48 @@ private struct MacMediaLightboxView: View {
             if mediaURLs.count > 1 {
                 HStack(spacing: 8) {
                     Button("Previous", systemImage: "chevron.left") {
-                        page = max(page - 1, 0)
+                        navigate(by: -1)
                     }
                     .labelStyle(.iconOnly)
                     .disabled(page == 0)
 
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 7) {
-                            ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
-                                Button {
-                                    page = index
-                                } label: {
-                                    AsyncImage(url: url) { image in
-                                        image.resizable().scaledToFill()
-                                    } placeholder: {
-                                        Color.white.opacity(0.12)
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 7) {
+                                ForEach(Array(mediaURLs.enumerated()), id: \.offset) { index, url in
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            page = index
+                                        }
+                                    } label: {
+                                        AsyncImage(url: url) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: {
+                                            Color.white.opacity(0.12)
+                                        }
+                                        .frame(width: 58, height: 42)
+                                        .clipShape(RoundedRectangle(cornerRadius: 5))
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .stroke(index == page ? Color.white : .clear, lineWidth: 2)
+                                        }
                                     }
-                                    .frame(width: 58, height: 42)
-                                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 5)
-                                            .stroke(index == page ? Color.white : .clear, lineWidth: 2)
-                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Show image \(index + 1) of \(mediaURLs.count)")
+                                    .id(index)
                                 }
-                                .buttonStyle(.plain)
+                            }
+                        }
+                        .scrollIndicators(.hidden)
+                        .onChange(of: page) { _, newPage in
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                proxy.scrollTo(newPage, anchor: .center)
                             }
                         }
                     }
-                    .scrollIndicators(.hidden)
 
                     Button("Next", systemImage: "chevron.right") {
-                        page = min(page + 1, mediaURLs.count - 1)
+                        navigate(by: 1)
                     }
                     .labelStyle(.iconOnly)
                     .disabled(page == mediaURLs.count - 1)
@@ -880,6 +1027,19 @@ private struct MacMediaLightboxView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.84)], startPoint: .top, endPoint: .bottom))
+    }
+
+    private func navigate(by offset: Int) {
+        guard !mediaURLs.isEmpty else { return }
+        let newPage = min(max(page + offset, 0), mediaURLs.count - 1)
+        guard newPage != page else { return }
+        withAnimation(.easeInOut(duration: 0.15)) {
+            page = newPage
+        }
+    }
+
+    private func keepPageInBounds() {
+        page = min(max(page, 0), max(mediaURLs.count - 1, 0))
     }
 
     private func chooseFolderAndSave() {
@@ -914,6 +1074,144 @@ private struct MacMediaLightboxView: View {
             get: { value.wrappedValue != nil },
             set: { if !$0 { value.wrappedValue = nil } }
         )
+    }
+}
+
+@MainActor
+private struct MacZoomableImage: View {
+    let url: URL
+    let accessibilityLabel: String
+    let onNavigate: (Int) -> Void
+
+    @State private var scale: CGFloat = 1
+    @State private var committedScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var committedOffset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geometry in
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .empty:
+                    ProgressView().tint(.white)
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .scaleEffect(scale)
+                        .offset(offset)
+                case .failure:
+                    ContentUnavailableView("Image unavailable", systemImage: "photo.slash")
+                        .foregroundStyle(.white)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .clipped()
+            .gesture(magnification(in: geometry.size))
+            .highPriorityGesture(drag(in: geometry.size))
+            .onTapGesture(count: 2) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    if scale > 1 {
+                        resetZoom()
+                    } else {
+                        scale = 2
+                        committedScale = 2
+                    }
+                }
+            }
+            .overlay(alignment: .trailing) {
+                VStack(spacing: 6) {
+                    Button("Zoom in", systemImage: "plus.magnifyingglass") {
+                        changeZoom(by: 0.5, viewportSize: geometry.size)
+                    }
+                    Button("Zoom out", systemImage: "minus.magnifyingglass") {
+                        changeZoom(by: -0.5, viewportSize: geometry.size)
+                    }
+                    Button("Actual size", systemImage: "1.magnifyingglass") {
+                        withAnimation(.easeInOut(duration: 0.18)) { resetZoom() }
+                    }
+                    .disabled(scale == 1)
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .padding(.trailing, 12)
+            }
+        }
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Pinch or use the zoom controls to zoom. Click and drag to pan. Swipe left or right to change images.")
+        .onChange(of: url, initial: true) { _, _ in resetZoom() }
+    }
+
+    private func magnification(in viewportSize: CGSize) -> some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(max(committedScale * value, 1), 8)
+                offset = clamped(offset: committedOffset, viewportSize: viewportSize)
+            }
+            .onEnded { _ in
+                committedScale = scale
+                if scale == 1 {
+                    resetZoom()
+                } else {
+                    committedOffset = offset
+                }
+            }
+    }
+
+    private func drag(in viewportSize: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                guard scale > 1 else { return }
+                offset = clamped(
+                    offset: CGSize(
+                        width: committedOffset.width + value.translation.width,
+                        height: committedOffset.height + value.translation.height
+                    ),
+                    viewportSize: viewportSize
+                )
+            }
+            .onEnded { value in
+                if scale > 1 {
+                    committedOffset = offset
+                } else if abs(value.translation.width) > 60,
+                          abs(value.translation.width) > abs(value.translation.height) {
+                    onNavigate(value.translation.width < 0 ? 1 : -1)
+                }
+            }
+    }
+
+    private func changeZoom(by amount: CGFloat, viewportSize: CGSize) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            scale = min(max(scale + amount, 1), 8)
+            committedScale = scale
+            if scale == 1 {
+                resetZoom()
+            } else {
+                offset = clamped(offset: offset, viewportSize: viewportSize)
+                committedOffset = offset
+            }
+        }
+    }
+
+    private func clamped(offset: CGSize, viewportSize: CGSize) -> CGSize {
+        let horizontalLimit = viewportSize.width * (scale - 1) / 2
+        let verticalLimit = viewportSize.height * (scale - 1) / 2
+        return CGSize(
+            width: min(max(offset.width, -horizontalLimit), horizontalLimit),
+            height: min(max(offset.height, -verticalLimit), verticalLimit)
+        )
+    }
+
+    private func resetZoom() {
+        scale = 1
+        committedScale = 1
+        offset = .zero
+        committedOffset = .zero
     }
 }
 
@@ -1191,6 +1489,9 @@ private actor MacMediaSaver {
 private struct MacCommentRow: View {
     let comment: CommentCardModel
     let postAuthor: String
+    let canVote: Bool
+    let onVote: (Int) -> Void
+    let onReply: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -1217,7 +1518,7 @@ private struct MacCommentRow: View {
                                 .padding(.vertical, 2)
                                 .background(Color.accentColor.opacity(0.14), in: Capsule())
                         }
-                        Text("• \(comment.score) points • \(comment.age)")
+                        Text("• \(comment.age)")
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(comment.isModerator ? .green : .secondary)
@@ -1226,9 +1527,76 @@ private struct MacCommentRow: View {
                     RedditMarkdownView(source: comment.body)
                         .tint(.accentColor)
                         .textSelection(.enabled)
+                    MacVoteControls(
+                        score: comment.score,
+                        vote: comment.vote,
+                        isEnabled: canVote,
+                        onVote: onVote
+                    )
+                    Button("Reply", systemImage: "arrowshape.turn.up.left", action: onReply)
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                        .disabled(!canVote)
                 }
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+private struct MacVoteControls: View {
+    enum Axis {
+        case horizontal
+        case vertical
+    }
+
+    let score: Int
+    let vote: Int
+    var axis: Axis = .horizontal
+    let isEnabled: Bool
+    let onVote: (Int) -> Void
+
+    var body: some View {
+        Group {
+            if axis == .vertical {
+                VStack(spacing: 1) { controls }
+                    .frame(width: 42)
+            } else {
+                HStack(spacing: 4) { controls }
+            }
+        }
+        .font(.caption)
+        .buttonStyle(.borderless)
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        Button {
+            onVote(vote == 1 ? 0 : 1)
+        } label: {
+            Image(systemName: "arrow.up")
+                .frame(width: 18, height: 18)
+        }
+        .foregroundStyle(vote == 1 ? .orange : .secondary)
+        .disabled(!isEnabled)
+        .help(vote == 1 ? "Remove upvote" : "Upvote")
+        .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
+
+        Text(score.formatted())
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(vote == 1 ? .orange : vote == -1 ? .blue : .secondary)
+            .fixedSize()
+
+        Button {
+            onVote(vote == -1 ? 0 : -1)
+        } label: {
+            Image(systemName: "arrow.down")
+                .frame(width: 18, height: 18)
+        }
+        .foregroundStyle(vote == -1 ? .blue : .secondary)
+        .disabled(!isEnabled)
+        .help(vote == -1 ? "Remove downvote" : "Downvote")
+        .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
     }
 }

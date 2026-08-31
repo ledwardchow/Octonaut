@@ -20,6 +20,11 @@ struct OctonautMacApp: App {
         .commands {
             SidebarCommands()
             CommandMenu("Posts") {
+                Button("New Post") {
+                    NotificationCenter.default.post(name: .octonautMacNewPost, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+
                 Button("Refresh") {
                     NotificationCenter.default.post(name: .octonautMacRefresh, object: nil)
                 }
@@ -66,6 +71,7 @@ struct OctonautMacApp: App {
 }
 
 extension Notification.Name {
+    static let octonautMacNewPost = Notification.Name("OctonautMac.newPost")
     static let octonautMacRefresh = Notification.Name("OctonautMac.refresh")
     static let octonautMacShowSearch = Notification.Name("OctonautMac.showSearch")
     static let octonautMacSelectFeed = Notification.Name("OctonautMac.selectFeed")

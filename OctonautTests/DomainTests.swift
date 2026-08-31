@@ -127,6 +127,39 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(request.fields["api_type"], "json")
     }
 
+    func testTextPostBuildsWebsiteSubmitRequest() {
+        let request = URLSessionRedditClient.mutationRequest(
+            for: .submitPost(
+                community: "swift",
+                title: "A native macOS post",
+                text: "Post body",
+                link: nil,
+                sendReplies: true
+            )
+        )
+
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/api/submit")
+        XCTAssertEqual(request.fields["sr"], "swift")
+        XCTAssertEqual(request.fields["title"], "A native macOS post")
+        XCTAssertEqual(request.fields["text"], "Post body")
+        XCTAssertEqual(request.fields["kind"], "self")
+        XCTAssertEqual(request.fields["sendreplies"], "true")
+        XCTAssertEqual(request.fields["api_type"], "json")
+    }
+
+    func testCommentBuildsWebsiteCommentRequest() {
+        let request = URLSessionRedditClient.mutationRequest(
+            for: .comment(thingID: "t3_example", text: "A comment")
+        )
+
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/api/comment")
+        XCTAssertEqual(request.fields["thing_id"], "t3_example")
+        XCTAssertEqual(request.fields["text"], "A comment")
+        XCTAssertEqual(request.fields["api_type"], "json")
+    }
+
     func testUserSearchBuildsPublicWebsiteJSONRoute() {
         let route = URLSessionRedditClient.userSearchRoute(
             for: RedditUserSearchRequest(query: "swift reader", limit: 500)

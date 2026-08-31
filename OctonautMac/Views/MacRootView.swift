@@ -9,6 +9,8 @@ struct MacRootView: View {
     @State private var search: SearchFeatureModel
     @State private var sidebarSelection: MacSidebarSelection? = .feed(.home)
     @State private var selectedPost: PostCardModel?
+    @State private var composer: MacComposerContext?
+    @State private var submissionMessage: String?
     @AppStorage("layout.mainSidebarWidth") private var sidebarWidth = 220.0
     @AppStorage("layout.mainContentWidth") private var contentWidth = 520.0
 
@@ -50,7 +52,8 @@ struct MacRootView: View {
             MacPostDetailView(
                 post: selectedPost,
                 store: store,
-                accounts: dependencies.accounts
+                accounts: dependencies.accounts,
+                onCompose: beginComposing
             )
             .ignoresSafeArea(.container, edges: .top)
         }
@@ -90,6 +93,9 @@ struct MacRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .octonautMacRefresh)) { _ in
             Task { await refreshSelection(force: true) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .octonautMacNewPost)) { _ in
+            beginComposing(.post(defaultCommunity: selectedCommunity))
+        }
         .onReceive(NotificationCenter.default.publisher(for: .octonautMacShowSearch)) { _ in
             sidebarSelection = .search
         }
@@ -100,6 +106,22 @@ struct MacRootView: View {
         .onOpenURL { url in
             handle(url)
         }
+        .sheet(item: $composer) { context in
+            MacComposerView(context: context) { result in
+                submissionMessage = result.message
+                Task { await refreshAfterSubmission() }
+            }
+            .environment(dependencies)
+        }
+        .alert(
+            submissionMessage ?? "Submitted",
+            isPresented: Binding(
+                get: { submissionMessage != nil },
+                set: { if !$0 { submissionMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        }
     }
 
     @ViewBuilder
@@ -109,7 +131,10 @@ struct MacRootView: View {
             MacFeedListView(
                 descriptor: descriptor,
                 store: store,
-                selectedPost: $selectedPost
+                selectedPost: $selectedPost,
+                onComposePost: {
+                    beginComposing(.post(defaultCommunity: selectedCommunity))
+                }
             )
         case .search:
             MacSearchView(model: search, selectedPost: $selectedPost) { community in
@@ -149,6 +174,29 @@ struct MacRootView: View {
             await store.refreshInbox()
         case .search, .accounts, nil:
             break
+        }
+    }
+
+    private var selectedCommunity: String {
+        guard case .feed(let descriptor) = sidebarSelection,
+              descriptor.kind == .community else {
+            return ""
+        }
+        return descriptor.name
+    }
+
+    private func beginComposing(_ context: MacComposerContext) {
+        guard dependencies.accounts.selectedAccountID != nil else {
+            sidebarSelection = .accounts
+            return
+        }
+        composer = context
+    }
+
+    private func refreshAfterSubmission() async {
+        await refreshSelection(force: true)
+        if let selectedPost {
+            await store.loadPostDetail(for: selectedPost)
         }
     }
 
