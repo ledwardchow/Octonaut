@@ -51,7 +51,7 @@ final class AppDependencies {
         let reddit = URLSessionRedditClient(credentialVault: vault)
         let authenticated = LiveAuthenticatedRedditService(credentialVault: vault, reddit: reddit)
         let onDeviceIntelligence: any IntelligenceService
-        if #available(iOS 27.0, *) {
+        if #available(iOS 27.0, macOS 26.0, *) {
             onDeviceIntelligence = AppleIntelligenceService()
         } else {
             onDeviceIntelligence = UnavailableIntelligenceService()

@@ -1,8 +1,10 @@
 name: Octonaut
 options:
   bundleIdPrefix: com.ledwardchow
+  xcodeVersion: "27.0"
   deploymentTarget:
     iOS: "26.0"
+    macOS: "26.0"
   createIntermediateGroups: true
   groupSortPosition: top
 settings:
@@ -40,6 +42,7 @@ targets:
           - CFBundleURLName: com.leddytech.octonaut
             CFBundleURLSchemes:
               - octonaut
+        ITSAppUsesNonExemptEncryption: false
     scheme:
       gatherCoverageData: true
       testTargets:
@@ -55,3 +58,47 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ledwardchow.OctonautTests
         GENERATE_INFOPLIST_FILE: YES
+  OctonautMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: OctonautApp/Domain
+      - path: OctonautApp/Persistence
+      - path: OctonautApp/Services
+      - path: OctonautApp/Intelligence
+      - path: OctonautApp/App/ServiceStubs.swift
+      - path: OctonautApp/App/AppRouter.swift
+      - path: OctonautApp/App/AccountCoordinator.swift
+      - path: OctonautApp/App/AppDependencies.swift
+      - path: OctonautApp/Auth/CredentialVaultAdapter.swift
+      - path: OctonautApp/Auth/RedditSessionValidator.swift
+      - path: OctonautApp/Auth/AuthenticatedRedditService.swift
+      - path: OctonautApp/Auth/RedditLoginModel.swift
+      - path: OctonautApp/Features/FeatureLoadState.swift
+      - path: OctonautApp/Features/FeatureModels.swift
+      - path: OctonautApp/Features/Search/SearchRuntime.swift
+      - path: OctonautMac
+      - path: OctonautApp/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.leddytech.octonaut.mac
+        PRODUCT_NAME: Octonaut
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Octonaut
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
+        MACOSX_DEPLOYMENT_TARGET: 26.0
+        CODE_SIGN_ENTITLEMENTS: OctonautMac/OctonautMac.entitlements
+        ENABLE_APP_SANDBOX: YES
+        ENABLE_HARDENED_RUNTIME: YES
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Octonaut saves Reddit images and videos to your Photos library when you choose Save all to Photos.
+    info:
+      path: OctonautMac/Info.plist
+      properties:
+        CFBundleURLTypes:
+          - CFBundleURLName: com.leddytech.octonaut.mac
+            CFBundleURLSchemes:
+              - octonaut
+        ITSAppUsesNonExemptEncryption: false
+        NSPhotoLibraryAddUsageDescription: Octonaut saves Reddit images and videos to your Photos library when you choose Save all to Photos.
+    scheme:
+      gatherCoverageData: true

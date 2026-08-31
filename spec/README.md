@@ -1,6 +1,6 @@
 # Octonaut implementation specification
 
-This folder is the implementation contract for Octonaut, a fully native SwiftUI Reddit client for iPhone and iPad. It describes the product, screens, data, Reddit integration, local intelligence, settings, and quality requirements in enough detail to rebuild the app without referring to the Hydra TypeScript source.
+This folder is the implementation contract for Octonaut, a fully native SwiftUI Reddit client for iPhone, iPad, and Mac. It describes the product, screens, data, Reddit integration, local intelligence, settings, and quality requirements in enough detail to rebuild the app without referring to the Hydra TypeScript source.
 
 ## Document map
 
@@ -24,9 +24,9 @@ This folder is the implementation contract for Octonaut, a fully native SwiftUI 
 ## Baseline decisions
 
 - Product name: **Octonaut**.
-- Platforms: iPhone and iPad.
+- Platforms: iPhone, iPad, and Mac.
 - UI: SwiftUI, with small UIKit/WebKit adapters only where Apple does not expose a SwiftUI equivalent, such as `WKWebView`, Live Text interaction, and advanced media playback.
-- Minimum OS: iOS and iPadOS 26.0. Development uses Xcode 27 and the iOS 27 SDK, with iOS 27 additions guarded by availability checks. This enables the Observation framework, current SwiftUI navigation, and Apple's Foundation Models framework.
+- Minimum OS: iOS and iPadOS 26.0, and macOS 26.0. Development uses Xcode 27, with newer API use guarded by availability checks.
 - Language mode: Swift 6 strict concurrency.
 - Monetization: none in the initial implementation. There is no RevenueCat dependency, subscription, entitlement, or paywall.
 - Reddit access: a replaceable `RedditClient` supports Hydra-compatible web-session access first. An approved OAuth implementation can be added without changing feature code.

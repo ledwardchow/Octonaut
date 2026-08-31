@@ -147,6 +147,7 @@ struct PostDetailView: View {
                     } else {
                         OctonautCommentRow(
                             comment: comment,
+                            postAuthor: currentPost.author,
                             onCollapse: {
                                 withAnimation(.snappy(duration: 0.2)) {
                                     store.toggleComment(id: comment.id)

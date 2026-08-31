@@ -232,7 +232,8 @@ enum RedditJSONCodec {
         let reference = CommunityReference(
             name: name,
             displayName: object["display_name_prefixed"]?.stringValue,
-            iconURL: url(object["icon_img"]?.stringValue)
+            iconURL: url(object["community_icon"]?.stringValue)
+                ?? url(object["icon_img"]?.stringValue)
         )
         return Community(
             reference: reference,

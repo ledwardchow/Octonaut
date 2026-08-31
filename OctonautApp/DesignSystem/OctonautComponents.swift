@@ -22,14 +22,6 @@ struct OctonautBrowserView: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
 
-enum OctonautLoadState: Equatable {
-    case idle
-    case loading
-    case loaded
-    case empty
-    case failed(String)
-}
-
 struct OctonautStateView<Content: View>: View {
     let state: OctonautLoadState
     let retry: (() -> Void)?
@@ -396,7 +388,7 @@ struct OctonautPostRow: View {
     }
 
     private var bodyText: some View {
-        Text(OctonautMarkdown.attributedString(from: post.body))
+        RedditMarkdownView(source: post.body)
             .font(.subheadline)
             .foregroundStyle(theme.primaryText)
             .tint(theme.accent)
@@ -805,6 +797,7 @@ private struct OctonautCommunityIcon: View {
 struct OctonautCommentRow: View {
     @Environment(\.octonautTheme) private var theme
     let comment: CommentCardModel
+    var postAuthor = ""
     var onCollapse: (() -> Void)?
     var onVote: ((Int) -> Void)?
     var onReply: (() -> Void)?
@@ -821,6 +814,9 @@ struct OctonautCommentRow: View {
                             .font(.caption.weight(.bold))
                         Text(comment.author.isEmpty ? "[deleted]" : "u/\(comment.author)")
                             .font(.caption.weight(.semibold))
+                        if comment.isOriginalPoster(postAuthor: postAuthor) {
+                            OctonautPill(title: "OP", color: theme.accent)
+                        }
                         if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
                             OctonautUserFlairPill(flair: authorFlair)
                         }
@@ -835,7 +831,7 @@ struct OctonautCommentRow: View {
                 .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
                 if !comment.isCollapsed {
                     if !comment.body.isEmpty {
-                        Text(OctonautMarkdown.attributedString(from: comment.body))
+                        RedditMarkdownView(source: comment.body)
                             .font(.subheadline)
                             .foregroundStyle(theme.primaryText)
                             .tint(theme.accent)

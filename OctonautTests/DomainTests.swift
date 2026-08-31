@@ -142,6 +142,17 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(query["raw_json"], "1")
     }
 
+    func testCommunityCodecPrefersCommunityIconAndFallsBackToLegacyIcon() throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","community_icon":"https://styles.redditmedia.com/swift.png","icon_img":"https://styles.redditmedia.com/legacy-swift.png"}},{"kind":"t5","data":{"display_name":"iPhone","community_icon":"","icon_img":"https://styles.redditmedia.com/iphone.png"}}]}}"#.utf8
+        )
+
+        let listing = try RedditJSONCodec.decodeCommunities(data)
+
+        XCTAssertEqual(listing.items[0].reference.iconURL?.absoluteString, "https://styles.redditmedia.com/swift.png")
+        XCTAssertEqual(listing.items[1].reference.iconURL?.absoluteString, "https://styles.redditmedia.com/iphone.png")
+    }
+
     func testUserSearchCodecDecodesProfileSubredditListing() throws {
         let data = Data(
             #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"u_swift_reader","display_name_prefixed":"u/Swift_Reader","title":"Swift_Reader","url":"/user/Swift_Reader/","icon_img":"https://styles.redditmedia.com/profile.png","public_description":"Writes about Swift."}}]}}"#.utf8
@@ -172,7 +183,7 @@ final class DomainTests: XCTestCase {
 
     func testMarkdownLinksRenderAsLinkedDisplayText() throws {
         let url = try XCTUnwrap(URL(string: "https://www.instagram.com/p/example/"))
-        let attributed = OctonautMarkdown.attributedString(
+        let attributed = RedditPostMarkdown.attributedString(
             from: "[Source](https://www.instagram.com/p/example/)"
         )
 
@@ -181,10 +192,10 @@ final class DomainTests: XCTestCase {
     }
 
     func testMarkdownLinksInsertMissingSpaceBeforeFollowingText() {
-        let labelledLink = OctonautMarkdown.attributedString(
+        let labelledLink = RedditPostMarkdown.attributedString(
             from: "[Source](https://example.com)Next"
         )
-        let bareLink = OctonautMarkdown.attributedString(
+        let bareLink = RedditPostMarkdown.attributedString(
             from: "https://streamable.com/example\nNext"
         )
 
@@ -192,8 +203,56 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(String(bareLink.characters), "https://streamable.com/example Next")
     }
 
+    func testMarkdownTurnsLinkedRedditImagesIntoImageBlocks() throws {
+        let imageURL = try XCTUnwrap(
+            URL(string: "https://preview.redd.it/example.png?width=1080&format=png")
+        )
+        let blocks = RedditPostMarkdown.blocks(
+            from: "Before\n[Example image](https://preview.redd.it/example.png?width=1080&amp;format=png)\nAfter"
+        )
+
+        XCTAssertEqual(
+            blocks,
+            [
+                .text("Before\n"),
+                .image(RedditMarkdownImage(url: imageURL, altText: "Example image")),
+                .text("\nAfter"),
+            ]
+        )
+    }
+
+    func testMarkdownTurnsBareRedditImageURLsIntoImageBlocks() throws {
+        let imageURL = try XCTUnwrap(URL(string: "https://i.redd.it/example.jpeg"))
+
+        XCTAssertEqual(
+            RedditPostMarkdown.blocks(from: "Image: https://i.redd.it/example.jpeg."),
+            [
+                .text("Image: "),
+                .image(RedditMarkdownImage(url: imageURL, altText: nil)),
+                .text("."),
+            ]
+        )
+    }
+
+    func testMarkdownResolvesRedditMediaImageLinks() throws {
+        let imageURL = try XCTUnwrap(URL(string: "https://i.redd.it/wrapped.png"))
+
+        XCTAssertEqual(
+            RedditPostMarkdown.blocks(
+                from: "[Image](https://www.reddit.com/media?url=https%3A%2F%2Fi.redd.it%2Fwrapped.png)"
+            ),
+            [.image(RedditMarkdownImage(url: imageURL, altText: "Image"))]
+        )
+    }
+
+    func testMarkdownLeavesExternalAndCodeImageLinksAsText() {
+        let source = "[External](https://example.com/image.png)\n```\nhttps://i.redd.it/code.png\n```"
+
+        XCTAssertEqual(RedditPostMarkdown.blocks(from: source), [.text(source)])
+    }
+
     func testMarkdownPreservesParagraphBreaksAndHeadingText() {
-        let attributed = OctonautMarkdown.attributedString(
+        let attributed = RedditPostMarkdown.attributedString(
             from: "Hello everyone!\n\n## Google Employee Flair\n\nDetails here.\n\nThanks!"
         )
 
@@ -204,7 +263,7 @@ final class DomainTests: XCTestCase {
     }
 
     func testMarkdownRendersFencedCodeAsLiteralMonospacedText() {
-        let attributed = OctonautMarkdown.attributedString(
+        let attributed = RedditPostMarkdown.attributedString(
             from: "Before\n```swift\nlet value = **literal**\nprint(value)\n```\nAfter"
         )
 
@@ -216,10 +275,10 @@ final class DomainTests: XCTestCase {
     }
 
     func testMarkdownSupportsTildeAndUnclosedCodeFences() {
-        let tildeFence = OctonautMarkdown.attributedString(
+        let tildeFence = RedditPostMarkdown.attributedString(
             from: "~~~json\n{\"enabled\": true}\n~~~"
         )
-        let unclosedFence = OctonautMarkdown.attributedString(
+        let unclosedFence = RedditPostMarkdown.attributedString(
             from: "Text\n```\n[not a link](https://example.com)"
         )
 
@@ -227,6 +286,35 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(
             String(unclosedFence.characters),
             "Text\n[not a link](https://example.com)"
+        )
+    }
+
+    func testMarkdownRendersRedditQuotesListsAndSpoilersWithoutSyntaxMarkers() {
+        let attributed = RedditPostMarkdown.attributedString(
+            from: "> quoted **text**\n\n- first item\n* second item\n\n>!spoiler text!<"
+        )
+
+        XCTAssertEqual(
+            String(attributed.characters),
+            "▎ quoted text\n\n• first item\n• second item\n\nspoiler text"
+        )
+    }
+
+    func testMarkdownParsesPipeTablesAsBlocks() {
+        let blocks = RedditPostMarkdown.blocks(
+            from: "Before\n\n|Model|Input|Output|\n|:-|:-|:-|\n|Sol|$4.00|$20.00|\n|Luna|$0.20|$1.20|\n\nAfter"
+        )
+
+        XCTAssertEqual(
+            blocks,
+            [
+                .text("Before\n"),
+                .table(RedditMarkdownTable(
+                    headers: ["Model", "Input", "Output"],
+                    rows: [["Sol", "$4.00", "$20.00"], ["Luna", "$0.20", "$1.20"]]
+                )),
+                .text("\nAfter"),
+            ]
         )
     }
 
@@ -312,6 +400,17 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(post.media.primaryURL?.absoluteString, "https://cdn.example.com/video.mp4")
     }
 
+    func testShortMediaPostPrefersMediaFirstPresentation() {
+        var card = PostCardModel.mediaSample
+        card.mediaKind = "gallery"
+        card.galleryURLs = [URL(string: "https://i.redd.it/example.jpg")!]
+
+        XCTAssertTrue(card.prefersMediaFirstPresentation)
+
+        card.body = String(repeating: "A", count: 281)
+        XCTAssertFalse(card.prefersMediaFirstPresentation)
+    }
+
     @MainActor
     func testCommentTreeCanCollapseAndExpandParentAndNestedComments() {
         let store = OctonautFeatureStore()
@@ -325,6 +424,17 @@ final class DomainTests: XCTestCase {
 
         store.toggleComment(id: "t1_comment-1a")
         XCTAssertTrue(store.comments[0].children[0].isCollapsed)
+    }
+
+    func testCommentIdentifiesOriginalPosterIgnoringUsernameCase() {
+        let comment = CommentCardModel(
+            id: "t1_op", author: "Example_Author", body: "An update from the OP", score: 1,
+            age: "now", vote: 0, depth: 0, isModerator: false, isCollapsed: false,
+            children: [])
+
+        XCTAssertTrue(comment.isOriginalPoster(postAuthor: "example_author"))
+        XCTAssertFalse(comment.isOriginalPoster(postAuthor: "someone_else"))
+        XCTAssertFalse(comment.isOriginalPoster(postAuthor: ""))
     }
 
     @MainActor
