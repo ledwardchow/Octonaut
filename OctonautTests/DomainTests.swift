@@ -471,6 +471,36 @@ final class DomainTests: XCTestCase {
     }
 
     @MainActor
+    func testLoadingMoreCommentsKeepsTheVisibleTreeUntilRefreshCompletes() async throws {
+        let postData = Data(
+            #"[{"data":{"children":[{"kind":"t3","data":{"id":"sample","name":"t3_sample","permalink":"/r/swift/comments/sample/example/","title":"Example","subreddit":"swift","is_self":true}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"new-comment","name":"t1_new-comment","parent_id":"t3_sample","author":"reader","body":"Loaded comment","created_utc":0,"replies":""}}]}}]"#.utf8
+        )
+        let client = FixtureRedditClient(postData: postData, postDelay: .milliseconds(100))
+        let store = OctonautFeatureStore(reddit: client)
+        let visibleComment = CommentCardModel(
+            id: "visible-comment", author: "reader", body: "Keep me visible", score: 1,
+            age: "now", vote: 0, depth: 0, isModerator: false, isCollapsed: false,
+            children: [])
+        store.comments = [visibleComment]
+        store.detailState = .loaded
+
+        let loadTask = Task {
+            await store.loadMoreComments("more-comments", for: .sample)
+        }
+        try await Task.sleep(for: .milliseconds(10))
+
+        XCTAssertEqual(store.comments.map(\.id), ["visible-comment"])
+        XCTAssertEqual(store.detailState, .loaded)
+        XCTAssertTrue(store.moreLoadingIDs.contains("more-comments"))
+
+        await loadTask.value
+
+        XCTAssertEqual(store.comments.map(\.id), ["new-comment"])
+        XCTAssertEqual(store.detailState, .loaded)
+        XCTAssertFalse(store.moreLoadingIDs.contains("more-comments"))
+    }
+
+    @MainActor
     func testLoginFindsRedditSessionCookieAcrossRedditDomains() throws {
         let cookie = try XCTUnwrap(
             HTTPCookie(properties: [

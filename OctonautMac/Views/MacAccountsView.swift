@@ -52,21 +52,22 @@ struct MacAccountsView: View {
                     }
                 }
             } header: {
-                Text("Reddit accounts")
+                HStack {
+                    Text("Reddit accounts")
+                    Spacer()
+                    Button {
+                        showingLogin = true
+                    } label: {
+                        Label("Add Account", systemImage: "person.badge.plus")
+                    }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+                }
             } footer: {
                 Text("Session cookies are stored in this Mac's Keychain.")
             }
         }
         .navigationTitle("Accounts")
-        .toolbar {
-            ToolbarItem {
-                Button {
-                    showingLogin = true
-                } label: {
-                    Label("Add Account", systemImage: "person.badge.plus")
-                }
-            }
-        }
         .sheet(isPresented: $showingLogin) {
             MacRedditLoginView(accounts: accounts)
                 .frame(minWidth: 720, minHeight: 620)

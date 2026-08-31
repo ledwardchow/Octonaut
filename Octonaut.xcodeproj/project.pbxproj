@@ -141,7 +141,7 @@
 		35748B9785F8F55A63306C74 /* SemanticFilterEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticFilterEngine.swift; sourceTree = "<group>"; };
 		391984C780F7CF0F2A6F0535 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3E07930B4DE408F45C34596E /* FeatureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureModels.swift; sourceTree = "<group>"; };
-		4DD643A89061C969F106E42D /* OctonautMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OctonautMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4DD643A89061C969F106E42D /* OctonautMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = OctonautMac.app; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EA472F0D0173FA4B790DED6 /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		573291A83CE53B9C67DE560C /* SwiftDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataModels.swift; sourceTree = "<group>"; };
 		5E702C6ADAEE69BA35D8C9B9 /* OctonautImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautImageCache.swift; sourceTree = "<group>"; };
@@ -167,7 +167,7 @@
 		9C8D07C0486519FD2517A3F8 /* OctonautApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautApp.swift; sourceTree = "<group>"; };
 		9FCB290AAB8CBEEC89721872 /* MacSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSearchView.swift; sourceTree = "<group>"; };
 		AFFF1958B3F1C9D16EF909B4 /* MacFeedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedViews.swift; sourceTree = "<group>"; };
-		B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B97B8C2326D533E9D1C7B982 /* NOTES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = NOTES.md; sourceTree = "<group>"; };
 		B9D975AB98754EF4264D93DB /* AppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDependencies.swift; sourceTree = "<group>"; };
 		BD910ECAEFEEC348BF2686C2 /* AVFoundationMediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVFoundationMediaService.swift; sourceTree = "<group>"; };
@@ -578,8 +578,8 @@
 			projectRoot = "";
 			targets = (
 				6813939EEF5681F07F2FC42B /* Octonaut */,
-				F97C7515901FE7DFD17E4021 /* OctonautTests */,
 				1624150B7D18E1D612B6A231 /* OctonautMac */,
+				F97C7515901FE7DFD17E4021 /* OctonautTests */,
 			);
 		};
 /* End PBXProject section */
@@ -742,6 +742,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = OctonautApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
@@ -936,6 +937,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = OctonautApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;

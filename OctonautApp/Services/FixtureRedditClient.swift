@@ -10,6 +10,7 @@ actor FixtureRedditClient: RedditClient {
     private let usersData: Data?
     private let actionResult: ActionResult
     private let listingDelay: Duration?
+    private let postDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
     private var listingRequestCount = 0
     private var subscribedCommunitiesRequestCount = 0
@@ -21,6 +22,7 @@ actor FixtureRedditClient: RedditClient {
         communitiesData: Data? = nil,
         usersData: Data? = nil,
         listingDelay: Duration? = nil,
+        postDelay: Duration? = nil,
         subscribedCommunitiesDelay: Duration? = nil,
         actionResult: ActionResult = ActionResult(succeeded: true)
     ) {
@@ -30,6 +32,7 @@ actor FixtureRedditClient: RedditClient {
         self.communitiesData = communitiesData
         self.usersData = usersData
         self.listingDelay = listingDelay
+        self.postDelay = postDelay
         self.subscribedCommunitiesDelay = subscribedCommunitiesDelay
         self.actionResult = actionResult
     }
@@ -46,6 +49,7 @@ actor FixtureRedditClient: RedditClient {
         self.communitiesData = try read("communities.json")
         self.usersData = try read("users.json")
         self.listingDelay = nil
+        self.postDelay = nil
         self.subscribedCommunitiesDelay = nil
         self.actionResult = ActionResult(succeeded: true)
     }
@@ -64,6 +68,9 @@ actor FixtureRedditClient: RedditClient {
     }
 
     func post(_ permalink: URL, sort: CommentSort, account: AccountID? = nil) async throws -> PostThread {
+        if let postDelay {
+            try await Task.sleep(for: postDelay)
+        }
         guard let postData else { throw RedditClientError.notFound }
         return try RedditJSONCodec.decodeThread(postData)
     }

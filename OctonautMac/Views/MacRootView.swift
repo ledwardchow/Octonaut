@@ -29,33 +29,12 @@ struct MacRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            MacSidebarView(
-                selection: $sidebarSelection,
-                communities: store.communities,
-                accountName: dependencies.accounts.selectedAccount?.username
-            )
-            .navigationSplitViewColumnWidth(
-                min: 190,
-                ideal: CGFloat(sidebarWidth),
-                max: 280
-            )
-        } content: {
-            contentColumn
-                .ignoresSafeArea(.container, edges: .top)
-                .navigationSplitViewColumnWidth(
-                    min: 320,
-                    ideal: CGFloat(contentWidth),
-                    max: .infinity
-                )
-        } detail: {
-            MacPostDetailView(
-                post: selectedPost,
-                store: store,
-                accounts: dependencies.accounts,
-                onCompose: beginComposing
-            )
-            .ignoresSafeArea(.container, edges: .top)
+        Group {
+            if sidebarSelection == .accounts {
+                accountsSplitView
+            } else {
+                postsSplitView
+            }
         }
         .tint(.orange)
         .background {
@@ -122,6 +101,50 @@ struct MacRootView: View {
         ) {
             Button("OK", role: .cancel) {}
         }
+    }
+
+    private var postsSplitView: some View {
+        NavigationSplitView {
+            sidebar
+        } content: {
+            contentColumn
+                .ignoresSafeArea(.container, edges: .top)
+                .navigationSplitViewColumnWidth(
+                    min: 320,
+                    ideal: CGFloat(contentWidth),
+                    max: .infinity
+                )
+        } detail: {
+            MacPostDetailView(
+                post: selectedPost,
+                store: store,
+                accounts: dependencies.accounts,
+                onCompose: beginComposing
+            )
+            .ignoresSafeArea(.container, edges: .top)
+        }
+    }
+
+    private var accountsSplitView: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            MacAccountsView(accounts: dependencies.accounts)
+                .ignoresSafeArea(.container, edges: .top)
+        }
+    }
+
+    private var sidebar: some View {
+        MacSidebarView(
+            selection: $sidebarSelection,
+            communities: store.communities,
+            accountName: dependencies.accounts.selectedAccount?.username
+        )
+        .navigationSplitViewColumnWidth(
+            min: 190,
+            ideal: CGFloat(sidebarWidth),
+            max: 280
+        )
     }
 
     @ViewBuilder
