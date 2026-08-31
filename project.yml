@@ -35,6 +35,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Octonaut
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown"
     info:
       path: OctonautApp/Info.plist
       properties:
@@ -81,7 +83,7 @@ targets:
       - path: OctonautApp/Assets.xcassets
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.leddytech.octonaut.mac
+        PRODUCT_BUNDLE_IDENTIFIER: com.leddytech.octonaut
         PRODUCT_NAME: Octonaut
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Octonaut
@@ -95,7 +97,7 @@ targets:
       path: OctonautMac/Info.plist
       properties:
         CFBundleURLTypes:
-          - CFBundleURLName: com.leddytech.octonaut.mac
+          - CFBundleURLName: com.leddytech.octonaut
             CFBundleURLSchemes:
               - octonaut
         ITSAppUsesNonExemptEncryption: false
