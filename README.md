@@ -4,6 +4,8 @@
 
 Octonaut is a native SwiftUI Reddit client for iPhone, iPad, and Mac. The underlying data access architecture is derived from [https://github.com/dmilin1/hydra/](https://github.com/dmilin1/hydra/).
 
+Just want to try it on iPhone? [TestFlight](https://testflight.apple.com/join/kRJfvUE6)
+
 ## ✨ Features
 
 - Browse public Reddit feeds without an account, or sign in through Reddit's website.
@@ -16,6 +18,8 @@ Octonaut is a native SwiftUI Reddit client for iPhone, iPad, and Mac. The underl
 - Use a dedicated Mac interface with a sidebar, feed and detail columns, menus, keyboard shortcuts, and a native Settings window.
 
 ## 🚀 Getting Started
+
+Below are instructions to build it from source. If you're interested in using this on an iPhone and want to skip the build, use the [TestFlight](https://testflight.apple.com/join/kRJfvUE6) link. (The iPad and macOS apps have much less polish.)
 
 ### Prerequisites
 

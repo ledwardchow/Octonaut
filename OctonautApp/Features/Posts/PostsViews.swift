@@ -54,7 +54,7 @@ struct PostsRootView: View {
                 collapsibleHeader("Communities", count: filteredCommunities.filter { !$0.isFavorite }.count, systemImage: "person.3.fill", isExpanded: $communitiesExpanded)
             }
         }
-        .listStyle(.insetGrouped)
+        .listStyle(.plain)
         .navigationTitle("Posts")
         .searchable(text: $communityQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a community")
         .refreshable { await store.refreshCommunities(forceRefresh: true) }
@@ -257,6 +257,7 @@ struct FeedView: View {
                                     )
                                 }
                             }
+                            .fixedSize(horizontal: false, vertical: true)
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .id(post.id)

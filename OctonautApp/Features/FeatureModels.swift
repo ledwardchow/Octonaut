@@ -1251,16 +1251,25 @@ final class OctonautFeatureStore {
         userProfileState = .loaded
     }
 
-    func loadPostDetail(for post: PostCardModel, sort: String = "Best") async {
-        detailState = .loading
-        detailPost = post
+    @discardableResult
+    func loadPostDetail(
+        for post: PostCardModel,
+        sort: String = "Best",
+        preservingVisibleComments: Bool = false
+    ) async -> Bool {
+        if !preservingVisibleComments {
+            detailState = .loading
+            detailPost = post
+        }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return false }
             detailState = .loaded
-            return
+            return true
         }
-        comments = []
+        if !preservingVisibleComments {
+            comments = []
+        }
 
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
@@ -1271,7 +1280,7 @@ final class OctonautFeatureStore {
                 account: selectedAccountID
             )
             guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
-            else { return }
+            else { return false }
             detailPost = PostCardModel(post: thread.post)
             comments = thread.comments.map { node in
                 switch node {
@@ -1282,11 +1291,15 @@ final class OctonautFeatureStore {
             }
             moreFailedIDs.removeAll()
             detailState = .loaded
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
-            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            detailState = .failed(error.localizedDescription)
+            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return false }
+            if !preservingVisibleComments {
+                detailState = .failed(error.localizedDescription)
+            }
+            return false
         }
     }
 
@@ -1298,8 +1311,12 @@ final class OctonautFeatureStore {
         moreLoadingIDs.insert(commentID)
         moreFailedIDs.remove(commentID)
         defer { moreLoadingIDs.remove(commentID) }
-        await loadPostDetail(for: post, sort: sort)
-        if case .failed = detailState { moreFailedIDs.insert(commentID) }
+        let loaded = await loadPostDetail(
+            for: post,
+            sort: sort,
+            preservingVisibleComments: true
+        )
+        if !loaded { moreFailedIDs.insert(commentID) }
     }
 
     func loadMorePosts(for descriptor: FeedDescriptorModel = .popular) async {

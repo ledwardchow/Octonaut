@@ -24,7 +24,6 @@ struct SearchRootView: View {
                 results
             }
         }
-        .navigationTitle("Search")
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Reddit")
         .searchScopes($scope) {
             ForEach(FeatureSearchScope.allCases) { value in
@@ -56,8 +55,16 @@ struct SearchRootView: View {
         List {
             Section {
                 ForEach(store.communities) { community in
-                    NavigationLink(value: FeatureRoute.community(community.name)) {
-                        OctonautCommunityRow(community: community)
+                    OctonautCommunityRow(community: community)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            router.push(.community(community.name))
+                        }
+                    )
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction {
+                        router.push(.community(community.name))
                     }
                     .listRowInsets(EdgeInsets())
                 }
@@ -97,11 +104,20 @@ struct SearchRootView: View {
             switch scope {
             case .posts:
                 ForEach(model.posts) { post in
-                    NavigationLink(value: FeatureRoute.post(post)) {
-                        OctonautPostRow(
-                            post: post,
-                            showsFlair: dependencies.settings.showPostFlair
-                        )
+                    OctonautPostRow(
+                        post: post,
+                        showsFlair: dependencies.settings.showPostFlair
+                    )
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            router.push(.post(post))
+                        }
+                    )
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction {
+                        router.push(.post(post))
                     }
                     .listRowInsets(EdgeInsets())
                     .onAppear {
@@ -110,8 +126,16 @@ struct SearchRootView: View {
                 }
             case .communities:
                 ForEach(model.communities) { community in
-                    NavigationLink(value: FeatureRoute.community(community.name)) {
-                        OctonautCommunityRow(community: community)
+                    OctonautCommunityRow(community: community)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        TapGesture().onEnded {
+                            router.push(.community(community.name))
+                        }
+                    )
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction {
+                        router.push(.community(community.name))
                     }
                     .listRowInsets(EdgeInsets())
                     .onAppear {
@@ -120,10 +144,17 @@ struct SearchRootView: View {
                 }
             case .users:
                 ForEach(model.users) { user in
-                    NavigationLink(value: FeatureRoute.account(user.reference.username)) {
-                        userRow(user)
-                    }
-                    .listRowInsets(EdgeInsets())
+                    userRow(user)
+                        .simultaneousGesture(
+                            TapGesture().onEnded {
+                                router.push(.account(user.reference.username))
+                            }
+                        )
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction {
+                            router.push(.account(user.reference.username))
+                        }
+                        .listRowInsets(EdgeInsets())
                 }
             }
             if let paginationError = model.paginationError {

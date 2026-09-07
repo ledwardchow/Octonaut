@@ -578,8 +578,8 @@
 			projectRoot = "";
 			targets = (
 				6813939EEF5681F07F2FC42B /* Octonaut */,
-				F97C7515901FE7DFD17E4021 /* OctonautTests */,
 				1624150B7D18E1D612B6A231 /* OctonautMac */,
+				F97C7515901FE7DFD17E4021 /* OctonautTests */,
 			);
 		};
 /* End PBXProject section */
