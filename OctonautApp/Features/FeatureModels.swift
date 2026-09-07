@@ -449,6 +449,8 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     var isDeleted: Bool
     var moreCount: Int?
     var moreFailed: Bool
+    var moreParentFullname: String?
+    var moreChildIDs: [String]
 
     func isOriginalPoster(postAuthor: String) -> Bool {
         guard !author.isEmpty, !postAuthor.isEmpty else { return false }
@@ -470,7 +472,9 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         isMoreNode: Bool = false,
         isDeleted: Bool = false,
         moreCount: Int? = nil,
-        moreFailed: Bool = false
+        moreFailed: Bool = false,
+        moreParentFullname: String? = nil,
+        moreChildIDs: [String] = []
     ) {
         self.id = id
         self.author = author
@@ -487,6 +491,8 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         self.isDeleted = isDeleted
         self.moreCount = moreCount
         self.moreFailed = moreFailed
+        self.moreParentFullname = moreParentFullname
+        self.moreChildIDs = moreChildIDs
     }
 
     init(comment: CommentNode, depth: Int = 0, isCollapsed: Bool = false) {
@@ -515,7 +521,9 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         CommentCardModel(
             id: node.id, author: "", body: "", score: 0, age: "", vote: 0, depth: depth,
             isModerator: false, isCollapsed: false, children: [], isMoreNode: true,
-            moreCount: node.count ?? node.childIDs.count)
+            moreCount: node.count ?? node.childIDs.count,
+            moreParentFullname: node.parentFullname,
+            moreChildIDs: node.childIDs)
     }
 
     static func deleted(_ node: DeletedCommentNode, depth: Int) -> CommentCardModel {
@@ -1303,20 +1311,99 @@ final class OctonautFeatureStore {
         }
     }
 
-    /// Reddit's read client exposes a complete post/thread request rather than
-    /// a separate child-expansion endpoint. Retrying the thread request keeps
-    /// the `more` row recoverable without inventing a transport API here.
     func loadMoreComments(_ commentID: String, for post: PostCardModel, sort: String = "Best") async {
         guard !moreLoadingIDs.contains(commentID) else { return }
+        guard let placeholder = comment(withID: commentID, in: comments),
+              placeholder.isMoreNode,
+              let parentFullname = placeholder.moreParentFullname,
+              !placeholder.moreChildIDs.isEmpty else {
+            moreFailedIDs.insert(commentID)
+            return
+        }
         moreLoadingIDs.insert(commentID)
         moreFailedIDs.remove(commentID)
         defer { moreLoadingIDs.remove(commentID) }
-        let loaded = await loadPostDetail(
-            for: post,
-            sort: sort,
-            preservingVisibleComments: true
-        )
-        if !loaded { moreFailedIDs.insert(commentID) }
+
+        guard let reddit else {
+            try? await Task.sleep(for: .milliseconds(180))
+            moreFailedIDs.insert(commentID)
+            return
+        }
+
+        let requestedChildIDs = Array(placeholder.moreChildIDs.prefix(100))
+        let remainingChildIDs = Array(placeholder.moreChildIDs.dropFirst(requestedChildIDs.count))
+        let selectedAccountID = accountID
+        let selectedGeneration = accountGeneration
+        do {
+            let nodes = try await reddit.moreComments(
+                postFullname: post.fullname,
+                parentFullname: parentFullname,
+                childIDs: requestedChildIDs,
+                sort: CommentSort(rawValue: sort),
+                account: selectedAccountID
+            )
+            guard !Task.isCancelled,
+                  isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+
+            var replacements = nodes.map { node -> CommentCardModel in
+                switch node {
+                case .comment(let comment):
+                    return CommentCardModel(comment: comment, depth: placeholder.depth)
+                case .more(let more):
+                    return CommentCardModel.more(more, depth: placeholder.depth)
+                case .deleted(let deleted):
+                    return CommentCardModel.deleted(deleted, depth: placeholder.depth)
+                }
+            }
+            if !remainingChildIDs.isEmpty {
+                let remainingCount = max(
+                    remainingChildIDs.count,
+                    (placeholder.moreCount ?? placeholder.moreChildIDs.count) - requestedChildIDs.count
+                )
+                replacements.append(
+                    .more(
+                        MoreCommentsNode(
+                            id: "\(commentID)-\(remainingChildIDs[0])",
+                            parentFullname: parentFullname,
+                            childIDs: remainingChildIDs,
+                            count: remainingCount
+                        ),
+                        depth: placeholder.depth
+                    )
+                )
+            }
+            replaceComment(withID: commentID, in: &comments, with: replacements)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+            moreFailedIDs.insert(commentID)
+        }
+    }
+
+    private func comment(
+        withID id: String,
+        in values: [CommentCardModel]
+    ) -> CommentCardModel? {
+        for value in values {
+            if value.id == id { return value }
+            if let nested = comment(withID: id, in: value.children) { return nested }
+        }
+        return nil
+    }
+
+    private func replaceComment(
+        withID id: String,
+        in values: inout [CommentCardModel],
+        with replacements: [CommentCardModel]
+    ) {
+        for index in values.indices {
+            if values[index].id == id {
+                values.replaceSubrange(index...index, with: replacements)
+                return
+            }
+            replaceComment(withID: id, in: &values[index].children, with: replacements)
+        }
     }
 
     func loadMorePosts(for descriptor: FeedDescriptorModel = .popular) async {

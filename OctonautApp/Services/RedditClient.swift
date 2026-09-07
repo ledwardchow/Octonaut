@@ -31,9 +31,17 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
 protocol RedditClient: Sendable {
     func listing(_ request: ListingRequest, account: AccountID?) async throws -> Listing<Post>
     func post(_ permalink: URL, sort: CommentSort, account: AccountID?) async throws -> PostThread
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID?
+    ) async throws -> [CommentTreeNode]
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post>
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID?) async throws -> Listing<Community>
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile>
+    func trendingCommunities(limit: Int) async throws -> Listing<Community>
     func subscribedCommunities(after: String?, account: AccountID) async throws -> Listing<Community>
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile
     func userComments(_ username: String, after: String?, account: AccountID?) async throws -> Listing<UserComment>
@@ -97,6 +105,8 @@ actor URLSessionRedditClient: RedditClient {
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
+    private var isMoreCommentsRequestInFlight = false
+    private var moreCommentsRequestWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         baseURL: URL = URL(string: "https://www.reddit.com")!,
@@ -162,6 +172,33 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeThread(data)
     }
 
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID? = nil
+    ) async throws -> [CommentTreeNode] {
+        guard !childIDs.isEmpty else { return [] }
+        await acquireMoreCommentsRequest()
+        defer { releaseMoreCommentsRequest() }
+        let route = Self.moreCommentsRoute(
+            postFullname: postFullname,
+            childIDs: Array(childIDs.prefix(100)),
+            sort: sort
+        )
+        let data = try await requestData(
+            method: "GET",
+            path: route.path,
+            query: route.query,
+            body: nil,
+            account: account,
+            retryable: true,
+            responseCachePolicy: .reloadIgnoringCache
+        )
+        return try RedditJSONCodec.decodeMoreComments(data, parentFullname: parentFullname)
+    }
+
     func search(_ request: RedditSearchRequest, account: AccountID? = nil) async throws -> Listing<Post> {
         let path: String
         if let community = normalizedCommunity(request.community) {
@@ -220,6 +257,19 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeUserSearch(data)
+    }
+
+    func trendingCommunities(limit: Int = 25) async throws -> Listing<Community> {
+        let route = Self.trendingCommunitiesRoute(limit: limit)
+        let data = try await requestData(
+            method: "GET",
+            path: route.path,
+            query: route.query,
+            body: nil,
+            account: nil,
+            retryable: true
+        )
+        return try RedditJSONCodec.decodeCommunities(data)
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
@@ -535,6 +585,52 @@ actor URLSessionRedditClient: RedditClient {
                 URLQueryItem(name: "limit", value: String(request.limit)),
             ]
         )
+    }
+
+    static func trendingCommunitiesRoute(limit: Int) -> (path: String, query: [URLQueryItem]) {
+        (
+            "/subreddits/popular.json",
+            [
+                URLQueryItem(name: "raw_json", value: "1"),
+                URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))),
+            ]
+        )
+    }
+
+    static func moreCommentsRoute(
+        postFullname: String,
+        childIDs: [String],
+        sort: CommentSort
+    ) -> (path: String, query: [URLQueryItem]) {
+        (
+            "/api/morechildren",
+            [
+                URLQueryItem(name: "api_type", value: "json"),
+                URLQueryItem(name: "link_id", value: postFullname),
+                URLQueryItem(name: "children", value: childIDs.prefix(100).joined(separator: ",")),
+                URLQueryItem(name: "limit_children", value: "false"),
+                URLQueryItem(name: "sort", value: sort == .best ? "confidence" : sort.rawValue),
+                URLQueryItem(name: "raw_json", value: "1"),
+            ]
+        )
+    }
+
+    private func acquireMoreCommentsRequest() async {
+        if !isMoreCommentsRequestInFlight {
+            isMoreCommentsRequestInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            moreCommentsRequestWaiters.append(continuation)
+        }
+    }
+
+    private func releaseMoreCommentsRequest() {
+        guard !moreCommentsRequestWaiters.isEmpty else {
+            isMoreCommentsRequestInFlight = false
+            return
+        }
+        moreCommentsRequestWaiters.removeFirst().resume()
     }
 
     private func accountFromScope(_ scope: AccountScope) -> AccountID? {

@@ -175,6 +175,43 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(query["raw_json"], "1")
     }
 
+    func testTrendingCommunitiesBuildsPublicWebsiteJSONRoute() {
+        let route = URLSessionRedditClient.trendingCommunitiesRoute(limit: 500)
+        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(route.path, "/subreddits/popular.json")
+        XCTAssertEqual(query["limit"], "100")
+        XCTAssertEqual(query["raw_json"], "1")
+    }
+
+    func testMoreCommentsBuildsPublicWebsiteJSONRoute() {
+        let route = URLSessionRedditClient.moreCommentsRoute(
+            postFullname: "t3_sample",
+            childIDs: ["first", "second"],
+            sort: .top
+        )
+        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(route.path, "/api/morechildren")
+        XCTAssertEqual(query["api_type"], "json")
+        XCTAssertEqual(query["link_id"], "t3_sample")
+        XCTAssertEqual(query["children"], "first,second")
+        XCTAssertEqual(query["limit_children"], "false")
+        XCTAssertEqual(query["sort"], "top")
+        XCTAssertEqual(query["raw_json"], "1")
+
+        let bestRoute = URLSessionRedditClient.moreCommentsRoute(
+            postFullname: "t3_sample",
+            childIDs: ["first"],
+            sort: .best
+        )
+        XCTAssertEqual(bestRoute.query.first(where: { $0.name == "sort" })?.value, "confidence")
+    }
+
     func testCommunityCodecPrefersCommunityIconAndFallsBackToLegacyIcon() throws {
         let data = Data(
             #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","community_icon":"https://styles.redditmedia.com/swift.png","icon_img":"https://styles.redditmedia.com/legacy-swift.png"}},{"kind":"t5","data":{"display_name":"iPhone","community_icon":"","icon_img":"https://styles.redditmedia.com/iphone.png"}}]}}"#.utf8
@@ -211,6 +248,20 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(model.state, .loaded)
         XCTAssertEqual(model.users.map(\.reference.username), ["Swift_Reader"])
         XCTAssertTrue(model.posts.isEmpty)
+        XCTAssertTrue(model.communities.isEmpty)
+    }
+
+    @MainActor
+    func testTrendingCommunitiesLoadSeparatelyFromSearchResults() async {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"AskReddit","subscribers":58184146,"community_icon":"https://styles.redditmedia.com/askreddit.png"}}]}}"#.utf8
+        )
+        let model = SearchFeatureModel(reddit: FixtureRedditClient(communitiesData: data))
+
+        await model.loadTrendingCommunities()
+
+        XCTAssertEqual(model.trendingState, .loaded)
+        XCTAssertEqual(model.trendingCommunities.map(\.name), ["askreddit"])
         XCTAssertTrue(model.communities.isEmpty)
     }
 
@@ -471,17 +522,29 @@ final class DomainTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadingMoreCommentsKeepsTheVisibleTreeUntilRefreshCompletes() async throws {
-        let postData = Data(
-            #"[{"data":{"children":[{"kind":"t3","data":{"id":"sample","name":"t3_sample","permalink":"/r/swift/comments/sample/example/","title":"Example","subreddit":"swift","is_self":true}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"new-comment","name":"t1_new-comment","parent_id":"t3_sample","author":"reader","body":"Loaded comment","created_utc":0,"replies":""}}]}}]"#.utf8
+    func testLoadingMoreCommentsKeepsTheVisibleTreeThenReplacesThePlaceholder() async throws {
+        let moreCommentsData = Data(
+            #"{"json":{"errors":[],"data":{"things":[{"kind":"t1","data":{"id":"child","name":"t1_child","parent_id":"t1_parent","author":"reader","body":"Loaded comment","created_utc":0,"replies":""}},{"kind":"t1","data":{"id":"grandchild","name":"t1_grandchild","parent_id":"t1_child","author":"another_reader","body":"Nested reply","created_utc":0,"replies":""}}]}}}"#.utf8
         )
-        let client = FixtureRedditClient(postData: postData, postDelay: .milliseconds(100))
+        let client = FixtureRedditClient(
+            moreCommentsData: moreCommentsData,
+            moreCommentsDelay: .milliseconds(100)
+        )
         let store = OctonautFeatureStore(reddit: client)
-        let visibleComment = CommentCardModel(
-            id: "visible-comment", author: "reader", body: "Keep me visible", score: 1,
+        let more = CommentCardModel.more(
+            MoreCommentsNode(
+                id: "more-comments",
+                parentFullname: "t1_parent",
+                childIDs: ["child", "grandchild"],
+                count: 2
+            ),
+            depth: 1
+        )
+        let parent = CommentCardModel(
+            id: "parent", author: "reader", body: "Keep me visible", score: 1,
             age: "now", vote: 0, depth: 0, isModerator: false, isCollapsed: false,
-            children: [])
-        store.comments = [visibleComment]
+            children: [more])
+        store.comments = [parent]
         store.detailState = .loaded
 
         let loadTask = Task {
@@ -489,15 +552,20 @@ final class DomainTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(10))
 
-        XCTAssertEqual(store.comments.map(\.id), ["visible-comment"])
+        XCTAssertEqual(store.comments[0].children.map(\.id), ["more-comments"])
         XCTAssertEqual(store.detailState, .loaded)
         XCTAssertTrue(store.moreLoadingIDs.contains("more-comments"))
 
         await loadTask.value
 
-        XCTAssertEqual(store.comments.map(\.id), ["new-comment"])
+        XCTAssertEqual(store.comments.map(\.id), ["parent"])
+        XCTAssertEqual(store.comments[0].children.map(\.id), ["child"])
+        XCTAssertEqual(store.comments[0].children[0].children.map(\.id), ["grandchild"])
+        XCTAssertEqual(store.comments[0].children[0].depth, 1)
+        XCTAssertEqual(store.comments[0].children[0].children[0].depth, 2)
         XCTAssertEqual(store.detailState, .loaded)
         XCTAssertFalse(store.moreLoadingIDs.contains("more-comments"))
+        XCTAssertFalse(store.moreFailedIDs.contains("more-comments"))
     }
 
     @MainActor
