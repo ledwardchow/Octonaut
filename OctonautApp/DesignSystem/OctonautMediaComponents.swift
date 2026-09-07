@@ -269,7 +269,6 @@ struct OctonautAsyncImage: View {
                     Image(uiImage: displayedImage)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
-                        .transition(.opacity)
                 } else if loadFailed {
                     ZStack {
                         Color(uiColor: .tertiarySystemBackground)
@@ -300,9 +299,7 @@ struct OctonautAsyncImage: View {
             do {
                 let loadedImage = try await OctonautImageCache.image(for: url)
                 guard !Task.isCancelled else { return }
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    image = loadedImage
-                }
+                image = loadedImage
             } catch is CancellationError {
                 return
             } catch {
