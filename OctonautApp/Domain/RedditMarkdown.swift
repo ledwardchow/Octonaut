@@ -28,7 +28,8 @@ struct RedditMarkdownView: View {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .text(let text):
-                    Text(RedditPostMarkdown.attributedString(from: text))
+                    RedditSpoilerText(source: text)
+                        .id(text)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let table):
                     RedditMarkdownTableView(table: table)
@@ -38,6 +39,23 @@ struct RedditMarkdownView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Hidden content is replaced, so selection and accessibility cannot disclose it.
+private struct RedditSpoilerText: View {
+    let source: String
+    @State private var revealed: Set<Int> = []
+
+    var body: some View {
+        Text(RedditPostMarkdown.attributedString(from: source, revealedSpoilers: revealed))
+            .environment(\.openURL, OpenURLAction { url in
+                guard url.scheme == "octonaut-spoiler" else { return .systemAction }
+                if let index = Int(url.host ?? "") {
+                    revealed.insert(index)
+                }
+                return .handled
+            })
     }
 }
 
@@ -111,7 +129,8 @@ private struct RedditMarkdownTableView: View {
     }
 
     private func cell(_ source: String, isHeader: Bool = false) -> some View {
-        Text(RedditPostMarkdown.attributedString(from: source))
+        RedditSpoilerText(source: source)
+            .id(source)
             .fontWeight(isHeader ? .semibold : .regular)
             .fixedSize(horizontal: false, vertical: true)
             .frame(minWidth: 88, maxWidth: 180, alignment: .leading)
@@ -198,6 +217,11 @@ enum RedditPostMarkdown {
         in source: String,
         to blocks: inout [RedditMarkdownBlock]
     ) {
+        // Keep spoiler contents in text until the user reveals them.
+        guard spoilerRanges(in: source).isEmpty else {
+            appendText(source, to: &blocks)
+            return
+        }
         guard let expression = try? NSRegularExpression(
             pattern: #"!?\[([^\]\r\n]*)\]\((https://[^)\s]+)\)|https://[^\s<>()]+"#
         ) else {
@@ -270,7 +294,78 @@ enum RedditPostMarkdown {
         return redditImageURL(from: nestedURL)
     }
 
-    static func attributedString(from source: String) -> AttributedString {
+    static func attributedString(
+        from source: String,
+        revealedSpoilers: Set<Int> = []
+    ) -> AttributedString {
+        let ranges = spoilerRanges(in: source)
+        // A fresh token prevents user text from colliding with placeholders.
+        let prefix = "OCTONAUT" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        var protected = source
+        for (index, range) in ranges.enumerated().reversed() {
+            protected.replaceSubrange(range, with: "\(prefix)S\(index)END")
+        }
+        var result = renderMarkdown(protected)
+        for (index, range) in ranges.enumerated() {
+            guard let tokenRange = result.range(of: "\(prefix)S\(index)END") else { continue }
+            var replacement: AttributedString
+            if revealedSpoilers.contains(index) {
+                replacement = renderMarkdown(String(source[range].dropFirst(2).dropLast(2)))
+            } else {
+                replacement = AttributedString("[Reveal spoiler]")
+                replacement.link = URL(string: "octonaut-spoiler://\(index)")
+            }
+            result.replaceSubrange(tokenRange, with: replacement)
+        }
+        return result
+    }
+
+    /// Recognizes tags outside escaped text, inline code, and fenced code.
+    private static func spoilerRanges(in source: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var cursor = source.startIndex
+        var fence: Fence?
+        while cursor < source.endIndex {
+            let end = source[cursor...].firstIndex(of: "\n") ?? source.endIndex
+            let line = String(source[cursor..<end])
+            if let active = fence {
+                if isClosingFence(line, matching: active) { fence = nil }
+            } else if let opening = openingFence(in: line) {
+                fence = opening
+            } else {
+                var position = cursor
+                while position < end {
+                    if source[position] == "\\" {
+                        position = source.index(after: position)
+                        if position < end { position = source.index(after: position) }
+                        continue
+                    }
+                    if source[position] == "`" {
+                        let count = source[position..<end].prefix(while: { $0 == "`" }).count
+                        let delimiter = String(repeating: "`", count: count)
+                        let after = source.index(position, offsetBy: count)
+                        if let closing = source.range(of: delimiter, range: after..<end) {
+                            position = closing.upperBound
+                        } else {
+                            position = after
+                        }
+                        continue
+                    }
+                    if source[position..<end].hasPrefix(">!"),
+                       let closing = source.range(of: "!<", range: source.index(position, offsetBy: 2)..<end) {
+                        ranges.append(position..<closing.upperBound)
+                        position = closing.upperBound
+                    } else {
+                        position = source.index(after: position)
+                    }
+                }
+            }
+            cursor = end < source.endIndex ? source.index(after: end) : end
+        }
+        return ranges
+    }
+
+    private static func renderMarkdown(_ source: String) -> AttributedString {
         let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -373,9 +468,6 @@ enum RedditPostMarkdown {
         let content = insertingMissingLinkSpacing(in: source)
         let trimmed = content.drop(while: { $0 == " " })
         let indentation = content.count - trimmed.count
-        if trimmed.hasPrefix(">!"), trimmed.hasSuffix("!<") {
-            return renderInline(String(trimmed.dropFirst(2).dropLast(2)))
-        }
         if indentation <= 3, trimmed.first == ">" {
             let quote = trimmed.dropFirst().drop(while: { $0 == " " || $0 == "\t" })
             return renderInline("▎ " + String(quote))
@@ -392,11 +484,6 @@ enum RedditPostMarkdown {
     }
 
     private static func renderInline(_ source: String, headingLevel: Int? = nil) -> AttributedString {
-        let source = source.replacingOccurrences(
-            of: #">!([^\n]+?)!<"#,
-            with: "$1",
-            options: .regularExpression
-        )
         var result = (try? AttributedString(
             markdown: source,
             options: AttributedString.MarkdownParsingOptions(

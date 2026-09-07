@@ -4,6 +4,47 @@ import XCTest
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
+    func testGalleryIncludesEveryAlbumImageAndKeepsViewerPage() {
+        var album = PostCardModel.sample
+        album.hasMedia = true
+        album.mediaKind = "gallery"
+        album.galleryURLs = (0..<120).map { URL(string: "https://i.redd.it/image-\($0).jpg")! }
+        let items = GalleryMediaItem.items(from: [album])
+        XCTAssertEqual(items.count, 120)
+        XCTAssertEqual(items.last?.page, 119)
+        XCTAssertEqual(items.last?.url, album.galleryURLs.last)
+        XCTAssertEqual(Set(items.map(\.id)).count, 120)
+    }
+
+    func testGalleryUsesFullImageAndVideoThumbnail() {
+        var post = PostCardModel.sample
+        post.hasMedia = true
+        post.galleryURLs = []
+        post.mediaKind = "image"
+        post.isVideo = false
+        post.mediaURL = URL(string: "https://i.redd.it/full.jpg")!
+        post.thumbnailURL = URL(string: "https://preview.redd.it/thumb.jpg")!
+        XCTAssertEqual(GalleryMediaItem.items(from: [post]).first?.previewURL, post.mediaURL)
+        post.mediaKind = "video"
+        XCTAssertEqual(GalleryMediaItem.items(from: [post]).first?.previewURL, post.thumbnailURL)
+        post.hasMedia = false
+        XCTAssertTrue(GalleryMediaItem.items(from: [post]).isEmpty)
+    }
+
+    @MainActor
+    func testGalleryCanPagePastEmptyResultsAndStopsOnRepeatedCursor() async {
+        let data = Data(#"{"data":{"after":"next-page","children":[]}}"#.utf8)
+        let client = FixtureRedditClient(listingData: data)
+        let store = OctonautFeatureStore(reddit: client)
+        await store.refreshPosts(for: .popular)
+        XCTAssertEqual(store.galleryPageCursor(for: .popular), "next-page")
+        XCTAssertNil(store.galleryPageCursor(for: .home))
+        await store.loadMorePosts(for: .popular)
+        XCTAssertNil(store.galleryPageCursor(for: .popular))
+        let requests = await client.listingRequests()
+        XCTAssertEqual(requests, 2)
+    }
+
     @MainActor
     func testPostsSplitStateRoutesFeedsAndPostsToTheirColumns() throws {
         let state = PostsSplitState()
@@ -380,8 +421,32 @@ final class DomainTests: XCTestCase {
 
         XCTAssertEqual(
             String(attributed.characters),
-            "▎ quoted text\n\n• first item\n• second item\n\nspoiler text"
+            "▎ quoted text\n\n• first item\n• second item\n\n[Reveal spoiler]"
         )
+    }
+
+    func testSpoilersRevealIndependentlyAndPreserveLinks() {
+        let source = "Before >!**secret** [link](https://example.com)!< and >!second!< after"
+        let hidden = RedditPostMarkdown.attributedString(from: source)
+        XCTAssertEqual(String(hidden.characters), "Before [Reveal spoiler] and [Reveal spoiler] after")
+        XCTAssertFalse(hidden.runs.contains { $0.link?.host == "example.com" })
+        let revealed = RedditPostMarkdown.attributedString(from: source, revealedSpoilers: [0])
+        XCTAssertEqual(String(revealed.characters), "Before secret link and [Reveal spoiler] after")
+        XCTAssertTrue(revealed.runs.contains { $0.link?.host == "example.com" })
+    }
+
+    func testSpoilerSyntaxInCodeAndEscapedTextStaysLiteral() {
+        for source in ["`>!literal!<`", "```\n>!literal!<\n```", #"\>!literal!<"#] {
+            let text = RedditPostMarkdown.attributedString(from: source)
+            XCTAssertEqual(String(text.characters), ">!literal!<")
+            XCTAssertFalse(text.runs.contains { $0.link != nil })
+        }
+    }
+
+    func testSpoilerImageDoesNotBecomeVisibleImageBlock() {
+        let source = ">![Secret](https://i.redd.it/secret.png)!<"
+        XCTAssertEqual(RedditPostMarkdown.blocks(from: source), [.text(source)])
+        XCTAssertEqual(String(RedditPostMarkdown.attributedString(from: source).characters), "[Reveal spoiler]")
     }
 
     func testMarkdownParsesPipeTablesAsBlocks() {

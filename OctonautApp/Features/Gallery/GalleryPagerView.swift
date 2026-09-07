@@ -1,58 +1,85 @@
 import SwiftUI
 
+struct GalleryMediaItem: Identifiable {
+    let post: PostCardModel
+    let page: Int
+    let url: URL
+
+    var id: String { "\(post.id):\(page)" }
+    var isVideo: Bool { post.isVideo || ["video", "gif", "embeddedVideo"].contains(post.mediaKind) }
+    var previewURL: URL? { isVideo ? post.thumbnailURL : url }
+
+    static func items(from posts: [PostCardModel]) -> [Self] {
+        posts.filter(\.hasMedia).flatMap { post in
+            let urls = post.galleryURLs.isEmpty ? [post.mediaURL].compactMap { $0 } : post.galleryURLs
+            return urls.enumerated().map { Self(post: post, page: $0.offset, url: $0.element) }
+        }
+    }
+}
+
 @MainActor
-struct GalleryPagerView: View {
-    let posts: [PostCardModel]
-    let store: OctonautFeatureStore
-    @Environment(\.dismiss) private var dismiss
-    @State private var selectedPost: PostCardModel?
+struct GalleryMediaTile: View {
+    let item: GalleryMediaItem
+    var blurNSFW = true
+    let onOpen: () -> Void
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    private var isBlurred: Bool {
+        item.post.isSpoiler || (item.post.isNSFW && blurNSFW)
+    }
+
+    private var aspectRatio: CGFloat {
+        guard let image, image.size.height > 0 else { return 1 }
+        return image.size.width / image.size.height
+    }
 
     var body: some View {
-        ZStack(alignment: .top) {
-            Color.black.ignoresSafeArea()
-            if posts.isEmpty {
-                ContentUnavailableView("No media posts", systemImage: "photo.on.rectangle.angled")
-                    .foregroundStyle(.white)
-            } else {
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(posts) { post in
-                            Button { selectedPost = post } label: {
-                                ZStack(alignment: .bottomLeading) {
-                                    OctonautAsyncImage(url: post.thumbnailURL ?? post.mediaURL ?? post.galleryURLs.first)
-                                        .frame(maxWidth: .infinity)
-                                        .containerRelativeFrame(.vertical)
-                                        .clipped()
-                                    LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .center, endPoint: .bottom)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(post.title).font(.headline).lineLimit(3)
-                                        Text("r/\(post.community) • \(post.score.formatted()) points")
-                                            .font(.caption).foregroundStyle(.white.opacity(0.8))
-                                    }
-                                    .foregroundStyle(.white)
-                                    .padding()
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .containerRelativeFrame(.vertical)
-                        }
+        Button(action: onOpen) {
+            Color(uiColor: .secondarySystemBackground)
+                .aspectRatio(aspectRatio, contentMode: .fit)
+                .overlay {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .blur(radius: isBlurred ? 24 : 0)
+                    } else if failed || item.previewURL == nil {
+                        Image(systemName: item.isVideo ? "play.rectangle" : "photo.slash")
+                            .font(.title2).foregroundStyle(.secondary)
+                    } else {
+                        ProgressView()
                     }
                 }
-                .scrollTargetBehavior(.paging)
-                .scrollIndicators(.hidden)
-            }
-            HStack {
-                Button("Close", systemImage: "xmark") { dismiss() }
-                    .labelStyle(.iconOnly)
-                    .accessibilityLabel("Close gallery")
-                Spacer()
-            }
-            .padding()
-            .foregroundStyle(.white)
-            .background(LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom))
+                .clipped()
+                .overlay(alignment: .bottomTrailing) {
+                    if item.isVideo || isBlurred {
+                        Image(systemName: isBlurred ? "eye.slash.fill" : "play.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.6), in: Capsule())
+                            .padding(6)
+                    }
+                }
+                .contentShape(Rectangle())
         }
-        .fullScreenCover(item: $selectedPost) { post in
-            OctonautMediaViewer(post: post)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(item.post.isSensitive ? "Sensitive media. " : "")\(item.post.title), image \(item.page + 1) of \(max(1, item.post.galleryURLs.count))")
+        .accessibilityHint("Opens the full screen media viewer")
+        .task(id: item.previewURL) {
+            image = nil
+            failed = false
+            guard let url = item.previewURL else { return }
+            do {
+                let result = try await OctonautImageCache.image(for: url)
+                guard !Task.isCancelled else { return }
+                image = result
+            } catch is CancellationError {
+                return
+            } catch {
+                failed = true
+            }
         }
     }
 }

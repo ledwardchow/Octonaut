@@ -822,7 +822,7 @@ final class OctonautFeatureStore {
     /// coordinator changes selection.
     private var accountID: AccountID?
     private var accountGeneration: UInt = 0
-    @ObservationIgnored private var nextPage: String?
+    private var nextPage: String?
     @ObservationIgnored private var loadedFeed: FeedDescriptorModel?
     @ObservationIgnored private var feedCache: [FeedDescriptorModel: FeedCacheEntry] = [:]
     @ObservationIgnored private let feedCacheFreshness: TimeInterval = 15 * 60
@@ -1406,8 +1406,17 @@ final class OctonautFeatureStore {
         }
     }
 
+    func galleryPageCursor(for descriptor: FeedDescriptorModel) -> String? {
+        guard loadedFeed == descriptor else { return nil }
+        return nextPage
+    }
+
+    @ObservationIgnored private var isLoadingNextPage = false
+
     func loadMorePosts(for descriptor: FeedDescriptorModel = .popular) async {
-        guard feedState == .loaded else { return }
+        guard feedState == .loaded || feedState == .empty, !isLoadingNextPage else { return }
+        isLoadingNextPage = true
+        defer { isLoadingNextPage = false }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
@@ -1441,16 +1450,17 @@ final class OctonautFeatureStore {
                 ),
                 account: selectedAccountID
             )
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard !Task.isCancelled, loadedFeed == descriptor, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let filtered = await applyFilters(to: listing.items)
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard !Task.isCancelled, loadedFeed == descriptor, self.nextPage == nextPage, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let existing = Set(posts.map(\.id))
             posts.append(
                 contentsOf: filtered.posts.filter { !existing.contains($0.id) }.map(PostCardModel.init))
             filteredPostCount += filtered.removedCount
-            self.nextPage = listing.after
+            self.nextPage = listing.after == nextPage ? nil : listing.after
+            feedState = posts.isEmpty ? .empty : .loaded
             feedCache[descriptor] = FeedCacheEntry(
                 posts: posts,
                 filteredPostCount: filteredPostCount,

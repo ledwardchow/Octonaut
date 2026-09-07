@@ -795,6 +795,12 @@ private struct MacMediaLightboxView: View {
 
     private let saver = MacMediaSaver()
 
+    private var shouldBlurMedia: Bool {
+        guard !isRevealed else { return false }
+        return (post.isNSFW && dependencies.settings.blurNSFWMedia)
+            || (post.isSpoiler && dependencies.settings.blurSpoilers)
+    }
+
     private var mediaURLs: [URL] {
         post.galleryURLs.isEmpty ? post.mediaURL.map { [$0] } ?? [] : post.galleryURLs
     }
@@ -815,6 +821,7 @@ private struct MacMediaLightboxView: View {
                 mediaView(for: currentURL)
                     .id(currentURL)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .blur(radius: shouldBlurMedia ? 24 : 0)
                     .contentShape(Rectangle())
                     .accessibilityAction(named: fillsPane ? "Fit media in post" : "Fill detail pane") {
                         onTogglePaneFill()
@@ -827,7 +834,7 @@ private struct MacMediaLightboxView: View {
                     .foregroundStyle(.white)
             }
 
-            if post.isSensitive && !isRevealed {
+            if shouldBlurMedia {
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .environment(\.colorScheme, .dark)

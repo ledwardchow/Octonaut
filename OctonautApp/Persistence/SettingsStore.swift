@@ -137,6 +137,25 @@ enum ThemeChoice: Hashable, Codable, Sendable {
 final class SettingsStore {
     private let defaults: UserDefaults
 
+    private var communityFeedLayouts: [String: String] {
+        didSet { persist(communityFeedLayouts, key: "appearance.communityFeedLayouts") }
+    }
+
+    func feedLayout(for community: String?) -> FeedLayout {
+        guard let community,
+              let rawValue = communityFeedLayouts[community.lowercased()],
+              let layout = FeedLayout(rawValue: rawValue) else { return feedLayout }
+        return layout
+    }
+
+    func setFeedLayout(_ layout: FeedLayout, for community: String?) {
+        if let community {
+            communityFeedLayouts[community.lowercased()] = layout.rawValue
+        } else {
+            feedLayout = layout
+        }
+    }
+
     var feedLayout: FeedLayout { didSet { persist(feedLayout.rawValue, key: Keys.feedLayout) } }
     var compactThumbnailSide: CompactThumbnailSide { didSet { persist(compactThumbnailSide.rawValue, key: Keys.compactThumbnailSide) } }
     var useSplitViewOnIPad: Bool { didSet { persist(useSplitViewOnIPad, key: Keys.useSplitViewOnIPad) } }
@@ -200,6 +219,7 @@ final class SettingsStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        communityFeedLayouts = defaults.dictionary(forKey: "appearance.communityFeedLayouts") as? [String: String] ?? [:]
 
         feedLayout = FeedLayout(rawValue: defaults.string(forKey: Keys.feedLayout) ?? "full") ?? .full
         compactThumbnailSide = CompactThumbnailSide(rawValue: defaults.string(forKey: Keys.compactThumbnailSide) ?? "left") ?? .left
@@ -258,6 +278,7 @@ final class SettingsStore {
         let cleanDefaults = UserDefaults(suiteName: "com.ledwardchow.Octonaut.defaults-reset") ?? UserDefaults.standard
         cleanDefaults.removePersistentDomain(forName: "com.ledwardchow.Octonaut.defaults-reset")
         let fresh = SettingsStore(defaults: cleanDefaults)
+        communityFeedLayouts = [:]
         feedLayout = fresh.feedLayout
         compactThumbnailSide = fresh.compactThumbnailSide
         useSplitViewOnIPad = fresh.useSplitViewOnIPad
