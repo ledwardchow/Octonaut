@@ -72,4 +72,23 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(values.postsViewed, 3)
         XCTAssertEqual(values.communityVisits, 1)
     }
+
+    @MainActor
+    func testAccountSurvivesReopeningDiskStore() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("accounts.store")
+        let account = Account(username: "persistent-reader")
+        do {
+            let container = try PersistenceSchema.makeContainer(storeURL: url)
+            let store = SwiftDataPersistenceStore(container: container)
+            try await store.saveAccount(account)
+        }
+        let reopened = try PersistenceSchema.makeContainer(storeURL: url)
+        let restored = try await SwiftDataPersistenceStore(container: reopened).loadAccounts()
+        XCTAssertEqual(restored.map(\.id), [account.id])
+        XCTAssertEqual(restored.first?.username, account.username)
+    }
+
 }

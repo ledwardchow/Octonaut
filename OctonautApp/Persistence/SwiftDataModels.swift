@@ -292,8 +292,15 @@ final class HelpIndexRecord {
 
 enum PersistenceSchema {
     @MainActor
-    static func makeContainer(inMemory: Bool = false) throws -> ModelContainer {
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory)
+    static func makeContainer(inMemory: Bool = false, storeURL: URL? = nil) throws -> ModelContainer {
+        // Account metadata stays local. Feed sync uses iCloud key-value storage separately.
+        // Automatic discovery would try to sync this schema when iCloud is enabled.
+        let configuration: ModelConfiguration
+        if let storeURL {
+            configuration = ModelConfiguration(url: storeURL, cloudKitDatabase: .none)
+        } else {
+            configuration = ModelConfiguration(isStoredInMemoryOnly: inMemory, cloudKitDatabase: .none)
+        }
         return try ModelContainer(
             for: AccountRecord.self,
             SeenPostRecord.self,
