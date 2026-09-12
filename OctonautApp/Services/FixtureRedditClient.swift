@@ -4,6 +4,8 @@ import Foundation
 /// It never creates a URLSession and therefore cannot contact Reddit.
 actor FixtureRedditClient: RedditClient {
     private let listingData: Data?
+    private let listingsByDestination: [FeedDestination: Data]
+    private let delaysByDestination: [FeedDestination: Duration]
     private let postData: Data?
     private let moreCommentsData: Data?
     private let searchData: Data?
@@ -14,11 +16,14 @@ actor FixtureRedditClient: RedditClient {
     private let postDelay: Duration?
     private let moreCommentsDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
+    private(set) var lastListingRequest: ListingRequest?
     private var listingRequestCount = 0
     private var subscribedCommunitiesRequestCount = 0
 
     init(
         listingData: Data? = nil,
+        listingsByDestination: [FeedDestination: Data] = [:],
+        delaysByDestination: [FeedDestination: Duration] = [:],
         postData: Data? = nil,
         moreCommentsData: Data? = nil,
         searchData: Data? = nil,
@@ -31,6 +36,8 @@ actor FixtureRedditClient: RedditClient {
         actionResult: ActionResult = ActionResult(succeeded: true)
     ) {
         self.listingData = listingData
+        self.listingsByDestination = listingsByDestination
+        self.delaysByDestination = delaysByDestination
         self.postData = postData
         self.moreCommentsData = moreCommentsData
         self.searchData = searchData
@@ -50,6 +57,8 @@ actor FixtureRedditClient: RedditClient {
             return try Data(contentsOf: url, options: [.mappedIfSafe])
         }
         self.listingData = try read("listing.json")
+        self.listingsByDestination = [:]
+        self.delaysByDestination = [:]
         self.postData = try read("post.json")
         self.moreCommentsData = try read("more_comments.json")
         self.searchData = try read("search.json")
@@ -63,11 +72,12 @@ actor FixtureRedditClient: RedditClient {
     }
 
     func listing(_ request: ListingRequest, account: AccountID? = nil) async throws -> Listing<Post> {
+        lastListingRequest = request
         listingRequestCount += 1
-        if let listingDelay {
+        if let listingDelay = delaysByDestination[request.feed.destination] ?? listingDelay {
             try await Task.sleep(for: listingDelay)
         }
-        guard let listingData else { return Listing(items: []) }
+        guard let listingData = listingsByDestination[request.feed.destination] ?? listingData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(listingData)
     }
 

@@ -111,13 +111,14 @@ actor URLSessionRedditClient: RedditClient {
     init(
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
-        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+        sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.baseURL = baseURL
         self.credentialVault = credentialVault
         self.userAgent = userAgent
 
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         // Ephemeral sessions keep Reddit's logged-out edge cookies in memory
         // without persisting browsing state beyond this app process.
         configuration.httpShouldSetCookies = true
@@ -143,15 +144,24 @@ actor URLSessionRedditClient: RedditClient {
             query.append(URLQueryItem(name: "t", value: topTime.rawValue))
         }
         appendPagination(after: request.after, before: request.before, to: &query)
-        let data = try await requestData(
-            method: "GET",
-            path: path,
-            query: query,
-            body: nil,
-            account: account ?? accountFromScope(request.accountScope),
-            retryable: true,
-            responseCachePolicy: request.responseCachePolicy
-        )
+        let data: Data
+        do {
+            data = try await requestData(
+                method: "GET", path: path, query: query, body: nil,
+                account: account ?? accountFromScope(request.accountScope),
+                retryable: true, responseCachePolicy: request.responseCachePolicy
+            )
+        } catch RedditClientError.notFound {
+            // The main website can return 404 for combined community listings
+            // that the old website still serves. Keep the same query and session.
+            guard case .combined = request.feed.destination else { throw RedditClientError.notFound }
+            data = try await requestData(
+                method: "GET", path: path, query: query, body: nil,
+                account: account ?? accountFromScope(request.accountScope),
+                retryable: true, responseCachePolicy: request.responseCachePolicy,
+                websiteHost: "old.reddit.com"
+            )
+        }
         return try RedditJSONCodec.decodePosts(data)
     }
 
@@ -339,7 +349,8 @@ actor URLSessionRedditClient: RedditClient {
         body: [String: String]?,
         account: AccountID?,
         retryable: Bool,
-        responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache
+        responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache,
+        websiteHost: String? = nil
     ) async throws -> Data {
         var attempt = 0
         while true {
@@ -350,7 +361,8 @@ actor URLSessionRedditClient: RedditClient {
                     query: query,
                     body: body,
                     account: account,
-                    responseCachePolicy: responseCachePolicy
+                    responseCachePolicy: responseCachePolicy,
+                    websiteHost: websiteHost
                 )
             } catch let error as RedditClientError {
                 guard retryable, attempt < 2, shouldRetry(error) else { throw error }
@@ -379,9 +391,10 @@ actor URLSessionRedditClient: RedditClient {
         query: [URLQueryItem],
         body: [String: String]?,
         account: AccountID?,
-        responseCachePolicy: ListingRequest.ResponseCachePolicy
+        responseCachePolicy: ListingRequest.ResponseCachePolicy,
+        websiteHost: String? = nil
     ) async throws -> Data {
-        guard let url = makeURL(path: path, query: query) else { throw RedditClientError.invalidURL }
+        guard let url = makeURL(path: path, query: query, websiteHost: websiteHost) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -474,9 +487,18 @@ actor URLSessionRedditClient: RedditClient {
         }
     }
 
-    private func makeURL(path: String, query: [URLQueryItem]) -> URL? {
+    private func makeURL(path: String, query: [URLQueryItem], websiteHost: String? = nil) -> URL? {
         guard let baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         var components = baseComponents
+        if let websiteHost {
+            guard websiteHost == "old.reddit.com" else { return nil }
+            components.host = websiteHost
+        }
+        guard components.scheme == "https",
+              let host = components.host?.lowercased(),
+              ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "m.reddit.com"].contains(host),
+              components.user == nil, components.password == nil,
+              components.port == nil || components.port == 443 else { return nil }
         components.path = path.hasPrefix("/") ? path : "/\(path)"
         components.queryItems = query.filter { $0.value != nil }
         return components.url

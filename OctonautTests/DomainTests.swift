@@ -696,6 +696,33 @@ final class DomainTests: XCTestCase {
     }
 
     @MainActor
+    func testSubscriptionsRestartWhenSameAccountLogsInAgain() async throws {
+        let accountID = AccountID()
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","user_is_subscriber":true}}]}}"#.utf8
+        )
+        let client = FixtureRedditClient(
+            communitiesData: data,
+            subscribedCommunitiesDelay: .milliseconds(100)
+        )
+        let store = OctonautFeatureStore(reddit: client, accountID: accountID)
+        let initialLoad = Task { await store.refreshCommunities() }
+        while await client.subscribedCommunitiesRequests() == 0 {
+            await Task.yield()
+        }
+
+        store.synchronizeAccount(id: accountID, generation: 1, accounts: [])
+        await store.refreshCommunities()
+        await initialLoad.value
+
+        XCTAssertEqual(store.communities.map(\.name), ["swift"])
+        XCTAssertEqual(store.communitiesState, .loaded)
+        let requestCount = await client.subscribedCommunitiesRequests()
+        XCTAssertEqual(requestCount, 2)
+        await SubscribedCommunitiesCache.shared.remove(for: accountID)
+    }
+
+    @MainActor
     func testHomeFeedReturnsFromMemoryCacheWithoutAnotherRequest() async throws {
         let data = Data(
             #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"home1","name":"t3_home1","permalink":"/r/swift/comments/home1/example/","title":"Cached home post","subreddit":"swift","is_self":true}}]}}"#.utf8

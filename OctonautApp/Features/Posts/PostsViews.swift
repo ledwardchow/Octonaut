@@ -8,6 +8,7 @@ struct PostsRootView: View {
     var selectedFeed: FeedDescriptorModel? = nil
     @Environment(AppDependencies.self) private var dependencies
     @State private var communityQuery = ""
+    @State private var editingFeed: CustomFeed?
     @AppStorage("posts.sections.feeds.expanded") private var feedsExpanded = true
     @AppStorage("posts.sections.favorites.expanded") private var favoritesExpanded = true
     @AppStorage("posts.sections.communities.expanded") private var communitiesExpanded = true
@@ -24,9 +25,25 @@ struct PostsRootView: View {
                     feedLink(.home, title: "Home", systemImage: "house.fill")
                     feedLink(.popular, title: "Popular", systemImage: "flame.fill")
                     feedLink(.all, title: "All", systemImage: "globe")
+                    ForEach(dependencies.settings.customFeeds) { feed in
+                        feedLink(feed.descriptor, title: feed.name, systemImage: "rectangle.stack")
+                            .contextMenu {
+                                Button("Edit Feed", systemImage: "pencil") { editingFeed = feed }
+                                Button("Delete Feed", systemImage: "trash", role: .destructive) { deleteFeed(feed) }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Delete", role: .destructive) { deleteFeed(feed) }
+                                Button("Edit") { editingFeed = feed }.tint(.orange)
+                            }
+                    }
+                    Button {
+                        editingFeed = CustomFeed(name: "", communities: [])
+                    } label: {
+                        Label("New Custom Feed", systemImage: "plus")
+                    }
                 }
             } header: {
-                collapsibleHeader("Feeds", count: 3, systemImage: "rectangle.stack", isExpanded: $feedsExpanded)
+                collapsibleHeader("Feeds", count: 3 + dependencies.settings.customFeeds.count, systemImage: "rectangle.stack", isExpanded: $feedsExpanded)
             }
 
             Section {
@@ -63,12 +80,28 @@ struct PostsRootView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button("New Custom Feed", systemImage: "rectangle.stack.badge.plus") { editingFeed = CustomFeed(name: "", communities: []) }
                     Button { router.presentedSheet = .composer(.post) } label: { Label("New Post", systemImage: "square.and.pencil") }
                     Button { router.push(.gallery(.home)) } label: { Label("Gallery Mode", systemImage: "square.grid.2x2") }
                 } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Add")
+            }
+        }
+        .sheet(item: $editingFeed) { feed in
+            CustomFeedEditorView(feed: feed, communities: store.communities) { saved in
+                if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
+                    dependencies.settings.customFeeds[index] = saved
+                } else {
+                    dependencies.settings.customFeeds.append(saved)
+                }
+                feedsExpanded = true
+                if let onSelectFeed { onSelectFeed(saved.descriptor) }
+                else {
+                    store.clearVisibleFeed()
+                    router.push(.feed(saved.descriptor))
+                }
             }
         }
         .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
@@ -191,8 +224,14 @@ struct PostsRootView: View {
         .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
 
+    private func deleteFeed(_ feed: CustomFeed) {
+        dependencies.settings.customFeeds.removeAll { $0.id == feed.id }
+        if selectedFeed?.customFeedID == feed.id { onSelectFeed?(.home) }
+    }
+
     private func isSelected(_ descriptor: FeedDescriptorModel) -> Bool {
         guard onSelectFeed != nil, let selectedFeed else { return false }
+        if descriptor.kind == .custom { return selectedFeed.customFeedID == descriptor.customFeedID }
         return selectedFeed.kind == descriptor.kind
             && selectedFeed.name.caseInsensitiveCompare(descriptor.name) == .orderedSame
     }
@@ -368,7 +407,7 @@ struct FeedView: View {
                 .accessibilityLabel("Feed actions")
             }
         }
-        .task(id: "\(descriptor.kind.rawValue):\(descriptor.name):\(descriptor.sort):\(store.accountContextKey)") {
+        .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
             await store.refreshPosts(for: descriptor)
         }
         .task(id: visiblePosts.map(\.id)) {
@@ -542,5 +581,99 @@ struct QuickAccountSwitcherView: View {
             .navigationTitle("Switch Account")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
+    }
+}
+
+private struct FeedLoadIdentity: Hashable {
+    let descriptor: FeedDescriptorModel
+    let account: String
+}
+
+@MainActor
+private struct CustomFeedEditorView: View {
+    @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.dismiss) private var dismiss
+    @State var feed: CustomFeed
+    let communities: [CommunityCardModel]
+    let onSave: (CustomFeed) -> Void
+    @State private var communityInput = ""
+    @State private var query = ""
+    @State private var addedCommunities: Set<String> = []
+    @State private var inputError: String?
+
+    private var choices: [String] {
+        Set(communities.map { $0.name.lowercased() })
+            .union(feed.communities).union(addedCommunities)
+            .filter { query.isEmpty || $0.localizedStandardContains(query) }.sorted()
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Feed name") {
+                    TextField("Name", text: $feed.name)
+                        .accessibilityLabel("Feed name")
+                }
+                Section {
+                    HStack {
+                        TextField("Community name, e.g. r/swift", text: $communityInput)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onSubmit(addCommunity)
+                        Button("Add", action: addCommunity)
+                            .disabled(communityInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if let inputError { Text(inputError).foregroundStyle(.red) }
+                } header: {
+                    Text("Add a community")
+                } footer: {
+                    Text("You don’t need to subscribe to add a community to this feed.")
+                }
+                Section {
+                    ForEach(choices, id: \.self) { name in
+                        Toggle("r/\(name)", isOn: Binding(
+                            get: { feed.communities.contains(name) },
+                            set: { selected in
+                                feed.communities.removeAll { $0 == name }
+                                if selected { feed.communities.append(name) }
+                            }
+                        ))
+                    }
+                } header: {
+                    Text("Communities · \(feed.communities.count) selected")
+                } footer: {
+                    Text(dependencies.settings.customFeedSyncStatus)
+                }
+            }
+            .navigationTitle("Custom Feed")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Find a community")
+            .onAppear { addedCommunities.formUnion(feed.communities) }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        feed.name = feed.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        feed.communities.sort()
+                        onSave(feed)
+                        dismiss()
+                    }
+                    .disabled(feed.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || feed.communities.isEmpty || !communityInput.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func addCommunity() {
+        guard let name = CustomFeed.communityName(communityInput) else {
+            inputError = "Use a community name with letters, numbers or underscores, up to 21 characters."
+            return
+        }
+        addedCommunities.insert(name)
+        if !feed.communities.contains(name) { feed.communities.append(name) }
+        communityInput = ""
+        inputError = nil
     }
 }

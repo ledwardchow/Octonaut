@@ -126,6 +126,29 @@ struct OctonautTabsView: View {
         .onOpenURL { url in
             handleIncomingURL(url)
         }
+        .onChange(of: dependencies.settings.customFeeds) { _, feeds in
+            if let id = postsSplitState.selectedFeed.customFeedID {
+                let updated = feeds.first { $0.id == id }?.descriptor ?? .home
+                if updated != postsSplitState.selectedFeed {
+                    store.clearVisibleFeed()
+                    postsRouter.popToRoot()
+                    postsSplitState.selectFeed(updated)
+                }
+            }
+            for (index, route) in postsRouter.path.enumerated() {
+                guard case .feed(let descriptor) = route, let id = descriptor.customFeedID else { continue }
+                guard let updated = feeds.first(where: { $0.id == id })?.descriptor else {
+                    store.clearVisibleFeed(isLoading: false)
+                    postsRouter.path = Array(postsRouter.path.prefix(index))
+                    break
+                }
+                if updated != descriptor {
+                    store.clearVisibleFeed()
+                    postsRouter.path = Array(postsRouter.path.prefix(index)) + [.feed(updated)]
+                    break
+                }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await dependencies.persistence.beginUsageSession() }
@@ -403,7 +426,10 @@ private struct PostsSplitView: View {
 
                 NavigationStack(path: $router.path) {
                     Group {
-                        if wideLayout {
+                        if wideLayout && store.feedState == .loading {
+                            ProgressView("Loading feed…")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if wideLayout {
                             ContentUnavailableView(
                                 "Select a post",
                                 systemImage: "text.bubble",
@@ -477,6 +503,8 @@ private struct PostsSplitView: View {
     }
 
     private func selectFeed(_ descriptor: FeedDescriptorModel) {
+        if state.selectedFeed != descriptor { store.clearVisibleFeed() }
+        else { store.clearPostDetail() }
         router.popToRoot()
         state.selectFeed(descriptor)
     }

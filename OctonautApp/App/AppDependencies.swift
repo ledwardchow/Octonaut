@@ -57,6 +57,7 @@ final class AppDependencies {
             onDeviceIntelligence = UnavailableIntelligenceService()
         }
         let settings = SettingsStore()
+        settings.startCustomFeedSync()
         let summaryAPIKeyStore = KeychainSummaryAPIKeyStore()
         let intelligence: any IntelligenceService = ConfiguredIntelligenceService(
             onDevice: onDeviceIntelligence,

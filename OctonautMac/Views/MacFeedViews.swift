@@ -15,7 +15,7 @@ struct MacFeedListView: View {
     var body: some View {
         Group {
             switch store.feedState {
-            case .idle where store.posts.isEmpty, .loading where store.posts.isEmpty:
+            case .idle, .loading:
                 ProgressView("Loading \(descriptor.macTitle)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let message) where store.posts.isEmpty:
@@ -459,7 +459,10 @@ struct MacPostDetailView: View {
     }
 
     var body: some View {
-        if let displayedPost {
+        if post == nil && store.feedState == .loading {
+            ProgressView("Loading feed…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let displayedPost {
             Group {
                 if displayedPost.prefersMediaFirstPresentation && isMediaFillingPane {
                     MacMediaLightboxView(

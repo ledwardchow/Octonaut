@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Combine
 
 enum FeedLayout: String, Codable, Hashable, Sendable, CaseIterable {
     case full
@@ -217,8 +218,115 @@ final class SettingsStore {
     private(set) var configurationRevision: UInt = 0
     private(set) var filterRevision: UInt = 0
 
+    @ObservationIgnored private var feedCloud: (any CustomFeedCloudStore)?
+    @ObservationIgnored private var feedCloudObserver: AnyCancellable?
+    @ObservationIgnored private var feedVersions: [String: CustomFeedSyncRecord] = [:]
+    @ObservationIgnored private var applyingCloudFeeds = false
+    private(set) var customFeedSyncStatus = "Saved on this device."
+
+    var customFeeds: [CustomFeed] {
+        didSet {
+            persistCodable(customFeeds, key: "feeds.custom")
+            guard !applyingCloudFeeds else { return }
+            let previous = Dictionary(oldValue.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let current = Dictionary(customFeeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            for id in Set(previous.keys).union(current.keys) where previous[id] != current[id] {
+                let timestamp = max(Date.now.timeIntervalSince1970, (feedVersions[id.uuidString]?.modifiedAt ?? 0) + 0.001)
+                feedVersions[id.uuidString] = CustomFeedSyncRecord(id: id, feed: current[id], modifiedAt: timestamp)
+            }
+            saveFeedVersions()
+            publishCustomFeeds()
+        }
+    }
+
+    /// Only the live dependency container enables iCloud. Tests and previews stay local.
+    func startCustomFeedSync() {
+        guard feedCloud == nil else { return }
+        let cloud = ICloudCustomFeedStore()
+        feedCloudObserver = NotificationCenter.default.publisher(
+            for: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default
+        ).sink { [weak self] notification in
+            let reason = notification.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if reason == NSUbiquitousKeyValueStoreQuotaViolationChange {
+                    self.customFeedSyncStatus = "Saved on this device. iCloud feed storage is full."
+                } else {
+                    self.mergeCustomFeedsFromCloud(replacingAccount: reason == NSUbiquitousKeyValueStoreAccountChange)
+                }
+            }
+        }
+        startCustomFeedSync(using: cloud)
+    }
+
+    func startCustomFeedSync(using cloud: any CustomFeedCloudStore) {
+        guard feedCloud == nil else { return }
+        feedCloud = cloud
+        for feed in customFeeds where feedVersions[feed.id.uuidString] == nil {
+            // An existing cloud revision takes precedence over an unmigrated local copy.
+            feedVersions[feed.id.uuidString] = CustomFeedSyncRecord(id: feed.id, feed: feed, modifiedAt: 0)
+        }
+        saveFeedVersions()
+        _ = cloud.synchronize()
+        mergeCustomFeedsFromCloud()
+    }
+
+    func mergeCustomFeedsFromCloud(replacingAccount: Bool = false) {
+        guard let feedCloud else { return }
+        if replacingAccount {
+            // Never upload the previous Apple account's feeds into a new account.
+            persistCodable(feedVersions, key: "feeds.previousAppleAccount.backup")
+            feedVersions = [:]
+        }
+        for (key, data) in feedCloud.values {
+            guard let remote = try? JSONDecoder().decode(CustomFeedSyncRecord.self, from: data),
+                  key == CustomFeedSyncRecord.key(for: remote.id), remote.isValid else { continue }
+            let id = remote.id.uuidString
+            if let local = feedVersions[id], !remote.isNewer(than: local) { continue }
+            feedVersions[id] = remote
+        }
+        saveFeedVersions()
+        let merged = feedVersions.values.compactMap(\.feed).sorted {
+            let comparison = $0.name.localizedCaseInsensitiveCompare($1.name)
+            return comparison == .orderedSame ? $0.id.uuidString < $1.id.uuidString : comparison == .orderedAscending
+        }
+        applyingCloudFeeds = true
+        customFeeds = merged
+        applyingCloudFeeds = false
+        publishCustomFeeds()
+    }
+
+    private func saveFeedVersions() {
+        persistCodable(feedVersions, key: "feeds.syncVersions")
+    }
+
+    private func publishCustomFeeds() {
+        guard let feedCloud else { return }
+        var values = feedCloud.values
+        var updates: [String: Data] = [:]
+        for record in feedVersions.values {
+            let key = CustomFeedSyncRecord.key(for: record.id)
+            if let existing = values[key],
+               let remote = try? JSONDecoder().decode(CustomFeedSyncRecord.self, from: existing),
+               !record.isNewer(than: remote) { continue }
+            guard let data = try? JSONEncoder().encode(record) else { continue }
+            values[key] = data
+            updates[key] = data
+        }
+        guard values.count <= 1024,
+              values.reduce(0, { $0 + $1.key.utf8.count + $1.value.count }) < 950_000 else {
+            customFeedSyncStatus = "Saved on this device. iCloud feed storage is full."
+            return
+        }
+        for (key, data) in updates { feedCloud.set(data, forKey: key) }
+        customFeedSyncStatus = "Syncs with iCloud when available."
+    }
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        customFeeds = defaults.data(forKey: "feeds.custom").flatMap { try? JSONDecoder().decode([CustomFeed].self, from: $0) } ?? []
+        feedVersions = defaults.data(forKey: "feeds.syncVersions").flatMap { try? JSONDecoder().decode([String: CustomFeedSyncRecord].self, from: $0) } ?? [:]
         communityFeedLayouts = defaults.dictionary(forKey: "appearance.communityFeedLayouts") as? [String: String] ?? [:]
 
         feedLayout = FeedLayout(rawValue: defaults.string(forKey: Keys.feedLayout) ?? "full") ?? .full
@@ -401,4 +509,68 @@ final class SettingsStore {
         static let tintFollowsCommunity = "theme.tintFollowsCommunity"
         static let gestureHaptics = "gestures.haptics"
     }
+}
+
+/// Locally saved feeds do not change Reddit subscriptions.
+struct CustomFeed: Identifiable, Codable, Hashable, Sendable {
+    var id = UUID()
+    var name: String
+    var communities: [String]
+
+    var descriptor: FeedDescriptorModel {
+        FeedDescriptorModel(kind: .custom, name: name, customFeedID: id, communities: communities)
+    }
+
+    static func communityName(_ input: String) -> String? {
+        var name = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if name.hasPrefix("/r/") { name.removeFirst(3) }
+        else if name.hasPrefix("r/") { name.removeFirst(2) }
+        guard !name.isEmpty, name.count <= 21,
+              name.range(of: "^[a-z0-9_]+$", options: .regularExpression) != nil,
+              !["all", "popular"].contains(name) else { return nil }
+        return name
+    }
+}
+
+/// One iCloud key per feed avoids conflicts between edits to unrelated feeds.
+struct CustomFeedSyncRecord: Codable, Equatable {
+    let id: UUID
+    var feed: CustomFeed?
+    let modifiedAt: TimeInterval
+    var revision = UUID().uuidString
+
+    static func key(for id: UUID) -> String { "customFeed.v1.\(id.uuidString)" }
+
+    var isValid: Bool {
+        guard modifiedAt.isFinite else { return false }
+        guard let feed else { return true } // A nil feed is a persistent deletion record.
+        return feed.id == id && !feed.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !feed.communities.isEmpty
+            && feed.communities.allSatisfy { CustomFeed.communityName($0) != nil }
+    }
+
+    func isNewer(than other: Self) -> Bool {
+        modifiedAt == other.modifiedAt ? revision > other.revision : modifiedAt > other.modifiedAt
+    }
+}
+
+@MainActor
+protocol CustomFeedCloudStore {
+    var values: [String: Data] { get }
+    func set(_ data: Data, forKey key: String)
+    func synchronize() -> Bool
+}
+
+@MainActor
+private final class ICloudCustomFeedStore: CustomFeedCloudStore {
+    private let store = NSUbiquitousKeyValueStore.default
+    var values: [String: Data] {
+        store.dictionaryRepresentation.reduce(into: [:]) { result, entry in
+            if entry.key.hasPrefix("customFeed.v1."), let data = entry.value as? Data {
+                result[entry.key] = data
+            }
+        }
+    }
+    func set(_ data: Data, forKey key: String) { store.set(data, forKey: key) }
+    func synchronize() -> Bool { store.synchronize() }
 }
