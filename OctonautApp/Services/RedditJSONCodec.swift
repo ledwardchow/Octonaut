@@ -144,6 +144,24 @@ enum RedditJSONCodec {
         return PostThread(post: post, comments: comments)
     }
 
+    static func decodeMoreComments(
+        _ data: Data,
+        parentFullname: String
+    ) throws -> [CommentTreeNode] {
+        let root = try JSONDecoder().decode(RedditJSONValue.self, from: data)
+        guard let things = root.objectValue?["json"]?.objectValue?["data"]?.objectValue?["things"]?.arrayValue else {
+            throw RedditClientError.malformedResponse
+        }
+
+        let nodes = things.compactMap { value -> CommentTreeNode? in
+            guard let thing = value.objectValue,
+                  let kind = thing["kind"]?.stringValue,
+                  let object = thing["data"]?.objectValue else { return nil }
+            return mapCommentTree(object, kind: kind).node
+        }
+        return assembleCommentTree(nodes, parentFullname: parentFullname)
+    }
+
     static func decodeActionResult(_ data: Data) throws -> ActionResult {
         let root = try JSONDecoder().decode(RedditJSONValue.self, from: data)
         let errors = extractErrors(root)
@@ -361,6 +379,48 @@ enum RedditJSONCodec {
             children: children
         )
         return (.comment(node), moreIDs)
+    }
+
+    private static func assembleCommentTree(
+        _ nodes: [CommentTreeNode],
+        parentFullname: String
+    ) -> [CommentTreeNode] {
+        let returnedCommentFullnames = Set(nodes.compactMap { node -> String? in
+            if case .comment(let comment) = node { return comment.fullname }
+            return nil
+        })
+        let childrenByParent = Dictionary(grouping: nodes, by: commentParentFullname)
+
+        func attachChildren(
+            to node: CommentTreeNode,
+            ancestors: Set<String> = []
+        ) -> CommentTreeNode {
+            guard case .comment(var comment) = node,
+                  !ancestors.contains(comment.fullname) else { return node }
+            let nextAncestors = ancestors.union([comment.fullname])
+            let existingIDs = Set(comment.children.map(\.id))
+            let returnedChildren = (childrenByParent[comment.fullname] ?? []).filter {
+                !existingIDs.contains($0.id)
+            }
+            comment.children = (comment.children + returnedChildren).map {
+                attachChildren(to: $0, ancestors: nextAncestors)
+            }
+            return .comment(comment)
+        }
+
+        var roots = childrenByParent[parentFullname] ?? []
+        if roots.isEmpty {
+            roots = nodes.filter { !returnedCommentFullnames.contains(commentParentFullname($0)) }
+        }
+        return roots.map { attachChildren(to: $0) }
+    }
+
+    private static func commentParentFullname(_ node: CommentTreeNode) -> String {
+        switch node {
+        case .comment(let comment): return comment.parentFullname
+        case .more(let more): return more.parentFullname
+        case .deleted(let deleted): return deleted.parentFullname
+        }
     }
 
     private static func mapUserComment(_ object: [String: RedditJSONValue]) -> UserComment? {

@@ -9,6 +9,16 @@ struct UnavailableRedditClient: RedditClient {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
 
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID?
+    ) async throws -> [CommentTreeNode] {
+        throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
+    }
+
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post> {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
@@ -18,6 +28,10 @@ struct UnavailableRedditClient: RedditClient {
     }
 
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile> {
+        throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
+    }
+
+    func trendingCommunities(limit: Int) async throws -> Listing<Community> {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
 

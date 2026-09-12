@@ -4,35 +4,48 @@ import Foundation
 /// It never creates a URLSession and therefore cannot contact Reddit.
 actor FixtureRedditClient: RedditClient {
     private let listingData: Data?
+    private let listingsByDestination: [FeedDestination: Data]
+    private let delaysByDestination: [FeedDestination: Duration]
     private let postData: Data?
+    private let moreCommentsData: Data?
     private let searchData: Data?
     private let communitiesData: Data?
     private let usersData: Data?
     private let actionResult: ActionResult
     private let listingDelay: Duration?
     private let postDelay: Duration?
+    private let moreCommentsDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
+    private(set) var lastListingRequest: ListingRequest?
     private var listingRequestCount = 0
     private var subscribedCommunitiesRequestCount = 0
 
     init(
         listingData: Data? = nil,
+        listingsByDestination: [FeedDestination: Data] = [:],
+        delaysByDestination: [FeedDestination: Duration] = [:],
         postData: Data? = nil,
+        moreCommentsData: Data? = nil,
         searchData: Data? = nil,
         communitiesData: Data? = nil,
         usersData: Data? = nil,
         listingDelay: Duration? = nil,
         postDelay: Duration? = nil,
+        moreCommentsDelay: Duration? = nil,
         subscribedCommunitiesDelay: Duration? = nil,
         actionResult: ActionResult = ActionResult(succeeded: true)
     ) {
         self.listingData = listingData
+        self.listingsByDestination = listingsByDestination
+        self.delaysByDestination = delaysByDestination
         self.postData = postData
+        self.moreCommentsData = moreCommentsData
         self.searchData = searchData
         self.communitiesData = communitiesData
         self.usersData = usersData
         self.listingDelay = listingDelay
         self.postDelay = postDelay
+        self.moreCommentsDelay = moreCommentsDelay
         self.subscribedCommunitiesDelay = subscribedCommunitiesDelay
         self.actionResult = actionResult
     }
@@ -44,22 +57,27 @@ actor FixtureRedditClient: RedditClient {
             return try Data(contentsOf: url, options: [.mappedIfSafe])
         }
         self.listingData = try read("listing.json")
+        self.listingsByDestination = [:]
+        self.delaysByDestination = [:]
         self.postData = try read("post.json")
+        self.moreCommentsData = try read("more_comments.json")
         self.searchData = try read("search.json")
         self.communitiesData = try read("communities.json")
         self.usersData = try read("users.json")
         self.listingDelay = nil
         self.postDelay = nil
+        self.moreCommentsDelay = nil
         self.subscribedCommunitiesDelay = nil
         self.actionResult = ActionResult(succeeded: true)
     }
 
     func listing(_ request: ListingRequest, account: AccountID? = nil) async throws -> Listing<Post> {
+        lastListingRequest = request
         listingRequestCount += 1
-        if let listingDelay {
+        if let listingDelay = delaysByDestination[request.feed.destination] ?? listingDelay {
             try await Task.sleep(for: listingDelay)
         }
-        guard let listingData else { return Listing(items: []) }
+        guard let listingData = listingsByDestination[request.feed.destination] ?? listingData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(listingData)
     }
 
@@ -75,6 +93,23 @@ actor FixtureRedditClient: RedditClient {
         return try RedditJSONCodec.decodeThread(postData)
     }
 
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID? = nil
+    ) async throws -> [CommentTreeNode] {
+        if let moreCommentsDelay {
+            try await Task.sleep(for: moreCommentsDelay)
+        }
+        guard let moreCommentsData else { throw RedditClientError.notFound }
+        return try RedditJSONCodec.decodeMoreComments(
+            moreCommentsData,
+            parentFullname: parentFullname
+        )
+    }
+
     func search(_ request: RedditSearchRequest, account: AccountID? = nil) async throws -> Listing<Post> {
         guard let searchData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(searchData)
@@ -88,6 +123,11 @@ actor FixtureRedditClient: RedditClient {
     func users(_ request: RedditUserSearchRequest, account: AccountID? = nil) async throws -> Listing<UserProfile> {
         guard let usersData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeUserSearch(usersData)
+    }
+
+    func trendingCommunities(limit: Int = 25) async throws -> Listing<Community> {
+        guard let communitiesData else { return Listing(items: []) }
+        return try RedditJSONCodec.decodeCommunities(communitiesData)
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {

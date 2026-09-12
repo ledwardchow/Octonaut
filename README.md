@@ -10,6 +10,7 @@ Just want to try it on iPhone? [TestFlight](https://testflight.apple.com/join/kR
 
 - Browse public Reddit feeds without an account, or sign in through Reddit's website.
 - Switch between multiple Reddit accounts.
+- Create custom feeds from subscribed or other communities, and sync them across your Apple devices with iCloud.
 - Read threaded comments and view images, galleries, GIFs, and video.
 - Search posts, communities, and users.
 - Use local filters, drafts, seen-post history, and usage statistics.
@@ -88,3 +89,13 @@ By default, post and comment summaries are generated on device (or disabled if y
 ## 📄 License
 
 Like the Hydra project that this app is derived from, Octonaut is also available under the [GNU Affero General Public License v3.0](./LICENSE.txt).
+
+## Custom feed sync
+
+Custom feed names and community lists sync between iPhone, iPad, and Mac using the same Apple account. Edits and deletions sync too. Existing local feeds are included automatically, and feeds remain available offline. iCloud delivers updates in the background, so changes may take a little time to appear on another device.
+
+The apps use iCloud key-value storage with the shared entitlement `$(TeamIdentifierPrefix)com.leddytech.octonaut`. Enable iCloud Key-value storage for both app targets and use provisioning profiles that include this entitlement. No CloudKit container or database schema is required. Reddit session credentials stay in the local Keychain.
+
+Each feed has its own sync record. If two devices change the same feed offline, the later recorded edit wins. Deletions are retained so an unchanged offline copy does not restore a deleted feed. If iCloud storage reaches its limit, changes stay local and the feed editor shows a storage message.
+
+To verify a release, use signed builds on two devices with the same Apple account: create a feed on one, edit it on the other, and confirm deletion reaches both. Automated tests use an in-memory iCloud substitute; they do not verify delivery through Apple's servers.

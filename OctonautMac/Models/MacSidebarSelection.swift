@@ -14,7 +14,7 @@ extension FeedDescriptorModel {
         case .popular: "Popular"
         case .all: "All"
         case .community: "r/\(name)"
-        case .multireddit: name
+        case .multireddit, .custom: name
         }
     }
 }

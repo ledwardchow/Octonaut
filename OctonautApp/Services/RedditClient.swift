@@ -31,9 +31,17 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
 protocol RedditClient: Sendable {
     func listing(_ request: ListingRequest, account: AccountID?) async throws -> Listing<Post>
     func post(_ permalink: URL, sort: CommentSort, account: AccountID?) async throws -> PostThread
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID?
+    ) async throws -> [CommentTreeNode]
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post>
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID?) async throws -> Listing<Community>
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile>
+    func trendingCommunities(limit: Int) async throws -> Listing<Community>
     func subscribedCommunities(after: String?, account: AccountID) async throws -> Listing<Community>
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile
     func userComments(_ username: String, after: String?, account: AccountID?) async throws -> Listing<UserComment>
@@ -97,17 +105,20 @@ actor URLSessionRedditClient: RedditClient {
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
+    private var isMoreCommentsRequestInFlight = false
+    private var moreCommentsRequestWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
-        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+        sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.baseURL = baseURL
         self.credentialVault = credentialVault
         self.userAgent = userAgent
 
-        let configuration = URLSessionConfiguration.ephemeral
+        let configuration = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         // Ephemeral sessions keep Reddit's logged-out edge cookies in memory
         // without persisting browsing state beyond this app process.
         configuration.httpShouldSetCookies = true
@@ -133,15 +144,24 @@ actor URLSessionRedditClient: RedditClient {
             query.append(URLQueryItem(name: "t", value: topTime.rawValue))
         }
         appendPagination(after: request.after, before: request.before, to: &query)
-        let data = try await requestData(
-            method: "GET",
-            path: path,
-            query: query,
-            body: nil,
-            account: account ?? accountFromScope(request.accountScope),
-            retryable: true,
-            responseCachePolicy: request.responseCachePolicy
-        )
+        let data: Data
+        do {
+            data = try await requestData(
+                method: "GET", path: path, query: query, body: nil,
+                account: account ?? accountFromScope(request.accountScope),
+                retryable: true, responseCachePolicy: request.responseCachePolicy
+            )
+        } catch RedditClientError.notFound {
+            // The main website can return 404 for combined community listings
+            // that the old website still serves. Keep the same query and session.
+            guard case .combined = request.feed.destination else { throw RedditClientError.notFound }
+            data = try await requestData(
+                method: "GET", path: path, query: query, body: nil,
+                account: account ?? accountFromScope(request.accountScope),
+                retryable: true, responseCachePolicy: request.responseCachePolicy,
+                websiteHost: "old.reddit.com"
+            )
+        }
         return try RedditJSONCodec.decodePosts(data)
     }
 
@@ -160,6 +180,33 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeThread(data)
+    }
+
+    func moreComments(
+        postFullname: String,
+        parentFullname: String,
+        childIDs: [String],
+        sort: CommentSort,
+        account: AccountID? = nil
+    ) async throws -> [CommentTreeNode] {
+        guard !childIDs.isEmpty else { return [] }
+        await acquireMoreCommentsRequest()
+        defer { releaseMoreCommentsRequest() }
+        let route = Self.moreCommentsRoute(
+            postFullname: postFullname,
+            childIDs: Array(childIDs.prefix(100)),
+            sort: sort
+        )
+        let data = try await requestData(
+            method: "GET",
+            path: route.path,
+            query: route.query,
+            body: nil,
+            account: account,
+            retryable: true,
+            responseCachePolicy: .reloadIgnoringCache
+        )
+        return try RedditJSONCodec.decodeMoreComments(data, parentFullname: parentFullname)
     }
 
     func search(_ request: RedditSearchRequest, account: AccountID? = nil) async throws -> Listing<Post> {
@@ -220,6 +267,19 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeUserSearch(data)
+    }
+
+    func trendingCommunities(limit: Int = 25) async throws -> Listing<Community> {
+        let route = Self.trendingCommunitiesRoute(limit: limit)
+        let data = try await requestData(
+            method: "GET",
+            path: route.path,
+            query: route.query,
+            body: nil,
+            account: nil,
+            retryable: true
+        )
+        return try RedditJSONCodec.decodeCommunities(data)
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
@@ -289,7 +349,8 @@ actor URLSessionRedditClient: RedditClient {
         body: [String: String]?,
         account: AccountID?,
         retryable: Bool,
-        responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache
+        responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache,
+        websiteHost: String? = nil
     ) async throws -> Data {
         var attempt = 0
         while true {
@@ -300,7 +361,8 @@ actor URLSessionRedditClient: RedditClient {
                     query: query,
                     body: body,
                     account: account,
-                    responseCachePolicy: responseCachePolicy
+                    responseCachePolicy: responseCachePolicy,
+                    websiteHost: websiteHost
                 )
             } catch let error as RedditClientError {
                 guard retryable, attempt < 2, shouldRetry(error) else { throw error }
@@ -329,9 +391,10 @@ actor URLSessionRedditClient: RedditClient {
         query: [URLQueryItem],
         body: [String: String]?,
         account: AccountID?,
-        responseCachePolicy: ListingRequest.ResponseCachePolicy
+        responseCachePolicy: ListingRequest.ResponseCachePolicy,
+        websiteHost: String? = nil
     ) async throws -> Data {
-        guard let url = makeURL(path: path, query: query) else { throw RedditClientError.invalidURL }
+        guard let url = makeURL(path: path, query: query, websiteHost: websiteHost) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -424,9 +487,18 @@ actor URLSessionRedditClient: RedditClient {
         }
     }
 
-    private func makeURL(path: String, query: [URLQueryItem]) -> URL? {
+    private func makeURL(path: String, query: [URLQueryItem], websiteHost: String? = nil) -> URL? {
         guard let baseComponents = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         var components = baseComponents
+        if let websiteHost {
+            guard websiteHost == "old.reddit.com" else { return nil }
+            components.host = websiteHost
+        }
+        guard components.scheme == "https",
+              let host = components.host?.lowercased(),
+              ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "m.reddit.com"].contains(host),
+              components.user == nil, components.password == nil,
+              components.port == nil || components.port == 443 else { return nil }
         components.path = path.hasPrefix("/") ? path : "/\(path)"
         components.queryItems = query.filter { $0.value != nil }
         return components.url
@@ -535,6 +607,52 @@ actor URLSessionRedditClient: RedditClient {
                 URLQueryItem(name: "limit", value: String(request.limit)),
             ]
         )
+    }
+
+    static func trendingCommunitiesRoute(limit: Int) -> (path: String, query: [URLQueryItem]) {
+        (
+            "/subreddits/popular.json",
+            [
+                URLQueryItem(name: "raw_json", value: "1"),
+                URLQueryItem(name: "limit", value: String(min(max(limit, 1), 100))),
+            ]
+        )
+    }
+
+    static func moreCommentsRoute(
+        postFullname: String,
+        childIDs: [String],
+        sort: CommentSort
+    ) -> (path: String, query: [URLQueryItem]) {
+        (
+            "/api/morechildren",
+            [
+                URLQueryItem(name: "api_type", value: "json"),
+                URLQueryItem(name: "link_id", value: postFullname),
+                URLQueryItem(name: "children", value: childIDs.prefix(100).joined(separator: ",")),
+                URLQueryItem(name: "limit_children", value: "false"),
+                URLQueryItem(name: "sort", value: sort == .best ? "confidence" : sort.rawValue),
+                URLQueryItem(name: "raw_json", value: "1"),
+            ]
+        )
+    }
+
+    private func acquireMoreCommentsRequest() async {
+        if !isMoreCommentsRequestInFlight {
+            isMoreCommentsRequestInFlight = true
+            return
+        }
+        await withCheckedContinuation { continuation in
+            moreCommentsRequestWaiters.append(continuation)
+        }
+    }
+
+    private func releaseMoreCommentsRequest() {
+        guard !moreCommentsRequestWaiters.isEmpty else {
+            isMoreCommentsRequestInFlight = false
+            return
+        }
+        moreCommentsRequestWaiters.removeFirst().resume()
     }
 
     private func accountFromScope(_ scope: AccountScope) -> AccountID? {

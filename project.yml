@@ -31,6 +31,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.leddytech.octonaut
+        CODE_SIGN_ENTITLEMENTS: OctonautApp/Octonaut.entitlements
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Octonaut
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news

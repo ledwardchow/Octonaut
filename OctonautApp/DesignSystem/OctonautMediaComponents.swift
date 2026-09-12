@@ -318,6 +318,7 @@ struct OctonautInlineMediaView: View {
     let post: PostCardModel
     var onOpen: ((Int) -> Void)?
     var preloader: OctonautFeedMediaPreloader?
+    var maximumHeight: CGFloat? = nil
     @State private var isRevealed = false
     @State private var isVisibleInFeed = false
     @State private var networkStatus = OctonautNetworkStatus.shared
@@ -426,6 +427,7 @@ struct OctonautInlineMediaView: View {
                     ZStack {
                         OctonautAsyncImage(url: url, contentMode: .fit)
                             .frame(maxWidth: .infinity)
+                            .frame(height: maximumHeight)
                             .blur(radius: post.isSensitive && !isRevealed ? 12 : 0)
                         if post.isSensitive && !isRevealed { sensitiveOverlay }
                     }

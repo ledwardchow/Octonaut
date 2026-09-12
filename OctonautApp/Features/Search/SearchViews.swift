@@ -54,19 +54,43 @@ struct SearchRootView: View {
     private var trending: some View {
         List {
             Section {
-                ForEach(store.communities) { community in
-                    OctonautCommunityRow(community: community)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            router.push(.community(community.name))
-                        }
-                    )
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction {
-                        router.push(.community(community.name))
+                switch model.trendingState {
+                case .idle, .loading:
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading trending communities…")
+                            .foregroundStyle(.secondary)
                     }
-                    .listRowInsets(EdgeInsets())
+                case .loaded:
+                    ForEach(model.trendingCommunities) { community in
+                        OctonautCommunityRow(community: community)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(
+                                TapGesture().onEnded {
+                                    router.push(.community(community.name))
+                                }
+                            )
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityAction {
+                                router.push(.community(community.name))
+                            }
+                            .listRowInsets(EdgeInsets())
+                    }
+                case .empty:
+                    Text("No trending communities found.")
+                        .foregroundStyle(.secondary)
+                case .failed(let message):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Trending communities could not be loaded", systemImage: "exclamationmark.triangle")
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Try again") {
+                            Task { await model.loadTrendingCommunities(forceRefresh: true) }
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    .padding(.vertical, 8)
                 }
             } header: {
                 OctonautSectionHeader("Trending communities")
@@ -78,6 +102,7 @@ struct SearchRootView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .task { await model.loadTrendingCommunities() }
     }
 
     @ViewBuilder

@@ -196,6 +196,7 @@ struct OctonautPostRow: View {
     var bodyLineLimit: Int? = 4
     var showsFlair = true
     var mediaPreloader: OctonautFeedMediaPreloader?
+    var mediaMaximumHeight: CGFloat? = nil
     var onVote: ((Int) -> Void)?
     var onSave: (() -> Void)?
     var onSeen: (() -> Void)?
@@ -213,7 +214,7 @@ struct OctonautPostRow: View {
                     .foregroundStyle(theme.tertiaryText)
                 communityLabel
                 if !post.author.isEmpty {
-                    Text("• u/\(post.author)").font(.caption).foregroundStyle(theme.tertiaryText)
+                    Text("• u/\(post.author)").font(.caption).foregroundStyle(theme.secondaryText)
                     if let authorFlair = post.authorFlair {
                         OctonautUserFlairPill(flair: authorFlair)
                     }
@@ -233,7 +234,8 @@ struct OctonautPostRow: View {
                 OctonautInlineMediaView(
                     post: post,
                     onOpen: onMedia,
-                    preloader: mediaPreloader
+                    preloader: mediaPreloader,
+                    maximumHeight: mediaMaximumHeight
                 )
             }
             HStack(spacing: 0) {

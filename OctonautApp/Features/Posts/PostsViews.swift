@@ -8,6 +8,7 @@ struct PostsRootView: View {
     var selectedFeed: FeedDescriptorModel? = nil
     @Environment(AppDependencies.self) private var dependencies
     @State private var communityQuery = ""
+    @State private var editingFeed: CustomFeed?
     @AppStorage("posts.sections.feeds.expanded") private var feedsExpanded = true
     @AppStorage("posts.sections.favorites.expanded") private var favoritesExpanded = true
     @AppStorage("posts.sections.communities.expanded") private var communitiesExpanded = true
@@ -24,9 +25,25 @@ struct PostsRootView: View {
                     feedLink(.home, title: "Home", systemImage: "house.fill")
                     feedLink(.popular, title: "Popular", systemImage: "flame.fill")
                     feedLink(.all, title: "All", systemImage: "globe")
+                    ForEach(dependencies.settings.customFeeds) { feed in
+                        feedLink(feed.descriptor, title: feed.name, systemImage: "rectangle.stack")
+                            .contextMenu {
+                                Button("Edit Feed", systemImage: "pencil") { editingFeed = feed }
+                                Button("Delete Feed", systemImage: "trash", role: .destructive) { deleteFeed(feed) }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button("Delete", role: .destructive) { deleteFeed(feed) }
+                                Button("Edit") { editingFeed = feed }.tint(.orange)
+                            }
+                    }
+                    Button {
+                        editingFeed = CustomFeed(name: "", communities: [])
+                    } label: {
+                        Label("New Custom Feed", systemImage: "plus")
+                    }
                 }
             } header: {
-                collapsibleHeader("Feeds", count: 3, systemImage: "rectangle.stack", isExpanded: $feedsExpanded)
+                collapsibleHeader("Feeds", count: 3 + dependencies.settings.customFeeds.count, systemImage: "rectangle.stack", isExpanded: $feedsExpanded)
             }
 
             Section {
@@ -36,6 +53,7 @@ struct PostsRootView: View {
                         Text(dependencies.accounts.selectedAccount == nil ? "Sign in to load account favorites." : "Tap a star beside a community to add it here.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     } else {
                         ForEach(favorites) { community in
                             communityLink(community)
@@ -62,12 +80,28 @@ struct PostsRootView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button("New Custom Feed", systemImage: "rectangle.stack.badge.plus") { editingFeed = CustomFeed(name: "", communities: []) }
                     Button { router.presentedSheet = .composer(.post) } label: { Label("New Post", systemImage: "square.and.pencil") }
                     Button { router.push(.gallery(.home)) } label: { Label("Gallery Mode", systemImage: "square.grid.2x2") }
                 } label: {
                     Image(systemName: "plus")
                 }
                 .accessibilityLabel("Add")
+            }
+        }
+        .sheet(item: $editingFeed) { feed in
+            CustomFeedEditorView(feed: feed, communities: store.communities) { saved in
+                if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
+                    dependencies.settings.customFeeds[index] = saved
+                } else {
+                    dependencies.settings.customFeeds.append(saved)
+                }
+                feedsExpanded = true
+                if let onSelectFeed { onSelectFeed(saved.descriptor) }
+                else {
+                    store.clearVisibleFeed()
+                    router.push(.feed(saved.descriptor))
+                }
             }
         }
         .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
@@ -87,25 +121,31 @@ struct PostsRootView: View {
                 ProgressView()
                 Text("Loading subscriptions…").foregroundStyle(.secondary)
             }
+            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         case .failed(let message) where store.communities.isEmpty:
             VStack(alignment: .leading, spacing: 6) {
                 Label("Communities could not be loaded", systemImage: "exclamationmark.triangle")
                 Text(message).font(.caption).foregroundStyle(.secondary)
                 Button("Try Again") { Task { await store.refreshCommunities() } }
             }
+            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         default:
             let values = filteredCommunities.filter { !$0.isFavorite }
             if values.isEmpty {
                 Text(dependencies.accounts.selectedAccount == nil ? "Sign in to load your Reddit subscriptions." : "No subscribed communities found.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             } else {
                 ForEach(values) { community in
                     communityLink(community)
                 }
             }
             if case .failed(let message) = store.communitiesState {
-                Text(message).font(.caption).foregroundStyle(.red)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             }
         }
     }
@@ -159,6 +199,7 @@ struct PostsRootView: View {
         // Keep the system disclosure indicator on the same trailing line as
         // the section controls while the row content still spans the width.
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
+        .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
     }
 
     @ViewBuilder
@@ -180,12 +221,35 @@ struct PostsRootView: View {
             }
         }
         .listRowBackground(isSelected(descriptor) ? Color.accentColor.opacity(0.12) : Color.clear)
+        .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+    }
+
+    private func deleteFeed(_ feed: CustomFeed) {
+        dependencies.settings.customFeeds.removeAll { $0.id == feed.id }
+        if selectedFeed?.customFeedID == feed.id { onSelectFeed?(.home) }
     }
 
     private func isSelected(_ descriptor: FeedDescriptorModel) -> Bool {
         guard onSelectFeed != nil, let selectedFeed else { return false }
+        if descriptor.kind == .custom { return selectedFeed.customFeedID == descriptor.customFeedID }
         return selectedFeed.kind == descriptor.kind
             && selectedFeed.name.caseInsensitiveCompare(descriptor.name) == .orderedSame
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func iPadEdgeToEdgeListSeparator(insets: EdgeInsets) -> some View {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            alignmentGuide(.listRowSeparatorLeading) { dimensions in
+                dimensions[.leading] - insets.leading
+            }
+            .alignmentGuide(.listRowSeparatorTrailing) { dimensions in
+                dimensions[.trailing] + insets.trailing
+            }
+        } else {
+            self
+        }
     }
 }
 
@@ -205,7 +269,9 @@ struct FeedView: View {
 
     private let mediaPreloadDistance = 20
 
-    private var compactRows: Bool { dependencies.settings.feedLayout == .compact }
+    @State private var availableHeight: CGFloat = 800
+    private var layoutCommunity: String? { descriptor.kind == .community ? descriptor.name : nil }
+    private var compactRows: Bool { dependencies.settings.feedLayout(for: layoutCommunity) == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
 
     private var visiblePosts: [PostCardModel] {
@@ -239,6 +305,7 @@ struct FeedView: View {
                                         post: post,
                                         showsFlair: dependencies.settings.showPostFlair,
                                         mediaPreloader: mediaPreloader,
+                                        mediaMaximumHeight: UIDevice.current.userInterfaceIdiom == .pad ? min(320, max(160, availableHeight * 0.45)) : nil,
                                         onVote: { value in
                                             performVote(postID: post.id, value: value)
                                         },
@@ -275,6 +342,9 @@ struct FeedView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .safeAreaPadding(.bottom, 24)
+                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 680 : .infinity)
+                    .frame(maxWidth: .infinity)
                     .refreshable { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                     .onChange(of: visiblePosts.first?.id) { _, firstID in
                         guard let firstID else { return }
@@ -292,6 +362,7 @@ struct FeedView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { availableHeight = $0 }
         .navigationTitle(descriptor.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -313,18 +384,30 @@ struct FeedView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Toggle(isOn: Binding(
-                        get: { dependencies.settings.feedLayout == .compact },
-                        set: { dependencies.settings.feedLayout = $0 ? .compact : .full }
-                    )) { Label("Compact Rows", systemImage: "list.bullet") }
-                    Button { router.push(.gallery(descriptor)) } label: { Label("Gallery Mode", systemImage: "square.grid.2x2") }
+                    Picker("Display", selection: Binding(
+                        get: { dependencies.settings.feedLayout(for: layoutCommunity) },
+                        set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
+                    )) {
+                        Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
+                        Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
+                    }
+                    Button { router.push(.gallery(descriptor)) } label: {
+                        Label("Gallery", systemImage: "square.grid.2x2")
+                    }
+                } label: {
+                    Image(systemName: compactRows ? "list.bullet" : "rectangle.grid.1x2")
+                }
+                .accessibilityLabel("Feed display")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
                     Button { store.posts.map(\.id).forEach { store.markSeen(postID: $0) } } label: { Label("Mark Visible Seen", systemImage: "eye") }
                     ShareLink(item: URL(string: "https://www.reddit.com")!) { Label("Share Feed", systemImage: "square.and.arrow.up") }
                 } label: { Image(systemName: "ellipsis.circle") }
                 .accessibilityLabel("Feed actions")
             }
         }
-        .task(id: "\(descriptor.kind.rawValue):\(descriptor.name):\(descriptor.sort):\(store.accountContextKey)") {
+        .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
             await store.refreshPosts(for: descriptor)
         }
         .task(id: visiblePosts.map(\.id)) {
@@ -498,5 +581,99 @@ struct QuickAccountSwitcherView: View {
             .navigationTitle("Switch Account")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
+    }
+}
+
+private struct FeedLoadIdentity: Hashable {
+    let descriptor: FeedDescriptorModel
+    let account: String
+}
+
+@MainActor
+private struct CustomFeedEditorView: View {
+    @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.dismiss) private var dismiss
+    @State var feed: CustomFeed
+    let communities: [CommunityCardModel]
+    let onSave: (CustomFeed) -> Void
+    @State private var communityInput = ""
+    @State private var query = ""
+    @State private var addedCommunities: Set<String> = []
+    @State private var inputError: String?
+
+    private var choices: [String] {
+        Set(communities.map { $0.name.lowercased() })
+            .union(feed.communities).union(addedCommunities)
+            .filter { query.isEmpty || $0.localizedStandardContains(query) }.sorted()
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Feed name") {
+                    TextField("Name", text: $feed.name)
+                        .accessibilityLabel("Feed name")
+                }
+                Section {
+                    HStack {
+                        TextField("Community name, e.g. r/swift", text: $communityInput)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .onSubmit(addCommunity)
+                        Button("Add", action: addCommunity)
+                            .disabled(communityInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if let inputError { Text(inputError).foregroundStyle(.red) }
+                } header: {
+                    Text("Add a community")
+                } footer: {
+                    Text("You don’t need to subscribe to add a community to this feed.")
+                }
+                Section {
+                    ForEach(choices, id: \.self) { name in
+                        Toggle("r/\(name)", isOn: Binding(
+                            get: { feed.communities.contains(name) },
+                            set: { selected in
+                                feed.communities.removeAll { $0 == name }
+                                if selected { feed.communities.append(name) }
+                            }
+                        ))
+                    }
+                } header: {
+                    Text("Communities · \(feed.communities.count) selected")
+                } footer: {
+                    Text(dependencies.settings.customFeedSyncStatus)
+                }
+            }
+            .navigationTitle("Custom Feed")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $query, prompt: "Find a community")
+            .onAppear { addedCommunities.formUnion(feed.communities) }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        feed.name = feed.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        feed.communities.sort()
+                        onSave(feed)
+                        dismiss()
+                    }
+                    .disabled(feed.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || feed.communities.isEmpty || !communityInput.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func addCommunity() {
+        guard let name = CustomFeed.communityName(communityInput) else {
+            inputError = "Use a community name with letters, numbers or underscores, up to 21 characters."
+            return
+        }
+        addedCommunities.insert(name)
+        if !feed.communities.contains(name) { feed.communities.append(name) }
+        communityInput = ""
+        inputError = nil
     }
 }

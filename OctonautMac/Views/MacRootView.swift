@@ -10,6 +10,7 @@ struct MacRootView: View {
     @State private var sidebarSelection: MacSidebarSelection? = .feed(.home)
     @State private var selectedPost: PostCardModel?
     @State private var composer: MacComposerContext?
+    @State private var editingFeed: CustomFeed?
     @State private var submissionMessage: String?
     @AppStorage("layout.mainSidebarWidth") private var sidebarWidth = 220.0
     @AppStorage("layout.mainContentWidth") private var contentWidth = 520.0
@@ -54,23 +55,37 @@ struct MacRootView: View {
             synchronizeAccount()
             selectedPost = nil
             Task {
-                await store.refreshCommunities()
+                await store.refreshCommunities(forceRefresh: true)
                 await refreshSelection(force: true)
             }
         }
+        .onChange(of: dependencies.settings.customFeeds) { _, feeds in
+            guard case .feed(let descriptor) = sidebarSelection,
+                  let id = descriptor.customFeedID else { return }
+            sidebarSelection = .feed(feeds.first { $0.id == id }?.descriptor ?? .home)
+        }
         .onChange(of: sidebarSelection) { _, _ in
             selectedPost = nil
-            Task { await refreshSelection(force: false) }
+            switch sidebarSelection {
+            case .feed: store.clearVisibleFeed()
+            default: store.clearVisibleFeed(isLoading: false)
+            }
         }
-        .onChange(of: selectedPost) { _, post in
-            guard let post else { return }
-            Task {
-                await store.loadPostDetail(for: post)
+        .task(id: sidebarSelection) {
+            await refreshSelection(force: false)
+        }
+        .task(id: selectedPost?.id) {
+            store.clearPostDetail()
+            guard let post = selectedPost else { return }
+            if await store.loadPostDetail(for: post) {
                 await store.recordPostViewed()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .octonautMacRefresh)) { _ in
-            Task { await refreshSelection(force: true) }
+            Task {
+                await store.refreshCommunities(forceRefresh: true)
+                await refreshSelection(force: true)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .octonautMacNewPost)) { _ in
             beginComposing(.post(defaultCommunity: selectedCommunity))
@@ -84,6 +99,16 @@ struct MacRootView: View {
         }
         .onOpenURL { url in
             handle(url)
+        }
+        .sheet(item: $editingFeed) { feed in
+            MacCustomFeedEditor(feed: feed, communities: store.communities) { saved in
+                if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
+                    dependencies.settings.customFeeds[index] = saved
+                } else {
+                    dependencies.settings.customFeeds.append(saved)
+                }
+                sidebarSelection = .feed(saved.descriptor)
+            }
         }
         .sheet(item: $composer) { context in
             MacComposerView(context: context) { result in
@@ -138,7 +163,20 @@ struct MacRootView: View {
         MacSidebarView(
             selection: $sidebarSelection,
             communities: store.communities,
-            accountName: dependencies.accounts.selectedAccount?.username
+            communitiesState: store.communitiesState,
+            onRefreshCommunities: {
+                Task { await store.refreshCommunities(forceRefresh: true) }
+            },
+            accountName: dependencies.accounts.selectedAccount?.username,
+            customFeeds: dependencies.settings.customFeeds,
+            onCreate: { editingFeed = CustomFeed(name: "", communities: []) },
+            onEdit: { editingFeed = $0 },
+            onDelete: { feed in
+                dependencies.settings.customFeeds.removeAll { $0.id == feed.id }
+                if case .feed(let selected) = sidebarSelection, selected.customFeedID == feed.id {
+                    sidebarSelection = .feed(.home)
+                }
+            }
         )
         .navigationSplitViewColumnWidth(
             min: 190,
@@ -500,7 +538,13 @@ private final class WindowReaderView: NSView {
 private struct MacSidebarView: View {
     @Binding var selection: MacSidebarSelection?
     let communities: [CommunityCardModel]
+    let communitiesState: OctonautLoadState
+    let onRefreshCommunities: () -> Void
     let accountName: String?
+    let customFeeds: [CustomFeed]
+    let onCreate: () -> Void
+    let onEdit: (CustomFeed) -> Void
+    let onDelete: (CustomFeed) -> Void
 
     var body: some View {
         List(selection: $selection) {
@@ -508,10 +552,36 @@ private struct MacSidebarView: View {
                 sidebarRow("Home", systemImage: "house", value: .feed(.home))
                 sidebarRow("Popular", systemImage: "flame", value: .feed(.popular))
                 sidebarRow("All", systemImage: "globe", value: .feed(.all))
+                ForEach(customFeeds) { feed in
+                    sidebarRow(feed.name, systemImage: "rectangle.stack", value: .feed(feed.descriptor))
+                        .contextMenu {
+                            Button("Edit Feed…") { onEdit(feed) }
+                            Button("Delete Feed", role: .destructive) { onDelete(feed) }
+                        }
+                }
+                Button(action: onCreate) {
+                    Label("New Custom Feed…", systemImage: "plus")
+                }
+                .buttonStyle(.plain)
             }
 
-            if !communities.isEmpty {
+            if accountName != nil || !communities.isEmpty {
                 Section("Communities") {
+                    switch communitiesState {
+                    case .idle, .loading:
+                        ProgressView("Loading communities…")
+                    case .failed(let message):
+                        Text("Couldn’t load communities. \(message)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Retry", action: onRefreshCommunities)
+                    case .empty:
+                        Text("No subscribed communities")
+                            .foregroundStyle(.secondary)
+                        Button("Refresh", action: onRefreshCommunities)
+                    case .loaded:
+                        EmptyView()
+                    }
                     ForEach(communities) { community in
                         HStack(spacing: 8) {
                             MacCommunityIcon(community: community)
@@ -580,5 +650,72 @@ private struct MacCommunityIcon: View {
         }
         .frame(width: 24, height: 24)
         .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+private struct MacCustomFeedEditor: View {
+    @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.dismiss) private var dismiss
+    @State var feed: CustomFeed
+    let communities: [CommunityCardModel]
+    let onSave: (CustomFeed) -> Void
+    @State private var communityInput = ""
+    @State private var inputError: String?
+
+    private var choices: [String] {
+        Set(communities.map { $0.name.lowercased() }).union(feed.communities).sorted()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Custom Feed").font(.title2.bold())
+            TextField("Feed name", text: $feed.name)
+            Text("Select communities for this feed. You can also add communities you don’t subscribe to.")
+                .foregroundStyle(.secondary)
+            HStack {
+                TextField("Community name, e.g. r/swift", text: $communityInput)
+                    .onSubmit(addCommunity)
+                Button("Add", action: addCommunity)
+                    .disabled(communityInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let inputError { Text(inputError).foregroundStyle(.red) }
+            List(choices, id: \.self) { name in
+                Toggle("r/\(name)", isOn: Binding(
+                    get: { feed.communities.contains(name) },
+                    set: { selected in
+                        feed.communities.removeAll { $0 == name }
+                        if selected { feed.communities.append(name) }
+                    }
+                ))
+                .toggleStyle(.checkbox)
+            }
+            Text("\(feed.communities.count) selected. \(dependencies.settings.customFeedSyncStatus)")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    feed.name = feed.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    feed.communities.sort()
+                    onSave(feed)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(feed.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || feed.communities.isEmpty || !communityInput.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 460, height: 520)
+    }
+
+    private func addCommunity() {
+        guard let name = CustomFeed.communityName(communityInput) else {
+            inputError = "Enter a community name using letters, numbers or underscores, up to 21 characters."
+            return
+        }
+        if !feed.communities.contains(name) { feed.communities.append(name) }
+        communityInput = ""
+        inputError = nil
     }
 }

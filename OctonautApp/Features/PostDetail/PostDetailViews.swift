@@ -348,54 +348,53 @@ struct GalleryView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
 
-    private let columns = [GridItem(.flexible(), spacing: 2), GridItem(.flexible(), spacing: 2)]
-    private var mediaPosts: [PostCardModel] { store.posts.filter(\.hasMedia) }
-    @State private var selectedPost: PostCardModel?
-    @State private var showPager = false
+    @State private var selectedItem: GalleryMediaItem?
+    @State private var blurNSFW = true
+
+    private var items: [GalleryMediaItem] {
+        GalleryMediaItem.items(from: store.posts.filter {
+            descriptor.kind != .community || $0.community.caseInsensitiveCompare(descriptor.name) == .orderedSame
+        })
+    }
 
     var body: some View {
         ScrollView {
-            if mediaPosts.isEmpty {
-                ContentUnavailableView(
-                    "No media posts", systemImage: "photo.on.rectangle.angled",
-                    description: Text("This feed has no displayable image or video posts.")
-                )
-                .padding(.top, 80)
-            } else {
-                LazyVGrid(columns: columns, spacing: 2) {
-                    ForEach(mediaPosts) { post in
-                        Button {
-                            selectedPost = post
-                        } label: {
-                            ZStack(alignment: .bottomLeading) {
-                                OctonautAsyncImage(url: post.thumbnailURL ?? post.mediaURL ?? post.galleryURLs.first)
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .frame(maxWidth: .infinity)
-                                    .clipped()
-                                Image(systemName: post.isVideo ? "play.circle.fill" : "photo")
-                                    .font(.system(size: 34))
-                                    .foregroundStyle(.secondary)
-                                LinearGradient(
-                                    colors: [.clear, .black.opacity(0.72)], startPoint: .center, endPoint: .bottom)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(post.title).font(.caption.weight(.semibold)).lineLimit(2)
-                                    Text("r/\(post.community)").font(.caption2)
-                                }
-                                .foregroundStyle(.white)
-                                .padding(8)
-                                if post.isSensitive {
-                                    Label("Sensitive", systemImage: "eye.slash")
-                                        .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(.white)
-                                        .padding(6)
-                                        .background(.black.opacity(0.65), in: Capsule())
-                                        .padding(7)
-                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                                }
+            LazyVStack(spacing: 0) {
+                HStack(alignment: .top, spacing: 4) {
+                    ForEach(0..<2) { column in
+                        LazyVStack(spacing: 4) {
+                            ForEach(Array(items.enumerated()).filter { $0.offset % 2 == column }.map(\.element)) { item in
+                                GalleryMediaTile(item: item, blurNSFW: blurNSFW) { selectedItem = item }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
                     }
+                }
+                .padding(.horizontal, 4)
+
+                if case .failed(let message) = store.feedState {
+                    VStack(spacing: 12) {
+                        Text(message).font(.callout).foregroundStyle(.secondary)
+                        Button("Try again") {
+                            Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+                        }
+                    }
+                    .padding()
+                } else if store.feedState == .loading || store.feedState == .idle {
+                    ProgressView("Loading gallery").padding()
+                } else if store.galleryPageCursor(for: descriptor) != nil {
+                    ProgressView("Loading more")
+                        .padding()
+                        .task(id: store.galleryPageCursor(for: descriptor)) {
+                            await store.loadMorePosts(for: descriptor)
+                        }
+                } else if items.isEmpty {
+                    ContentUnavailableView("No media posts", systemImage: "photo.on.rectangle.angled",
+                        description: Text("This feed has no displayable images or videos."))
+                        .padding(.top, 60)
+                } else {
+                    Text("You've reached the end.")
+                        .font(.footnote).foregroundStyle(.secondary).padding()
                 }
             }
         }
@@ -403,27 +402,23 @@ struct GalleryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if !mediaPosts.isEmpty {
-                        Button {
-                            showPager = true
-                        } label: {
-                            Label("Full Screen Gallery", systemImage: "rectangle.portrait.on.rectangle.portrait")
-                        }
-                    }
-                    ShareLink(item: URL(string: "https://www.reddit.com")!) {
-                        Label("Share Feed", systemImage: "square.and.arrow.up")
-                    }
+                Button {
+                    blurNSFW.toggle()
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Label("NSFW blur", systemImage: blurNSFW ? "eye.slash" : "eye")
                 }
+                .accessibilityLabel("NSFW blur")
+                .accessibilityValue(blurNSFW ? "On" : "Off")
+                .accessibilityHint(blurNSFW ? "Show NSFW images" : "Blur NSFW images")
             }
         }
-        .fullScreenCover(item: $selectedPost) { post in
-            OctonautMediaViewer(post: post)
-        }
-        .fullScreenCover(isPresented: $showPager) {
-            GalleryPagerView(posts: mediaPosts, store: store)
+        .task { await store.refreshPosts(for: descriptor) }
+        .refreshable { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+        .fullScreenCover(item: $selectedItem) { item in
+            OctonautMediaViewer(post: item.post, initialPage: item.page, onOpenPost: {
+                selectedItem = nil
+                router.push(.post(item.post))
+            })
         }
     }
 }

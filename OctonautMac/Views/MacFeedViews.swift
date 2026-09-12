@@ -15,7 +15,7 @@ struct MacFeedListView: View {
     var body: some View {
         Group {
             switch store.feedState {
-            case .idle where store.posts.isEmpty, .loading where store.posts.isEmpty:
+            case .idle, .loading:
                 ProgressView("Loading \(descriptor.macTitle)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let message) where store.posts.isEmpty:
@@ -459,7 +459,10 @@ struct MacPostDetailView: View {
     }
 
     var body: some View {
-        if let displayedPost {
+        if post == nil && store.feedState == .loading {
+            ProgressView("Loading feed…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let displayedPost {
             Group {
                 if displayedPost.prefersMediaFirstPresentation && isMediaFillingPane {
                     MacMediaLightboxView(
@@ -795,6 +798,12 @@ private struct MacMediaLightboxView: View {
 
     private let saver = MacMediaSaver()
 
+    private var shouldBlurMedia: Bool {
+        guard !isRevealed else { return false }
+        return (post.isNSFW && dependencies.settings.blurNSFWMedia)
+            || (post.isSpoiler && dependencies.settings.blurSpoilers)
+    }
+
     private var mediaURLs: [URL] {
         post.galleryURLs.isEmpty ? post.mediaURL.map { [$0] } ?? [] : post.galleryURLs
     }
@@ -815,6 +824,7 @@ private struct MacMediaLightboxView: View {
                 mediaView(for: currentURL)
                     .id(currentURL)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .blur(radius: shouldBlurMedia ? 24 : 0)
                     .contentShape(Rectangle())
                     .accessibilityAction(named: fillsPane ? "Fit media in post" : "Fill detail pane") {
                         onTogglePaneFill()
@@ -827,7 +837,7 @@ private struct MacMediaLightboxView: View {
                     .foregroundStyle(.white)
             }
 
-            if post.isSensitive && !isRevealed {
+            if shouldBlurMedia {
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .environment(\.colorScheme, .dark)

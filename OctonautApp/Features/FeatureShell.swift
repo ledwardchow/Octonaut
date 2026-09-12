@@ -126,6 +126,29 @@ struct OctonautTabsView: View {
         .onOpenURL { url in
             handleIncomingURL(url)
         }
+        .onChange(of: dependencies.settings.customFeeds) { _, feeds in
+            if let id = postsSplitState.selectedFeed.customFeedID {
+                let updated = feeds.first { $0.id == id }?.descriptor ?? .home
+                if updated != postsSplitState.selectedFeed {
+                    store.clearVisibleFeed()
+                    postsRouter.popToRoot()
+                    postsSplitState.selectFeed(updated)
+                }
+            }
+            for (index, route) in postsRouter.path.enumerated() {
+                guard case .feed(let descriptor) = route, let id = descriptor.customFeedID else { continue }
+                guard let updated = feeds.first(where: { $0.id == id })?.descriptor else {
+                    store.clearVisibleFeed(isLoading: false)
+                    postsRouter.path = Array(postsRouter.path.prefix(index))
+                    break
+                }
+                if updated != descriptor {
+                    store.clearVisibleFeed()
+                    postsRouter.path = Array(postsRouter.path.prefix(index)) + [.feed(updated)]
+                    break
+                }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await dependencies.persistence.beginUsageSession() }
@@ -370,45 +393,94 @@ private struct PostsSplitView: View {
     let router: OctonautFeatureRouter
     let state: PostsSplitState
 
+    @State private var sidebarVisible = true
+    @State private var showingCommunities = false
+
     var body: some View {
         @Bindable var router = router
 
-        HStack(spacing: 0) {
-            NavigationStack {
-                PostsRootView(
-                    store: store,
-                    router: router,
-                    onSelectFeed: selectFeed,
-                    selectedFeed: state.selectedFeed
-                )
-            }
-            .frame(width: 290)
+        GeometryReader { geometry in
+            let wideLayout = geometry.size.width >= 1100
+            HStack(spacing: 0) {
+                if sidebarVisible && geometry.size.width >= 900 {
+                    NavigationStack {
+                        PostsRootView(
+                            store: store,
+                            router: router,
+                            onSelectFeed: selectFeed,
+                            selectedFeed: state.selectedFeed
+                        )
+                    }
+                    .frame(width: 240)
+                    Divider()
+                }
 
-            Divider()
+                if wideLayout {
+                    NavigationStack {
+                        selectedFeedView
+                            .toolbar { sidebarButton(width: geometry.size.width) }
+                    }
+                    .frame(width: 380)
+                    Divider()
+                }
 
-            NavigationStack(path: $router.path) {
-                selectedFeedView
+                NavigationStack(path: $router.path) {
+                    Group {
+                        if wideLayout && store.feedState == .loading {
+                            ProgressView("Loading feed…")
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else if wideLayout {
+                            ContentUnavailableView(
+                                "Select a post",
+                                systemImage: "text.bubble",
+                                description: Text("Choose a post to read it and its comments here.")
+                            )
+                        } else {
+                            selectedFeedView
+                                .toolbar { sidebarButton(width: geometry.size.width) }
+                        }
+                    }
                     .navigationDestination(for: FeatureRoute.self) { route in
                         OctonautDestinationView(route: route, store: store, router: router)
                     }
+                }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
-
-            if let community = state.sidebarCommunity {
-                Divider()
-                SubredditSidebarView(
-                    name: community,
-                    store: store,
-                    router: router,
-                    onOpenCommunity: {
-                        selectFeed(FeedDescriptorModel(kind: .community, name: community))
+            .sheet(isPresented: $showingCommunities) {
+                NavigationStack {
+                    PostsRootView(
+                        store: store,
+                        router: router,
+                        onSelectFeed: { descriptor in
+                            selectFeed(descriptor)
+                            showingCommunities = false
+                        },
+                        selectedFeed: state.selectedFeed
+                    )
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { showingCommunities = false }
+                        }
                     }
-                )
-                    .frame(width: 310)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
         }
-        .animation(.snappy(duration: 0.24), value: state.sidebarCommunity)
+    }
+
+    @ToolbarContentBuilder
+    private func sidebarButton(width: CGFloat) -> some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button {
+                if width < 900 {
+                    showingCommunities = true
+                } else {
+                    sidebarVisible.toggle()
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .accessibilityLabel("Show or hide communities")
+        }
     }
 
     @ViewBuilder
@@ -431,13 +503,15 @@ private struct PostsSplitView: View {
     }
 
     private func selectFeed(_ descriptor: FeedDescriptorModel) {
+        if state.selectedFeed != descriptor { store.clearVisibleFeed() }
+        else { store.clearPostDetail() }
         router.popToRoot()
         state.selectFeed(descriptor)
     }
 
     private func selectPost(_ post: PostCardModel) {
         state.selectPost(post)
-        router.push(.post(post))
+        router.path = [.post(post)]
     }
 }
 

@@ -449,6 +449,8 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     var isDeleted: Bool
     var moreCount: Int?
     var moreFailed: Bool
+    var moreParentFullname: String?
+    var moreChildIDs: [String]
 
     func isOriginalPoster(postAuthor: String) -> Bool {
         guard !author.isEmpty, !postAuthor.isEmpty else { return false }
@@ -470,7 +472,9 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         isMoreNode: Bool = false,
         isDeleted: Bool = false,
         moreCount: Int? = nil,
-        moreFailed: Bool = false
+        moreFailed: Bool = false,
+        moreParentFullname: String? = nil,
+        moreChildIDs: [String] = []
     ) {
         self.id = id
         self.author = author
@@ -487,6 +491,8 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         self.isDeleted = isDeleted
         self.moreCount = moreCount
         self.moreFailed = moreFailed
+        self.moreParentFullname = moreParentFullname
+        self.moreChildIDs = moreChildIDs
     }
 
     init(comment: CommentNode, depth: Int = 0, isCollapsed: Bool = false) {
@@ -515,7 +521,9 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         CommentCardModel(
             id: node.id, author: "", body: "", score: 0, age: "", vote: 0, depth: depth,
             isModerator: false, isCollapsed: false, children: [], isMoreNode: true,
-            moreCount: node.count ?? node.childIDs.count)
+            moreCount: node.count ?? node.childIDs.count,
+            moreParentFullname: node.parentFullname,
+            moreChildIDs: node.childIDs)
     }
 
     static func deleted(_ node: DeletedCommentNode, depth: Int) -> CommentCardModel {
@@ -624,10 +632,12 @@ struct AccountCardModel: Identifiable, Hashable, Sendable {
 }
 
 struct FeedDescriptorModel: Hashable, Sendable {
-    enum Kind: String, Hashable, Sendable { case home, popular, all, community, multireddit }
+    enum Kind: String, Hashable, Sendable { case home, popular, all, community, multireddit, custom }
     var kind: Kind
     var name: String
     var sort: String = "Best"
+    var customFeedID: UUID? = nil
+    var communities: [String] = []
 
     static let home = FeedDescriptorModel(kind: .home, name: "Home")
     static let popular = FeedDescriptorModel(kind: .popular, name: "Popular")
@@ -814,7 +824,9 @@ final class OctonautFeatureStore {
     /// coordinator changes selection.
     private var accountID: AccountID?
     private var accountGeneration: UInt = 0
-    @ObservationIgnored private var nextPage: String?
+    private var nextPage: String?
+    @ObservationIgnored private var feedRequestID = UUID()
+    @ObservationIgnored private var detailRequestID = UUID()
     @ObservationIgnored private var loadedFeed: FeedDescriptorModel?
     @ObservationIgnored private var feedCache: [FeedDescriptorModel: FeedCacheEntry] = [:]
     @ObservationIgnored private let feedCacheFreshness: TimeInterval = 15 * 60
@@ -940,7 +952,7 @@ final class OctonautFeatureStore {
     /// coordinator remains the source of truth; this value binds feed reads
     /// to the selected session and lets stale responses be discarded.
     func synchronizeAccount(id: AccountID?, generation: UInt, accounts domainAccounts: [Account]) {
-        let selectionChanged = accountID != id
+        let selectionChanged = accountID != id || accountGeneration != generation
         accountID = id
         accountGeneration = generation
         accounts = domainAccounts.map { AccountCardModel(account: $0, isActive: $0.id == id) }
@@ -971,7 +983,29 @@ final class OctonautFeatureStore {
         accountID == id && accountGeneration == generation
     }
 
+    /// Invalidate pending work before changing the visible selection.
+    func clearVisibleFeed(isLoading: Bool = true) {
+        feedRequestID = UUID()
+        loadedFeed = nil
+        posts = []
+        nextPage = nil
+        filteredPostCount = 0
+        feedState = isLoading ? .loading : .idle
+        clearPostDetail()
+    }
+
+    func clearPostDetail() {
+        detailRequestID = UUID()
+        detailPost = nil
+        comments = []
+        moreLoadingIDs.removeAll()
+        moreFailedIDs.removeAll()
+        detailState = .idle
+    }
+
     func refreshPosts(for descriptor: FeedDescriptorModel = .popular, forceRefresh: Bool = false) async {
+        let requestID = UUID()
+        feedRequestID = requestID
         let filterRevision = Int(settings?.filterRevision ?? 0)
         var hasWarmContent = loadedFeed == descriptor && !posts.isEmpty
         if !forceRefresh,
@@ -989,10 +1023,15 @@ final class OctonautFeatureStore {
         }
 
         feedState = hasWarmContent ? .loaded : .loading
-        if !hasWarmContent { filteredPostCount = 0 }
+        if !hasWarmContent {
+            posts = []
+            loadedFeed = nil
+            nextPage = nil
+            filteredPostCount = 0
+        }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(240))
-            guard !Task.isCancelled else { return }
+            guard feedRequestID == requestID, !Task.isCancelled else { return }
             feedState = posts.isEmpty ? .empty : .loaded
             return
         }
@@ -1009,10 +1048,10 @@ final class OctonautFeatureStore {
                 ),
                 account: selectedAccountID
             )
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard feedRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let filtered = await applyFilters(to: listing.items)
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard feedRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             posts = filtered.posts.map(PostCardModel.init)
             filteredPostCount = filtered.removedCount
@@ -1029,7 +1068,7 @@ final class OctonautFeatureStore {
         } catch is CancellationError {
             return
         } catch {
-            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+            guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             nextPage = nil
             feedState = hasWarmContent ? .loaded : .failed(error.localizedDescription)
         }
@@ -1257,13 +1296,15 @@ final class OctonautFeatureStore {
         sort: String = "Best",
         preservingVisibleComments: Bool = false
     ) async -> Bool {
+        let requestID = UUID()
+        detailRequestID = requestID
         if !preservingVisibleComments {
             detailState = .loading
             detailPost = post
         }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled else { return false }
+            guard detailRequestID == requestID, !Task.isCancelled else { return false }
             detailState = .loaded
             return true
         }
@@ -1279,7 +1320,7 @@ final class OctonautFeatureStore {
                 sort: CommentSort(rawValue: sort.lowercased()),
                 account: selectedAccountID
             )
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard detailRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return false }
             detailPost = PostCardModel(post: thread.post)
             comments = thread.comments.map { node in
@@ -1295,7 +1336,7 @@ final class OctonautFeatureStore {
         } catch is CancellationError {
             return false
         } catch {
-            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return false }
+            guard detailRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return false }
             if !preservingVisibleComments {
                 detailState = .failed(error.localizedDescription)
             }
@@ -1303,27 +1344,118 @@ final class OctonautFeatureStore {
         }
     }
 
-    /// Reddit's read client exposes a complete post/thread request rather than
-    /// a separate child-expansion endpoint. Retrying the thread request keeps
-    /// the `more` row recoverable without inventing a transport API here.
     func loadMoreComments(_ commentID: String, for post: PostCardModel, sort: String = "Best") async {
         guard !moreLoadingIDs.contains(commentID) else { return }
+        guard let placeholder = comment(withID: commentID, in: comments),
+              placeholder.isMoreNode,
+              let parentFullname = placeholder.moreParentFullname,
+              !placeholder.moreChildIDs.isEmpty else {
+            moreFailedIDs.insert(commentID)
+            return
+        }
+        let requestID = detailRequestID
         moreLoadingIDs.insert(commentID)
         moreFailedIDs.remove(commentID)
-        defer { moreLoadingIDs.remove(commentID) }
-        let loaded = await loadPostDetail(
-            for: post,
-            sort: sort,
-            preservingVisibleComments: true
-        )
-        if !loaded { moreFailedIDs.insert(commentID) }
-    }
+        defer { if detailRequestID == requestID { moreLoadingIDs.remove(commentID) } }
 
-    func loadMorePosts(for descriptor: FeedDescriptorModel = .popular) async {
-        guard feedState == .loaded else { return }
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled else { return }
+            guard detailRequestID == requestID else { return }
+            moreFailedIDs.insert(commentID)
+            return
+        }
+
+        let requestedChildIDs = Array(placeholder.moreChildIDs.prefix(100))
+        let remainingChildIDs = Array(placeholder.moreChildIDs.dropFirst(requestedChildIDs.count))
+        let selectedAccountID = accountID
+        let selectedGeneration = accountGeneration
+        do {
+            let nodes = try await reddit.moreComments(
+                postFullname: post.fullname,
+                parentFullname: parentFullname,
+                childIDs: requestedChildIDs,
+                sort: CommentSort(rawValue: sort),
+                account: selectedAccountID
+            )
+            guard detailRequestID == requestID, !Task.isCancelled,
+                  isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+
+            var replacements = nodes.map { node -> CommentCardModel in
+                switch node {
+                case .comment(let comment):
+                    return CommentCardModel(comment: comment, depth: placeholder.depth)
+                case .more(let more):
+                    return CommentCardModel.more(more, depth: placeholder.depth)
+                case .deleted(let deleted):
+                    return CommentCardModel.deleted(deleted, depth: placeholder.depth)
+                }
+            }
+            if !remainingChildIDs.isEmpty {
+                let remainingCount = max(
+                    remainingChildIDs.count,
+                    (placeholder.moreCount ?? placeholder.moreChildIDs.count) - requestedChildIDs.count
+                )
+                replacements.append(
+                    .more(
+                        MoreCommentsNode(
+                            id: "\(commentID)-\(remainingChildIDs[0])",
+                            parentFullname: parentFullname,
+                            childIDs: remainingChildIDs,
+                            count: remainingCount
+                        ),
+                        depth: placeholder.depth
+                    )
+                )
+            }
+            replaceComment(withID: commentID, in: &comments, with: replacements)
+        } catch is CancellationError {
+            return
+        } catch {
+            guard detailRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+            moreFailedIDs.insert(commentID)
+        }
+    }
+
+    private func comment(
+        withID id: String,
+        in values: [CommentCardModel]
+    ) -> CommentCardModel? {
+        for value in values {
+            if value.id == id { return value }
+            if let nested = comment(withID: id, in: value.children) { return nested }
+        }
+        return nil
+    }
+
+    private func replaceComment(
+        withID id: String,
+        in values: inout [CommentCardModel],
+        with replacements: [CommentCardModel]
+    ) {
+        for index in values.indices {
+            if values[index].id == id {
+                values.replaceSubrange(index...index, with: replacements)
+                return
+            }
+            replaceComment(withID: id, in: &values[index].children, with: replacements)
+        }
+    }
+
+    func galleryPageCursor(for descriptor: FeedDescriptorModel) -> String? {
+        guard loadedFeed == descriptor else { return nil }
+        return nextPage
+    }
+
+    @ObservationIgnored private var isLoadingNextPage = false
+
+    func loadMorePosts(for descriptor: FeedDescriptorModel = .popular) async {
+        guard feedState == .loaded || feedState == .empty, !isLoadingNextPage else { return }
+        let requestID = feedRequestID
+        isLoadingNextPage = true
+        defer { isLoadingNextPage = false }
+        guard let reddit else {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard feedRequestID == requestID, !Task.isCancelled else { return }
             let nextIndex = posts.count
             let copies = posts.prefix(2).map { post in
                 PostCardModel(
@@ -1354,16 +1486,17 @@ final class OctonautFeatureStore {
                 ),
                 account: selectedAccountID
             )
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard feedRequestID == requestID, !Task.isCancelled, loadedFeed == descriptor, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let filtered = await applyFilters(to: listing.items)
-            guard !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
+            guard feedRequestID == requestID, !Task.isCancelled, loadedFeed == descriptor, self.nextPage == nextPage, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let existing = Set(posts.map(\.id))
             posts.append(
                 contentsOf: filtered.posts.filter { !existing.contains($0.id) }.map(PostCardModel.init))
             filteredPostCount += filtered.removedCount
-            self.nextPage = listing.after
+            self.nextPage = listing.after == nextPage ? nil : listing.after
+            feedState = posts.isEmpty ? .empty : .loaded
             feedCache[descriptor] = FeedCacheEntry(
                 posts: posts,
                 filteredPostCount: filteredPostCount,
@@ -1374,7 +1507,7 @@ final class OctonautFeatureStore {
         } catch is CancellationError {
             return
         } catch {
-            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+            guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             feedState = .failed(error.localizedDescription)
         }
     }
@@ -1446,11 +1579,14 @@ final class OctonautFeatureStore {
         case .home: destination = .home
         case .popular: destination = .popular
         case .all: destination = .all
+        case .custom: destination = .combined(descriptor.communities)
         case .community: destination = .community(descriptor.name)
         case .multireddit: destination = .url(URL(string: "https://www.reddit.com")!)
         }
+        let sort = PostSort(rawValue: selectedSort.lowercased())
         return FeedDescriptor(
-            destination: destination, sort: PostSort(rawValue: selectedSort.lowercased()))
+            destination: destination,
+            sort: descriptor.kind == .custom && sort == .best ? .hot : sort)
     }
 
     func vote(postID: String, value: Int) {

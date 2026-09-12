@@ -19,14 +19,32 @@ final class SearchFeatureModel {
 
     var posts: [PostCardModel] = []
     var communities: [CommunityCardModel] = []
+    var trendingCommunities: [CommunityCardModel] = []
     var users: [UserProfile] = []
     var state: SearchLoadState = .idle
+    var trendingState: SearchLoadState = .idle
     var activeScope: FeatureSearchScope = .posts
     var activeQuery = ""
     var paginationError: String?
 
     init(reddit: any RedditClient) {
         self.reddit = reddit
+    }
+
+    func loadTrendingCommunities(forceRefresh: Bool = false) async {
+        if !forceRefresh, trendingState == .loading || trendingState == .loaded { return }
+        trendingState = .loading
+        do {
+            let listing = try await reddit.trendingCommunities(limit: 25)
+            guard !Task.isCancelled else { return }
+            trendingCommunities = listing.items.map(CommunityCardModel.init)
+            trendingState = trendingCommunities.isEmpty ? .empty : .loaded
+        } catch is CancellationError {
+            trendingState = trendingCommunities.isEmpty ? .idle : .loaded
+            return
+        } catch {
+            trendingState = .failed(error.localizedDescription)
+        }
     }
 
     func submit(query: String, scope: FeatureSearchScope) async {

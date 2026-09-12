@@ -4,6 +4,47 @@ import XCTest
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
+    func testGalleryIncludesEveryAlbumImageAndKeepsViewerPage() {
+        var album = PostCardModel.sample
+        album.hasMedia = true
+        album.mediaKind = "gallery"
+        album.galleryURLs = (0..<120).map { URL(string: "https://i.redd.it/image-\($0).jpg")! }
+        let items = GalleryMediaItem.items(from: [album])
+        XCTAssertEqual(items.count, 120)
+        XCTAssertEqual(items.last?.page, 119)
+        XCTAssertEqual(items.last?.url, album.galleryURLs.last)
+        XCTAssertEqual(Set(items.map(\.id)).count, 120)
+    }
+
+    func testGalleryUsesFullImageAndVideoThumbnail() {
+        var post = PostCardModel.sample
+        post.hasMedia = true
+        post.galleryURLs = []
+        post.mediaKind = "image"
+        post.isVideo = false
+        post.mediaURL = URL(string: "https://i.redd.it/full.jpg")!
+        post.thumbnailURL = URL(string: "https://preview.redd.it/thumb.jpg")!
+        XCTAssertEqual(GalleryMediaItem.items(from: [post]).first?.previewURL, post.mediaURL)
+        post.mediaKind = "video"
+        XCTAssertEqual(GalleryMediaItem.items(from: [post]).first?.previewURL, post.thumbnailURL)
+        post.hasMedia = false
+        XCTAssertTrue(GalleryMediaItem.items(from: [post]).isEmpty)
+    }
+
+    @MainActor
+    func testGalleryCanPagePastEmptyResultsAndStopsOnRepeatedCursor() async {
+        let data = Data(#"{"data":{"after":"next-page","children":[]}}"#.utf8)
+        let client = FixtureRedditClient(listingData: data)
+        let store = OctonautFeatureStore(reddit: client)
+        await store.refreshPosts(for: .popular)
+        XCTAssertEqual(store.galleryPageCursor(for: .popular), "next-page")
+        XCTAssertNil(store.galleryPageCursor(for: .home))
+        await store.loadMorePosts(for: .popular)
+        XCTAssertNil(store.galleryPageCursor(for: .popular))
+        let requests = await client.listingRequests()
+        XCTAssertEqual(requests, 2)
+    }
+
     @MainActor
     func testPostsSplitStateRoutesFeedsAndPostsToTheirColumns() throws {
         let state = PostsSplitState()
@@ -175,6 +216,43 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(query["raw_json"], "1")
     }
 
+    func testTrendingCommunitiesBuildsPublicWebsiteJSONRoute() {
+        let route = URLSessionRedditClient.trendingCommunitiesRoute(limit: 500)
+        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(route.path, "/subreddits/popular.json")
+        XCTAssertEqual(query["limit"], "100")
+        XCTAssertEqual(query["raw_json"], "1")
+    }
+
+    func testMoreCommentsBuildsPublicWebsiteJSONRoute() {
+        let route = URLSessionRedditClient.moreCommentsRoute(
+            postFullname: "t3_sample",
+            childIDs: ["first", "second"],
+            sort: .top
+        )
+        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
+            item.value.map { (item.name, $0) }
+        })
+
+        XCTAssertEqual(route.path, "/api/morechildren")
+        XCTAssertEqual(query["api_type"], "json")
+        XCTAssertEqual(query["link_id"], "t3_sample")
+        XCTAssertEqual(query["children"], "first,second")
+        XCTAssertEqual(query["limit_children"], "false")
+        XCTAssertEqual(query["sort"], "top")
+        XCTAssertEqual(query["raw_json"], "1")
+
+        let bestRoute = URLSessionRedditClient.moreCommentsRoute(
+            postFullname: "t3_sample",
+            childIDs: ["first"],
+            sort: .best
+        )
+        XCTAssertEqual(bestRoute.query.first(where: { $0.name == "sort" })?.value, "confidence")
+    }
+
     func testCommunityCodecPrefersCommunityIconAndFallsBackToLegacyIcon() throws {
         let data = Data(
             #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","community_icon":"https://styles.redditmedia.com/swift.png","icon_img":"https://styles.redditmedia.com/legacy-swift.png"}},{"kind":"t5","data":{"display_name":"iPhone","community_icon":"","icon_img":"https://styles.redditmedia.com/iphone.png"}}]}}"#.utf8
@@ -211,6 +289,20 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(model.state, .loaded)
         XCTAssertEqual(model.users.map(\.reference.username), ["Swift_Reader"])
         XCTAssertTrue(model.posts.isEmpty)
+        XCTAssertTrue(model.communities.isEmpty)
+    }
+
+    @MainActor
+    func testTrendingCommunitiesLoadSeparatelyFromSearchResults() async {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"AskReddit","subscribers":58184146,"community_icon":"https://styles.redditmedia.com/askreddit.png"}}]}}"#.utf8
+        )
+        let model = SearchFeatureModel(reddit: FixtureRedditClient(communitiesData: data))
+
+        await model.loadTrendingCommunities()
+
+        XCTAssertEqual(model.trendingState, .loaded)
+        XCTAssertEqual(model.trendingCommunities.map(\.name), ["askreddit"])
         XCTAssertTrue(model.communities.isEmpty)
     }
 
@@ -329,8 +421,32 @@ final class DomainTests: XCTestCase {
 
         XCTAssertEqual(
             String(attributed.characters),
-            "▎ quoted text\n\n• first item\n• second item\n\nspoiler text"
+            "▎ quoted text\n\n• first item\n• second item\n\n[Reveal spoiler]"
         )
+    }
+
+    func testSpoilersRevealIndependentlyAndPreserveLinks() {
+        let source = "Before >!**secret** [link](https://example.com)!< and >!second!< after"
+        let hidden = RedditPostMarkdown.attributedString(from: source)
+        XCTAssertEqual(String(hidden.characters), "Before [Reveal spoiler] and [Reveal spoiler] after")
+        XCTAssertFalse(hidden.runs.contains { $0.link?.host == "example.com" })
+        let revealed = RedditPostMarkdown.attributedString(from: source, revealedSpoilers: [0])
+        XCTAssertEqual(String(revealed.characters), "Before secret link and [Reveal spoiler] after")
+        XCTAssertTrue(revealed.runs.contains { $0.link?.host == "example.com" })
+    }
+
+    func testSpoilerSyntaxInCodeAndEscapedTextStaysLiteral() {
+        for source in ["`>!literal!<`", "```\n>!literal!<\n```", #"\>!literal!<"#] {
+            let text = RedditPostMarkdown.attributedString(from: source)
+            XCTAssertEqual(String(text.characters), ">!literal!<")
+            XCTAssertFalse(text.runs.contains { $0.link != nil })
+        }
+    }
+
+    func testSpoilerImageDoesNotBecomeVisibleImageBlock() {
+        let source = ">![Secret](https://i.redd.it/secret.png)!<"
+        XCTAssertEqual(RedditPostMarkdown.blocks(from: source), [.text(source)])
+        XCTAssertEqual(String(RedditPostMarkdown.attributedString(from: source).characters), "[Reveal spoiler]")
     }
 
     func testMarkdownParsesPipeTablesAsBlocks() {
@@ -471,17 +587,29 @@ final class DomainTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadingMoreCommentsKeepsTheVisibleTreeUntilRefreshCompletes() async throws {
-        let postData = Data(
-            #"[{"data":{"children":[{"kind":"t3","data":{"id":"sample","name":"t3_sample","permalink":"/r/swift/comments/sample/example/","title":"Example","subreddit":"swift","is_self":true}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"new-comment","name":"t1_new-comment","parent_id":"t3_sample","author":"reader","body":"Loaded comment","created_utc":0,"replies":""}}]}}]"#.utf8
+    func testLoadingMoreCommentsKeepsTheVisibleTreeThenReplacesThePlaceholder() async throws {
+        let moreCommentsData = Data(
+            #"{"json":{"errors":[],"data":{"things":[{"kind":"t1","data":{"id":"child","name":"t1_child","parent_id":"t1_parent","author":"reader","body":"Loaded comment","created_utc":0,"replies":""}},{"kind":"t1","data":{"id":"grandchild","name":"t1_grandchild","parent_id":"t1_child","author":"another_reader","body":"Nested reply","created_utc":0,"replies":""}}]}}}"#.utf8
         )
-        let client = FixtureRedditClient(postData: postData, postDelay: .milliseconds(100))
+        let client = FixtureRedditClient(
+            moreCommentsData: moreCommentsData,
+            moreCommentsDelay: .milliseconds(100)
+        )
         let store = OctonautFeatureStore(reddit: client)
-        let visibleComment = CommentCardModel(
-            id: "visible-comment", author: "reader", body: "Keep me visible", score: 1,
+        let more = CommentCardModel.more(
+            MoreCommentsNode(
+                id: "more-comments",
+                parentFullname: "t1_parent",
+                childIDs: ["child", "grandchild"],
+                count: 2
+            ),
+            depth: 1
+        )
+        let parent = CommentCardModel(
+            id: "parent", author: "reader", body: "Keep me visible", score: 1,
             age: "now", vote: 0, depth: 0, isModerator: false, isCollapsed: false,
-            children: [])
-        store.comments = [visibleComment]
+            children: [more])
+        store.comments = [parent]
         store.detailState = .loaded
 
         let loadTask = Task {
@@ -489,15 +617,20 @@ final class DomainTests: XCTestCase {
         }
         try await Task.sleep(for: .milliseconds(10))
 
-        XCTAssertEqual(store.comments.map(\.id), ["visible-comment"])
+        XCTAssertEqual(store.comments[0].children.map(\.id), ["more-comments"])
         XCTAssertEqual(store.detailState, .loaded)
         XCTAssertTrue(store.moreLoadingIDs.contains("more-comments"))
 
         await loadTask.value
 
-        XCTAssertEqual(store.comments.map(\.id), ["new-comment"])
+        XCTAssertEqual(store.comments.map(\.id), ["parent"])
+        XCTAssertEqual(store.comments[0].children.map(\.id), ["child"])
+        XCTAssertEqual(store.comments[0].children[0].children.map(\.id), ["grandchild"])
+        XCTAssertEqual(store.comments[0].children[0].depth, 1)
+        XCTAssertEqual(store.comments[0].children[0].children[0].depth, 2)
         XCTAssertEqual(store.detailState, .loaded)
         XCTAssertFalse(store.moreLoadingIDs.contains("more-comments"))
+        XCTAssertFalse(store.moreFailedIDs.contains("more-comments"))
     }
 
     @MainActor
@@ -560,6 +693,33 @@ final class DomainTests: XCTestCase {
         await store.refreshCommunities()
         let requestCount = await client.subscribedCommunitiesRequests()
         XCTAssertEqual(requestCount, 1)
+    }
+
+    @MainActor
+    func testSubscriptionsRestartWhenSameAccountLogsInAgain() async throws {
+        let accountID = AccountID()
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","user_is_subscriber":true}}]}}"#.utf8
+        )
+        let client = FixtureRedditClient(
+            communitiesData: data,
+            subscribedCommunitiesDelay: .milliseconds(100)
+        )
+        let store = OctonautFeatureStore(reddit: client, accountID: accountID)
+        let initialLoad = Task { await store.refreshCommunities() }
+        while await client.subscribedCommunitiesRequests() == 0 {
+            await Task.yield()
+        }
+
+        store.synchronizeAccount(id: accountID, generation: 1, accounts: [])
+        await store.refreshCommunities()
+        await initialLoad.value
+
+        XCTAssertEqual(store.communities.map(\.name), ["swift"])
+        XCTAssertEqual(store.communitiesState, .loaded)
+        let requestCount = await client.subscribedCommunitiesRequests()
+        XCTAssertEqual(requestCount, 2)
+        await SubscribedCommunitiesCache.shared.remove(for: accountID)
     }
 
     @MainActor
