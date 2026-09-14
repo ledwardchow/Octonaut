@@ -791,13 +791,13 @@ enum OctonautFeatureURLRouter {
 enum FeatureSheet: Identifiable, Hashable {
     case quickCommunitySearch
     case quickAccountSwitcher
-    case composer(ComposerKind)
+    case composer(ComposerKind, community: String?)
 
     var id: String {
         switch self {
         case .quickCommunitySearch: "quick-community-search"
         case .quickAccountSwitcher: "quick-account-switcher"
-        case .composer(let kind): "composer-\(kind.rawValue)"
+        case .composer(let kind, let community): "composer-\(kind.rawValue)-\(community ?? "none")"
         }
     }
 }

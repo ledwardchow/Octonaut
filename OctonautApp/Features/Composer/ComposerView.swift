@@ -19,6 +19,13 @@ struct ComposerView: View {
     @State private var sending = false
     @State private var draftID = UUID()
     @State private var draftAccountID: AccountID?
+    @FocusState private var isBodyFocused: Bool
+
+    init(kind: ComposerKind, store: OctonautFeatureStore, community: String = "") {
+        self.kind = kind
+        self.store = store
+        _community = State(initialValue: community)
+    }
 
     private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }
     private var canSubmit: Bool {
@@ -29,95 +36,121 @@ struct ComposerView: View {
         }
     }
 
+    private var submitTitle: String {
+        if sending {
+            return switch kind {
+            case .post: "Posting…"
+            case .comment: "Commenting…"
+            case .message: "Sending…"
+            case .edit: "Saving…"
+            }
+        }
+
+        return switch kind {
+        case .post: "Post"
+        case .comment: "Comment"
+        case .message: "Send"
+        case .edit: "Save"
+        }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            if isPreview {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        if !title.isEmpty { Text(title).font(.title3.weight(.bold)) }
-                        RedditMarkdownView(
-                            source: bodyText.isEmpty ? "Nothing to preview yet." : bodyText
-                        )
+        NavigationStack {
+            VStack(spacing: 0) {
+                if isPreview {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if !title.isEmpty { Text(title).font(.title3.weight(.bold)) }
+                            RedditMarkdownView(
+                                source: bodyText.isEmpty ? "Nothing to preview yet." : bodyText
+                            )
                             .font(.body)
                             .tint(.accentColor)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        if kind == .post, postType == "Link", !link.isEmpty { Label(link, systemImage: "link") .font(.caption).foregroundStyle(.secondary) }
+                            if kind == .post, postType == "Link", !link.isEmpty { Label(link, systemImage: "link") .font(.caption).foregroundStyle(.secondary) }
+                        }
+                        .padding()
                     }
-                    .padding()
-                }
-            } else {
-                Form {
-                    if kind == .post {
-                        Section("Destination") {
-                            TextField("Community, for example apple", text: $community)
-                                .textInputAutocapitalization(.never)
-                            Picker("Post type", selection: $postType) {
-                                Text("Text").tag("Text")
-                                Text("Link").tag("Link")
-                                Text("Image").tag("Image")
+                } else {
+                    Form {
+                        if kind == .post {
+                            Section("Destination") {
+                                TextField("Community, for example apple", text: $community)
+                                    .textInputAutocapitalization(.never)
+                                Picker("Post type", selection: $postType) {
+                                    Text("Text").tag("Text")
+                                    Text("Link").tag("Link")
+                                    Text("Image").tag("Image")
+                                }
                             }
                         }
-                    }
-                    if kind == .message {
-                        Section("Recipient") { TextField("Username", text: $recipient).textInputAutocapitalization(.never) }
-                    }
-                    if kind == .post {
-                        Section("Title") { TextField("A clear title", text: $title) }
-                    }
-                    if kind == .post, postType == "Link" {
-                        Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
-                    }
-                    Section(kind == .post ? "Body" : "Reply") {
-                        TextEditor(text: $bodyText)
-                            .frame(minHeight: 180)
-                            .overlay(alignment: .topLeading) {
-                                if bodyText.isEmpty { Text(kind == .post ? "Write something useful…" : "Write your reply…").foregroundStyle(.tertiary).padding(.top, 8).allowsHitTesting(false) }
-                            }
-                    }
-                    Section {
-                        Toggle("Send me reply notifications", isOn: $sendReplies)
+                        if kind == .message {
+                            Section("Recipient") { TextField("Username", text: $recipient).textInputAutocapitalization(.never) }
+                        }
+                        if kind == .post {
+                            Section("Title") { TextField("A clear title", text: $title) }
+                        }
+                        if kind == .post, postType == "Link" {
+                            Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
+                        }
+                        Section(kind == .post ? "Body" : "Reply") {
+                            TextEditor(text: $bodyText)
+                                .focused($isBodyFocused)
+                                .frame(minHeight: 180)
+                                .overlay(alignment: .topLeading) {
+                                    if bodyText.isEmpty, !isBodyFocused {
+                                        Text(kind == .post ? "Write something useful…" : "Write your reply…")
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.top, 8)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
+                        }
+                        Section {
+                            Toggle("Send me reply notifications", isOn: $sendReplies)
+                        }
                     }
                 }
+                formattingBar
             }
-            formattingBar
-        }
-        .navigationTitle(kind.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") {
-                    if isDirty { showingDiscard = true } else { dismiss() }
+            .navigationTitle(kind.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        if isDirty { showingDiscard = true } else { dismiss() }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(submitTitle) { submit() }
+                        .disabled(!canSubmit || sending)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(isPreview ? "Edit" : "Preview") { isPreview.toggle() }
                 }
             }
-            ToolbarItem(placement: .confirmationAction) {
-                Button(sending ? "Sending…" : "Send") { submit() }
-                    .disabled(!canSubmit || sending)
+            .confirmationDialog("Discard this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
+                Button("Discard", role: .destructive) { dismiss() }
+                Button("Keep Editing", role: .cancel) {}
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(isPreview ? "Edit" : "Preview") { isPreview.toggle() }
+            .alert("Complete the required fields", isPresented: $showingError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                if dependencies.accounts.selectedAccount == nil {
+                    Text("Add or select a Reddit account before sending.")
+                } else if dependencies.accounts.selectedAccount?.health == .needsLogin {
+                    Text("Sign in again from the Account tab before sending.")
+                } else {
+                    Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : "Add some text before sending.")
+                }
             }
-        }
-        .confirmationDialog("Discard this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
-            Button("Discard", role: .destructive) { dismiss() }
-            Button("Keep Editing", role: .cancel) {}
-        }
-        .alert("Complete the required fields", isPresented: $showingError) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            if dependencies.accounts.selectedAccount == nil {
-                Text("Add or select a Reddit account before sending.")
-            } else if dependencies.accounts.selectedAccount?.health == .needsLogin {
-                Text("Sign in again from the Account tab before sending.")
-            } else {
-                Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : "Add some text before sending.")
+            .task(id: bodyText) {
+                try? await Task.sleep(for: .milliseconds(500))
+                await saveDraft()
             }
-        }
-        .task(id: bodyText) {
-            try? await Task.sleep(for: .milliseconds(500))
-            await saveDraft()
-        }
-        .task {
-            if draftAccountID == nil { draftAccountID = dependencies.accounts.selectedAccountID }
+            .task {
+                if draftAccountID == nil { draftAccountID = dependencies.accounts.selectedAccountID }
+            }
         }
     }
 

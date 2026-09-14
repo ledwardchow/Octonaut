@@ -559,7 +559,7 @@ private struct SubredditSidebarView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Button {
-                        router.presentedSheet = .composer(.post)
+                        router.presentedSheet = .composer(.post, community: name)
                     } label: {
                         Label("Create a post", systemImage: "square.and.pencil")
                             .frame(maxWidth: .infinity, alignment: .leading)

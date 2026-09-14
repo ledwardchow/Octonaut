@@ -81,7 +81,7 @@ struct PostsRootView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("New Custom Feed", systemImage: "rectangle.stack.badge.plus") { editingFeed = CustomFeed(name: "", communities: []) }
-                    Button { router.presentedSheet = .composer(.post) } label: { Label("New Post", systemImage: "square.and.pencil") }
+                    Button { router.presentedSheet = .composer(.post, community: nil) } label: { Label("New Post", systemImage: "square.and.pencil") }
                     Button { router.push(.gallery(.home)) } label: { Label("Gallery Mode", systemImage: "square.grid.2x2") }
                 } label: {
                     Image(systemName: "plus")
@@ -106,7 +106,7 @@ struct PostsRootView: View {
         }
         .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
             switch sheet {
-            case .composer(let kind): ComposerView(kind: kind, store: store)
+            case .composer(let kind, let community): ComposerView(kind: kind, store: store, community: community ?? "")
             case .quickCommunitySearch: QuickCommunitySearchView(store: store, router: router, onSelectFeed: onSelectFeed)
             case .quickAccountSwitcher: QuickAccountSwitcherView(store: store)
             }
@@ -401,6 +401,13 @@ struct FeedView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if descriptor.kind == .community {
+                        Button {
+                            router.presentedSheet = .composer(.post, community: descriptor.name)
+                        } label: {
+                            Label("New Post", systemImage: "square.and.pencil")
+                        }
+                    }
                     Button { store.posts.map(\.id).forEach { store.markSeen(postID: $0) } } label: { Label("Mark Visible Seen", systemImage: "eye") }
                     ShareLink(item: URL(string: "https://www.reddit.com")!) { Label("Share Feed", systemImage: "square.and.arrow.up") }
                 } label: { Image(systemName: "ellipsis.circle") }
