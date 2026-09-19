@@ -1,9 +1,16 @@
 import AVFoundation
+import SwiftUI
 import XCTest
 
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
+    func testWideInterfaceFollowsHorizontalSizeClass() {
+        XCTAssertTrue(OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: .regular))
+        XCTAssertFalse(OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: .compact))
+        XCTAssertFalse(OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: nil))
+    }
+
     func testGalleryIncludesEveryAlbumImageAndKeepsViewerPage() {
         var album = PostCardModel.sample
         album.hasMedia = true

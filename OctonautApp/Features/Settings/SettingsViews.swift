@@ -154,12 +154,12 @@ struct SettingsDetailView: View {
                     Text("Always").tag(AutoplayVideo.always)
                 }
             }
-            Section("iPad") {
+            Section("Large screens") {
                 Toggle("Use split view", isOn: Binding(
                     get: { dependencies.settings.useSplitViewOnIPad },
                     set: { dependencies.settings.useSplitViewOnIPad = $0 }
                 ))
-                Text("Shows communities, the selected feed, and post details in separate columns when space allows.")
+                Text("Shows communities, the selected feed, and post details in separate columns on iPad and wide inner displays.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

@@ -246,7 +246,9 @@ final class SettingsStore {
         feedCloudObserver = NotificationCenter.default.publisher(
             for: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: NSUbiquitousKeyValueStore.default
-        ).sink { [weak self] notification in
+        )
+        .receive(on: DispatchQueue.main)
+        .sink { [weak self] notification in
             let reason = notification.userInfo?[NSUbiquitousKeyValueStoreChangeReasonKey] as? Int
             Task { @MainActor [weak self] in
                 guard let self else { return }

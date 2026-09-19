@@ -1,0 +1,4 @@
+Added UI support for iPhone Duo:
+- Outer screen uses existing interface.
+- Inner screen landscape displays nav sidebar by default.
+- Inner screen portrait displays slide-in nav sidebar when toggled.

@@ -196,11 +196,12 @@ struct OctonautTabsView: View {
     }
 
     private var shouldUsePostsSplitView: Bool {
-        horizontalSizeClass == .regular && dependencies.settings.useSplitViewOnIPad
+        OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+            && dependencies.settings.useSplitViewOnIPad
     }
 
     private var usesFloatingTabBar: Bool {
-        horizontalSizeClass == .regular
+        OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
     }
 
     private var persistentTabContent: some View {
@@ -365,7 +366,8 @@ private struct AdaptivePostsTabView: View {
     var body: some View {
         @Bindable var router = router
 
-        if horizontalSizeClass == .regular && dependencies.settings.useSplitViewOnIPad {
+        if OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+            && dependencies.settings.useSplitViewOnIPad {
             PostsSplitView(store: store, router: router, state: splitState)
                 .onAppear(perform: consumeSelectionRoutes)
                 .onChange(of: router.path) { _, _ in consumeSelectionRoutes() }
@@ -394,88 +396,89 @@ private struct PostsSplitView: View {
     let state: PostsSplitState
 
     @State private var sidebarVisible = true
-    @State private var showingCommunities = false
 
     var body: some View {
-        @Bindable var router = router
-
         GeometryReader { geometry in
-            let wideLayout = geometry.size.width >= 1100
-            HStack(spacing: 0) {
-                if sidebarVisible && geometry.size.width >= 900 {
-                    NavigationStack {
-                        PostsRootView(
-                            store: store,
-                            router: router,
-                            onSelectFeed: selectFeed,
-                            selectedFeed: state.selectedFeed
-                        )
-                    }
-                    .frame(width: 240)
-                    Divider()
-                }
-
-                if wideLayout {
-                    NavigationStack {
-                        selectedFeedView
-                            .toolbar { sidebarButton(width: geometry.size.width) }
-                    }
-                    .frame(width: 380)
-                    Divider()
-                }
-
-                NavigationStack(path: $router.path) {
-                    Group {
-                        if wideLayout && store.feedState == .loading {
-                            ProgressView("Loading feed…")
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        } else if wideLayout {
-                            ContentUnavailableView(
-                                "Select a post",
-                                systemImage: "text.bubble",
-                                description: Text("Choose a post to read it and its comments here.")
-                            )
-                        } else {
-                            selectedFeedView
-                                .toolbar { sidebarButton(width: geometry.size.width) }
-                        }
-                    }
-                    .navigationDestination(for: FeatureRoute.self) { route in
-                        OctonautDestinationView(route: route, store: store, router: router)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-            }
-            .sheet(isPresented: $showingCommunities) {
-                NavigationStack {
-                    PostsRootView(
-                        store: store,
-                        router: router,
-                        onSelectFeed: { descriptor in
-                            selectFeed(descriptor)
-                            showingCommunities = false
-                        },
-                        selectedFeed: state.selectedFeed
-                    )
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Done") { showingCommunities = false }
-                        }
-                    }
-                }
+            if geometry.size.width >= 1100 {
+                threeColumnLayout
+            } else {
+                twoColumnLayout
             }
         }
     }
 
+    private var twoColumnLayout: some View {
+        @Bindable var router = router
+
+        return NavigationSplitView {
+            PostsRootView(
+                store: store,
+                router: router,
+                onSelectFeed: selectFeed,
+                selectedFeed: state.selectedFeed
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240, max: 280)
+        } detail: {
+            NavigationStack(path: $router.path) {
+                selectedFeedView
+                    .navigationDestination(for: FeatureRoute.self) { route in
+                        OctonautDestinationView(route: route, store: store, router: router)
+                    }
+            }
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    private var threeColumnLayout: some View {
+        @Bindable var router = router
+
+        return HStack(spacing: 0) {
+            if sidebarVisible {
+                NavigationStack {
+                    PostsRootView(
+                        store: store,
+                        router: router,
+                        onSelectFeed: selectFeed,
+                        selectedFeed: state.selectedFeed
+                    )
+                }
+                .frame(width: 240)
+                Divider()
+            }
+
+            NavigationStack {
+                selectedFeedView
+                    .toolbar { sidebarButton }
+            }
+            .frame(width: 380)
+            Divider()
+
+            NavigationStack(path: $router.path) {
+                Group {
+                    if store.feedState == .loading {
+                        ProgressView("Loading feed…")
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ContentUnavailableView(
+                            "Select a post",
+                            systemImage: "text.bubble",
+                            description: Text("Choose a post to read it and its comments here.")
+                        )
+                    }
+                }
+                .navigationDestination(for: FeatureRoute.self) { route in
+                    OctonautDestinationView(route: route, store: store, router: router)
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
     @ToolbarContentBuilder
-    private func sidebarButton(width: CGFloat) -> some ToolbarContent {
+    private var sidebarButton: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
             Button {
-                if width < 900 {
-                    showingCommunities = true
-                } else {
-                    sidebarVisible.toggle()
-                }
+                sidebarVisible.toggle()
             } label: {
                 Image(systemName: "sidebar.left")
             }
@@ -655,7 +658,7 @@ private struct AdaptiveSettingsTabView: View {
     var body: some View {
         @Bindable var router = router
 
-        if horizontalSizeClass == .regular {
+        if OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass) {
             SettingsSplitView(store: store, router: router)
         } else {
             NavigationStack(path: $router.path) {

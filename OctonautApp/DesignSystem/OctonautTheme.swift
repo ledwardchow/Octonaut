@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+enum OctonautAdaptiveLayout {
+    /// Size class updates when a foldable device moves between its outer and inner displays.
+    static func usesWideInterface(horizontalSizeClass: UserInterfaceSizeClass?) -> Bool {
+        horizontalSizeClass == .regular
+    }
+}
+
 /// Semantic colors used by feature views. Keeping colors here makes custom themes
 /// possible without coupling a screen to a particular palette.
 struct OctonautTheme: Sendable {

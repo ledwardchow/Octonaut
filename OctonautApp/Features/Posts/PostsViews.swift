@@ -53,7 +53,7 @@ struct PostsRootView: View {
                         Text(dependencies.accounts.selectedAccount == nil ? "Sign in to load account favorites." : "Tap a star beside a community to add it here.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                            .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     } else {
                         ForEach(favorites) { community in
                             communityLink(community)
@@ -121,21 +121,21 @@ struct PostsRootView: View {
                 ProgressView()
                 Text("Loading subscriptions…").foregroundStyle(.secondary)
             }
-            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         case .failed(let message) where store.communities.isEmpty:
             VStack(alignment: .leading, spacing: 6) {
                 Label("Communities could not be loaded", systemImage: "exclamationmark.triangle")
                 Text(message).font(.caption).foregroundStyle(.secondary)
                 Button("Try Again") { Task { await store.refreshCommunities() } }
             }
-            .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         default:
             let values = filteredCommunities.filter { !$0.isFavorite }
             if values.isEmpty {
                 Text(dependencies.accounts.selectedAccount == nil ? "Sign in to load your Reddit subscriptions." : "No subscribed communities found.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             } else {
                 ForEach(values) { community in
                     communityLink(community)
@@ -145,7 +145,7 @@ struct PostsRootView: View {
                 Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
-                    .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             }
         }
     }
@@ -199,7 +199,7 @@ struct PostsRootView: View {
         // Keep the system disclosure indicator on the same trailing line as
         // the section controls while the row content still spans the width.
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
-        .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
+        .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
     }
 
     @ViewBuilder
@@ -221,7 +221,7 @@ struct PostsRootView: View {
             }
         }
         .listRowBackground(isSelected(descriptor) ? Color.accentColor.opacity(0.12) : Color.clear)
-        .iPadEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
     }
 
     private func deleteFeed(_ feed: CustomFeed) {
@@ -239,16 +239,27 @@ struct PostsRootView: View {
 
 private extension View {
     @ViewBuilder
-    func iPadEdgeToEdgeListSeparator(insets: EdgeInsets) -> some View {
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            alignmentGuide(.listRowSeparatorLeading) { dimensions in
-                dimensions[.leading] - insets.leading
-            }
-            .alignmentGuide(.listRowSeparatorTrailing) { dimensions in
-                dimensions[.trailing] + insets.trailing
-            }
+    func wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets) -> some View {
+        modifier(WideInterfaceListSeparatorModifier(insets: insets))
+    }
+}
+
+private struct WideInterfaceListSeparatorModifier: ViewModifier {
+    let insets: EdgeInsets
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass) {
+            content
+                .alignmentGuide(.listRowSeparatorLeading) { dimensions in
+                    dimensions[.leading] - insets.leading
+                }
+                .alignmentGuide(.listRowSeparatorTrailing) { dimensions in
+                    dimensions[.trailing] + insets.trailing
+                }
         } else {
-            self
+            content
         }
     }
 }
@@ -260,6 +271,7 @@ struct FeedView: View {
     let router: OctonautFeatureRouter
     var onSelectPost: ((PostCardModel) -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showingLogin = false
     @State private var selectedMediaPost: PostCardModel?
     @State private var selectedMediaPage = 0
@@ -305,7 +317,7 @@ struct FeedView: View {
                                         post: post,
                                         showsFlair: dependencies.settings.showPostFlair,
                                         mediaPreloader: mediaPreloader,
-                                        mediaMaximumHeight: UIDevice.current.userInterfaceIdiom == .pad ? min(320, max(160, availableHeight * 0.45)) : nil,
+                                        mediaMaximumHeight: usesWideInterface ? min(320, max(160, availableHeight * 0.45)) : nil,
                                         onVote: { value in
                                             performVote(postID: post.id, value: value)
                                         },
@@ -343,7 +355,7 @@ struct FeedView: View {
                     }
                     .listStyle(.plain)
                     .safeAreaPadding(.bottom, 24)
-                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 680 : .infinity)
+                    .frame(maxWidth: usesWideInterface ? 680 : .infinity)
                     .frame(maxWidth: .infinity)
                     .refreshable { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                     .onChange(of: visiblePosts.first?.id) { _, firstID in
@@ -366,52 +378,24 @@ struct FeedView: View {
         .navigationTitle(descriptor.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                Menu {
-                    ForEach(["Best", "Hot", "New", "Top", "Rising", "Controversial"], id: \.self) { sort in
-                        Button {
-                            store.selectedSort = sort
-                            Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
-                        } label: {
-                            if store.selectedSort == sort { Label(sort, systemImage: "checkmark") } else { Text(sort) }
-                        }
+            if usesWideInterface {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 16) {
+                        sortMenu
+                        displayMenu
+                        actionsMenu
                     }
-                } label: {
-                    HStack(spacing: 5) { Text(descriptor.name); Image(systemName: "chevron.down") }
-                        .font(.headline)
                 }
-                .accessibilityLabel("Sort \(store.selectedSort)")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Picker("Display", selection: Binding(
-                        get: { dependencies.settings.feedLayout(for: layoutCommunity) },
-                        set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
-                    )) {
-                        Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
-                        Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
-                    }
-                    Button { router.push(.gallery(descriptor)) } label: {
-                        Label("Gallery", systemImage: "square.grid.2x2")
-                    }
-                } label: {
-                    Image(systemName: compactRows ? "list.bullet" : "rectangle.grid.1x2")
+            } else {
+                ToolbarItem(placement: .principal) {
+                    sortMenu
                 }
-                .accessibilityLabel("Feed display")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if descriptor.kind == .community {
-                        Button {
-                            router.presentedSheet = .composer(.post, community: descriptor.name)
-                        } label: {
-                            Label("New Post", systemImage: "square.and.pencil")
-                        }
-                    }
-                    Button { store.posts.map(\.id).forEach { store.markSeen(postID: $0) } } label: { Label("Mark Visible Seen", systemImage: "eye") }
-                    ShareLink(item: URL(string: "https://www.reddit.com")!) { Label("Share Feed", systemImage: "square.and.arrow.up") }
-                } label: { Image(systemName: "ellipsis.circle") }
-                .accessibilityLabel("Feed actions")
+                ToolbarItem(placement: .topBarTrailing) {
+                    displayMenu
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    actionsMenu
+                }
             }
         }
         .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
@@ -437,6 +421,75 @@ struct FeedView: View {
                 onOpenPost: { open(post) }
             )
         }
+    }
+
+    private var usesWideInterface: Bool {
+        OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(["Best", "Hot", "New", "Top", "Rising", "Controversial"], id: \.self) { sort in
+                Button {
+                    store.selectedSort = sort
+                    Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+                } label: {
+                    if store.selectedSort == sort {
+                        Label(sort, systemImage: "checkmark")
+                    } else {
+                        Text(sort)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(descriptor.name)
+                Image(systemName: "chevron.down")
+            }
+            .font(.headline)
+        }
+        .accessibilityLabel("Sort \(store.selectedSort)")
+    }
+
+    private var displayMenu: some View {
+        Menu {
+            Picker("Display", selection: Binding(
+                get: { dependencies.settings.feedLayout(for: layoutCommunity) },
+                set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
+            )) {
+                Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
+                Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
+            }
+            Button { router.push(.gallery(descriptor)) } label: {
+                Label("Gallery", systemImage: "square.grid.2x2")
+            }
+        } label: {
+            Image(systemName: compactRows ? "list.bullet" : "rectangle.grid.1x2")
+        }
+        .accessibilityLabel("Feed display")
+    }
+
+    private var actionsMenu: some View {
+        Menu {
+            if descriptor.kind == .community {
+                Button {
+                    router.presentedSheet = .composer(.post, community: descriptor.name)
+                } label: {
+                    Label("New Post", systemImage: "square.and.pencil")
+                }
+            }
+            Button {
+                store.posts.map(\.id).forEach { store.markSeen(postID: $0) }
+            } label: {
+                Label("Mark Visible Seen", systemImage: "eye")
+            }
+            ShareLink(item: URL(string: "https://www.reddit.com")!) {
+                Label("Share Feed", systemImage: "square.and.arrow.up")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("Feed actions")
     }
 
     private func performVote(postID: String, value: Int) {
