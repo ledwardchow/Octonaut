@@ -1,5 +1,14 @@
+Fixed:
+Long delay on Reddit login screen after entering username/password
+
+Added "Reset App" feature in Advanced -> Reset App, use this if you have login/keychain issues.
+
 Added UI support for iPhone Duo:
 - Outer screen uses existing interface.
 - Inner screen landscape displays nav sidebar by default.
 - Inner screen portrait displays slide-in nav sidebar when toggled.
 (FIX: Pane navigation now remains in Duo reserved sidebar on all screens by default.)
+
+Custom Feed (Multireddit):
+This feature was implemented a few builds ago. If you don't see it ("New Custom Feed" in your Feeds section), delete and reinstall the app.
+It uses iCloud Sync to sync your feeds since this isn't a reddit built-in feature, things break when iCloud feature flags are turned on sometimes.

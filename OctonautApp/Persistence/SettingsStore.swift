@@ -163,8 +163,26 @@ final class SettingsStore {
     var showBottomNavigationOnLargeScreens: Bool { didSet { persist(showBottomNavigationOnLargeScreens, key: Keys.showBottomNavigationOnLargeScreens) } }
     var showCommunityHeader: Bool { didSet { persist(showCommunityHeader, key: Keys.showCommunityHeader) } }
     var showCommunityIcons: Bool { didSet { persist(showCommunityIcons, key: Keys.showCommunityIcons) } }
-    var selfTextPreviewLines: Int { didSet { selfTextPreviewLines = min(max(selfTextPreviewLines, 0), 20); persist(selfTextPreviewLines, key: Keys.selfTextPreviewLines) } }
-    var linkDescriptionLines: Int { didSet { linkDescriptionLines = min(max(linkDescriptionLines, 0), 20); persist(linkDescriptionLines, key: Keys.linkDescriptionLines) } }
+    var selfTextPreviewLines: Int {
+        didSet {
+            let clampedValue = min(max(selfTextPreviewLines, 0), 20)
+            guard selfTextPreviewLines == clampedValue else {
+                selfTextPreviewLines = clampedValue
+                return
+            }
+            persist(selfTextPreviewLines, key: Keys.selfTextPreviewLines)
+        }
+    }
+    var linkDescriptionLines: Int {
+        didSet {
+            let clampedValue = min(max(linkDescriptionLines, 0), 20)
+            guard linkDescriptionLines == clampedValue else {
+                linkDescriptionLines = clampedValue
+                return
+            }
+            persist(linkDescriptionLines, key: Keys.linkDescriptionLines)
+        }
+    }
     var showPostFlair: Bool { didSet { persist(showPostFlair, key: Keys.showPostFlair) } }
     var blurSpoilers: Bool { didSet { persist(blurSpoilers, key: Keys.blurSpoilers) } }
     var blurNSFWMedia: Bool { didSet { persist(blurNSFWMedia, key: Keys.blurNSFWMedia) } }
@@ -447,6 +465,26 @@ final class SettingsStore {
         filterRevision = 0
     }
 
+    func removeAllData() {
+        if let feedCloud {
+            for key in feedCloud.values.keys {
+                feedCloud.removeObject(forKey: key)
+            }
+            _ = feedCloud.synchronize()
+        }
+
+        applyingCloudFeeds = true
+        customFeeds = []
+        applyingCloudFeeds = false
+        feedVersions = [:]
+        customFeedSyncStatus = "Syncs with iCloud when available."
+
+        for key in defaults.dictionaryRepresentation().keys {
+            defaults.removeObject(forKey: key)
+        }
+        resetToDefaults()
+    }
+
     /// Applies availability-based defaults only when the user has not already
     /// chosen whether summary cards should be shown.
     func applySummaryVisibilityDefaults(modelAvailable: Bool) {
@@ -564,6 +602,7 @@ struct CustomFeedSyncRecord: Codable, Equatable {
 protocol CustomFeedCloudStore {
     var values: [String: Data] { get }
     func set(_ data: Data, forKey key: String)
+    func removeObject(forKey key: String)
     func synchronize() -> Bool
 }
 
@@ -578,5 +617,6 @@ private final class ICloudCustomFeedStore: CustomFeedCloudStore {
         }
     }
     func set(_ data: Data, forKey key: String) { store.set(data, forKey: key) }
+    func removeObject(forKey key: String) { store.removeObject(forKey: key) }
     func synchronize() -> Bool { store.synchronize() }
 }

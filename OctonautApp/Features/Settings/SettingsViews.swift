@@ -42,6 +42,9 @@ struct SettingsDetailView: View {
     @Environment(AppDependencies.self) private var dependencies
     @AppStorage("appearance.showUsername") private var showUsername = true
     @State private var showingReset = false
+    @State private var showingAppReset = false
+    @State private var isResettingApp = false
+    @State private var appResetNotice: AppResetNotice?
     @State private var imageCacheBytes = 0
     @State private var responseCacheBytes = 0
     @State private var usageStatistics = UsageStatistics()
@@ -81,6 +84,21 @@ struct SettingsDetailView: View {
                 Task { await resetStatistics() }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Reset Octonaut?", isPresented: $showingAppReset, titleVisibility: .visible) {
+            Button("Reset App", role: .destructive) {
+                Task { await resetApp() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes all Octonaut data from this device and deletes synced custom feeds from iCloud. You will need to sign in again.")
+        }
+        .alert(item: $appResetNotice) { notice in
+            Alert(
+                title: Text(notice.title),
+                message: Text(notice.message),
+                dismissButton: .default(Text("OK"))
+            )
         }
         .task(id: destination) {
             intelligenceAvailability = await dependencies.intelligence.availability
@@ -375,7 +393,26 @@ struct SettingsDetailView: View {
             }
             Section("Reset") {
                 Button("Reset Settings to Defaults", role: .destructive) { dependencies.settings.resetToDefaults() }
+                Button("Reset App", role: .destructive) { showingAppReset = true }
+                    .disabled(isResettingApp)
+                Text("Removes accounts, Keychain credentials, drafts, preferences, caches, statistics, and synced custom feeds.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private func resetApp() async {
+        isResettingApp = true
+        defer { isResettingApp = false }
+        do {
+            try await dependencies.resetAllData()
+            appResetNotice = AppResetNotice(
+                title: "Octonaut Reset",
+                message: "All app data was removed. You can now sign in again."
+            )
+        } catch {
+            appResetNotice = AppResetNotice(title: "Reset Incomplete", message: error.localizedDescription)
         }
     }
 
@@ -413,4 +450,10 @@ struct SettingsDetailView: View {
             .padding(.vertical, 18)
         }
     }
+}
+
+private struct AppResetNotice: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
 }

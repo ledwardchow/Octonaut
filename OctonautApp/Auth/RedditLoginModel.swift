@@ -11,6 +11,38 @@ enum RedditLoginState: Equatable {
     case cancelled
 }
 
+enum RedditLoginNavigationPolicy {
+    private static let embeddedFramePaths: [String: [String]] = [
+        "accounts.google.com": ["/gsi/"],
+        "recaptcha.google.com": ["/recaptcha/"],
+        "www.google.com": ["/recaptcha/"],
+    ]
+
+    static func allows(_ url: URL?, isMainFrame: Bool?) -> Bool {
+        guard let url else { return false }
+
+        if isMainFrame == false,
+           url.scheme?.lowercased() == "about",
+           url.absoluteString == "about:blank" {
+            return true
+        }
+
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        if host == "reddit.com" || host.hasSuffix(".reddit.com") {
+            return true
+        }
+
+        guard isMainFrame == false,
+              let allowedPaths = embeddedFramePaths[host] else {
+            return false
+        }
+        return allowedPaths.contains { url.path.hasPrefix($0) }
+    }
+}
+
 @MainActor
 @Observable
 final class RedditLoginModel {

@@ -27,6 +27,7 @@ protocol PersistenceStore: Sendable {
     func beginUsageSession() async
     func recordCommunityVisit(_ community: String) async throws
     func resetUsageStatistics() async throws
+    func removeAllData() async throws
 }
 
 enum UsageStatistic: String, Codable, Hashable, Sendable {

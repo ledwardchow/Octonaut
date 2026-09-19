@@ -29,6 +29,8 @@ public enum CredentialVaultError: Error, Sendable, Equatable, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
+        case .keychain(let status) where status == errSecMissingEntitlement:
+            return "This build of Octonaut cannot access Keychain. Install an updated build and try again."
         case .keychain(let status):
             return "Keychain operation failed (status \(status))."
         case .malformedCredential:
@@ -120,14 +122,19 @@ actor KeychainCredentialVault: AccountCredentialVault {
     }
 
     func removeAllCredentials() async throws {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
-        ]
-        if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw CredentialVaultError.keychain(status)
+        // Match both device-only items and any credentials left by an older
+        // iCloud Keychain configuration.
+        for serviceName in Set([service, "com.ledwardchow.Octonaut.reddit-session"]) {
+            var query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: serviceName,
+                kSecAttrSynchronizable as String: kSecAttrSynchronizableAny
+            ]
+            if let accessGroup { query[kSecAttrAccessGroup as String] = accessGroup }
+            let status = SecItemDelete(query as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw CredentialVaultError.keychain(status)
+            }
         }
     }
 

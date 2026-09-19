@@ -653,6 +653,57 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(RedditLoginModel.sessionCookie(from: [cookie])?.value, "session-value")
     }
 
+    func testLoginNavigationPolicyKeepsMainFrameOnReddit() {
+        XCTAssertTrue(
+            RedditLoginNavigationPolicy.allows(
+                URL(string: "https://www.reddit.com/login/"),
+                isMainFrame: true
+            )
+        )
+        XCTAssertFalse(
+            RedditLoginNavigationPolicy.allows(
+                URL(string: "https://www.google.com/recaptcha/api2/anchor"),
+                isMainFrame: true
+            )
+        )
+        XCTAssertFalse(
+            RedditLoginNavigationPolicy.allows(
+                URL(string: "http://www.reddit.com/login/"),
+                isMainFrame: true
+            )
+        )
+    }
+
+    func testLoginNavigationPolicyAllowsRequiredEmbeddedFrames() {
+        for address in [
+            "https://www.google.com/recaptcha/api2/anchor",
+            "https://recaptcha.google.com/recaptcha/api2/bframe",
+            "https://accounts.google.com/gsi/fedcm/listaccounts",
+            "about:blank",
+        ] {
+            XCTAssertTrue(
+                RedditLoginNavigationPolicy.allows(
+                    URL(string: address),
+                    isMainFrame: false
+                ),
+                address
+            )
+        }
+
+        XCTAssertFalse(
+            RedditLoginNavigationPolicy.allows(
+                URL(string: "https://example.com/embedded"),
+                isMainFrame: false
+            )
+        )
+        XCTAssertFalse(
+            RedditLoginNavigationPolicy.allows(
+                URL(string: "https://www.google.com/search?q=reddit"),
+                isMainFrame: false
+            )
+        )
+    }
+
     @MainActor
     func testSubscribedCommunitiesLoadAndRestoreAccountFavorites() async throws {
         let accountID = AccountID()

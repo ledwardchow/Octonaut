@@ -93,6 +93,15 @@ actor InMemoryPersistenceStore: PersistenceStore {
         communityVisits.removeAll()
         communitiesVisitedThisSession.removeAll()
     }
+
+    func removeAllData() async throws {
+        accounts.removeAll()
+        seen.removeAll()
+        drafts.removeAll()
+        statistics.removeAll()
+        communityVisits.removeAll()
+        communitiesVisitedThisSession.removeAll()
+    }
 }
 
 @MainActor
@@ -235,6 +244,24 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     func resetUsageStatistics() async throws {
         try context.fetch(FetchDescriptor<StatisticRecord>()).forEach(context.delete)
         try context.fetch(FetchDescriptor<CommunityVisitRecord>()).forEach(context.delete)
+        communitiesVisitedThisSession.removeAll()
+        try context.save()
+    }
+
+    func removeAllData() async throws {
+        try context.fetch(FetchDescriptor<AccountRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<SeenPostRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<DraftRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<FavoriteCommunityRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<FilteredCommunityRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<KeywordRuleRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<SemanticRuleRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<FeedPreferenceRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<CustomThemeRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<StatisticRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<CommunityVisitRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<SummaryCacheRecord>()).forEach(context.delete)
+        try context.fetch(FetchDescriptor<HelpIndexRecord>()).forEach(context.delete)
         communitiesVisitedThisSession.removeAll()
         try context.save()
     }

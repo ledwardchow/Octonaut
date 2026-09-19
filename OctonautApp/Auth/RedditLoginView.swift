@@ -144,10 +144,10 @@ private struct RedditLoginWebView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-            guard let host = navigationAction.request.url?.host?.lowercased(), host == "reddit.com" || host.hasSuffix(".reddit.com") else {
-                return .cancel
-            }
-            return .allow
+            RedditLoginNavigationPolicy.allows(
+                navigationAction.request.url,
+                isMainFrame: navigationAction.targetFrame?.isMainFrame
+            ) ? .allow : .cancel
         }
     }
 }

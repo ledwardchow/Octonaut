@@ -350,6 +350,37 @@ final class SettingsTests: XCTestCase {
         XCTAssertNil(request.value(forHTTPHeaderField: "HTTP-Referer"))
         XCTAssertNil(request.value(forHTTPHeaderField: "X-OpenRouter-Title"))
     }
+
+    func testRemoveAllDataClearsDefaultsAndSyncedFeeds() {
+        let defaults = UserDefaults(suiteName: "Reset.\(UUID())")!
+        defaults.set("leftover", forKey: "unknown.future.setting")
+        let store = SettingsStore(defaults: defaults)
+        let cloud = MemoryFeedCloud()
+        store.startCustomFeedSync(using: cloud)
+        store.feedLayout = .compact
+        store.customFeeds = [CustomFeed(name: "Games", communities: ["games"])]
+        XCTAssertFalse(cloud.values.isEmpty)
+
+        store.removeAllData()
+
+        XCTAssertEqual(store.feedLayout, .full)
+        XCTAssertTrue(store.customFeeds.isEmpty)
+        XCTAssertTrue(cloud.values.isEmpty)
+        XCTAssertNil(defaults.object(forKey: "unknown.future.setting"))
+    }
+
+    func testPreviewLineSettingsClampWithoutRecursing() {
+        let defaults = UserDefaults(suiteName: "PreviewLines.\(UUID())")!
+        let store = SettingsStore(defaults: defaults)
+
+        store.selfTextPreviewLines = 100
+        store.linkDescriptionLines = -1
+
+        XCTAssertEqual(store.selfTextPreviewLines, 20)
+        XCTAssertEqual(store.linkDescriptionLines, 0)
+        XCTAssertEqual(defaults.integer(forKey: "appearance.selfTextPreviewLines"), 20)
+        XCTAssertEqual(defaults.integer(forKey: "appearance.linkDescriptionLines"), 0)
+    }
 }
 
 /// Intercepts every request. These tests never contact Reddit.
@@ -389,5 +420,6 @@ private final class GamesRouteProtocol: URLProtocol, @unchecked Sendable {
 private final class MemoryFeedCloud: CustomFeedCloudStore {
     var values: [String: Data] = [:]
     func set(_ data: Data, forKey key: String) { values[key] = data }
+    func removeObject(forKey key: String) { values.removeValue(forKey: key) }
     func synchronize() -> Bool { true }
 }

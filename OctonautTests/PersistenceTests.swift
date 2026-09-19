@@ -61,6 +61,48 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(resetValues, UsageStatistics())
     }
 
+    func testRemoveAllDataClearsEveryInMemoryCollection() async throws {
+        let store = InMemoryPersistenceStore()
+        let account = Account(username: "reader")
+        try await store.saveAccount(account)
+        try await store.saveDraft(FixtureData.draft(accountID: account.id))
+        try await store.markPostSeen("post", seenAt: .now)
+        try await store.incrementStatistic(.postsViewed, by: 1)
+        try await store.recordCommunityVisit("swift")
+
+        try await store.removeAllData()
+
+        let accounts = try await store.loadAccounts()
+        let drafts = try await store.loadDrafts(accountID: account.id)
+        let seenPosts = try await store.loadSeenPostIDs()
+        let statistics = try await store.loadUsageStatistics()
+        XCTAssertTrue(accounts.isEmpty)
+        XCTAssertTrue(drafts.isEmpty)
+        XCTAssertTrue(seenPosts.isEmpty)
+        XCTAssertEqual(statistics, UsageStatistics())
+    }
+
+    @MainActor
+    func testRemoveAllDataClearsSwiftDataStore() async throws {
+        let store = SwiftDataPersistenceStore(container: try PersistenceSchema.makeContainer(inMemory: true))
+        let account = Account(username: "reader")
+        try await store.saveAccount(account)
+        try await store.saveDraft(FixtureData.draft(accountID: account.id))
+        try await store.markPostSeen("post", seenAt: .now)
+        try await store.incrementStatistic(.postsViewed, by: 1)
+
+        try await store.removeAllData()
+
+        let accounts = try await store.loadAccounts()
+        let drafts = try await store.loadDrafts(accountID: account.id)
+        let seenPosts = try await store.loadSeenPostIDs()
+        let statistics = try await store.loadUsageStatistics()
+        XCTAssertTrue(accounts.isEmpty)
+        XCTAssertTrue(drafts.isEmpty)
+        XCTAssertTrue(seenPosts.isEmpty)
+        XCTAssertEqual(statistics, UsageStatistics())
+    }
+
     @MainActor
     func testSwiftDataUsageStatisticsPersist() async throws {
         let container = try PersistenceSchema.makeContainer(inMemory: true)

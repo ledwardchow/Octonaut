@@ -12,6 +12,7 @@ struct OctonautMacApp: App {
         WindowGroup("Octonaut") {
             MacRootView(dependencies: dependencies)
                 .environment(dependencies)
+                .id(dependencies.resetGeneration)
                 .frame(minWidth: 900, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
