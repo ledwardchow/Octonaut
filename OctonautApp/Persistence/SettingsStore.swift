@@ -160,6 +160,7 @@ final class SettingsStore {
     var feedLayout: FeedLayout { didSet { persist(feedLayout.rawValue, key: Keys.feedLayout) } }
     var compactThumbnailSide: CompactThumbnailSide { didSet { persist(compactThumbnailSide.rawValue, key: Keys.compactThumbnailSide) } }
     var useSplitViewOnIPad: Bool { didSet { persist(useSplitViewOnIPad, key: Keys.useSplitViewOnIPad) } }
+    var showBottomNavigationOnLargeScreens: Bool { didSet { persist(showBottomNavigationOnLargeScreens, key: Keys.showBottomNavigationOnLargeScreens) } }
     var showCommunityHeader: Bool { didSet { persist(showCommunityHeader, key: Keys.showCommunityHeader) } }
     var showCommunityIcons: Bool { didSet { persist(showCommunityIcons, key: Keys.showCommunityIcons) } }
     var selfTextPreviewLines: Int { didSet { selfTextPreviewLines = min(max(selfTextPreviewLines, 0), 20); persist(selfTextPreviewLines, key: Keys.selfTextPreviewLines) } }
@@ -334,6 +335,7 @@ final class SettingsStore {
         feedLayout = FeedLayout(rawValue: defaults.string(forKey: Keys.feedLayout) ?? "full") ?? .full
         compactThumbnailSide = CompactThumbnailSide(rawValue: defaults.string(forKey: Keys.compactThumbnailSide) ?? "left") ?? .left
         useSplitViewOnIPad = defaults.object(forKey: Keys.useSplitViewOnIPad) as? Bool ?? true
+        showBottomNavigationOnLargeScreens = defaults.object(forKey: Keys.showBottomNavigationOnLargeScreens) as? Bool ?? false
         showCommunityHeader = defaults.object(forKey: Keys.showCommunityHeader) as? Bool ?? true
         showCommunityIcons = defaults.object(forKey: Keys.showCommunityIcons) as? Bool ?? true
         selfTextPreviewLines = defaults.object(forKey: Keys.selfTextPreviewLines) as? Int ?? 3
@@ -392,6 +394,7 @@ final class SettingsStore {
         feedLayout = fresh.feedLayout
         compactThumbnailSide = fresh.compactThumbnailSide
         useSplitViewOnIPad = fresh.useSplitViewOnIPad
+        showBottomNavigationOnLargeScreens = fresh.showBottomNavigationOnLargeScreens
         showCommunityHeader = fresh.showCommunityHeader
         showCommunityIcons = fresh.showCommunityIcons
         selfTextPreviewLines = fresh.selfTextPreviewLines
@@ -462,6 +465,7 @@ final class SettingsStore {
         static let feedLayout = "appearance.feedLayout"
         static let compactThumbnailSide = "appearance.compactThumbnailSide"
         static let useSplitViewOnIPad = "appearance.useSplitViewOnIPad"
+        static let showBottomNavigationOnLargeScreens = "appearance.showBottomNavigationOnLargeScreens"
         static let showCommunityHeader = "appearance.showCommunityHeader"
         static let showCommunityIcons = "appearance.showCommunityIcons"
         static let selfTextPreviewLines = "appearance.selfTextPreviewLines"

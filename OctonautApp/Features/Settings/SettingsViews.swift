@@ -159,7 +159,14 @@ struct SettingsDetailView: View {
                     get: { dependencies.settings.useSplitViewOnIPad },
                     set: { dependencies.settings.useSplitViewOnIPad = $0 }
                 ))
+                Toggle("Show navigation at bottom", isOn: Binding(
+                    get: { dependencies.settings.showBottomNavigationOnLargeScreens },
+                    set: { dependencies.settings.showBottomNavigationOnLargeScreens = $0 }
+                ))
                 Text("Shows communities, the selected feed, and post details in separate columns on iPad and wide inner displays.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("Navigation appears in the sidebar by default. Turn this on to use the floating bottom navigation instead.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

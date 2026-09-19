@@ -107,6 +107,9 @@ struct OctonautTabsView: View {
                 )
                 .padding(.horizontal, 24)
                 .padding(.bottom, 14)
+            } else if usesSidebarTabBar {
+                compactTabs
+                    .tabViewStyle(.sidebarAdaptable)
             } else {
                 compactTabs
             }
@@ -202,6 +205,12 @@ struct OctonautTabsView: View {
 
     private var usesFloatingTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+            && dependencies.settings.showBottomNavigationOnLargeScreens
+    }
+
+    private var usesSidebarTabBar: Bool {
+        OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+            && !dependencies.settings.showBottomNavigationOnLargeScreens
     }
 
     private var persistentTabContent: some View {
@@ -218,22 +227,22 @@ struct OctonautTabsView: View {
 
     private var compactTabs: some View {
         TabView(selection: $selectedTab) {
-            tabContent(for: .posts)
-                .tabItem { Label("Posts", systemImage: "rectangle.stack") }
-                .tag(AppTab.posts)
-            tabContent(for: .inbox)
-                .tabItem { Label("Inbox", systemImage: "envelope") }
+            Tab("Posts", systemImage: "rectangle.stack", value: AppTab.posts) {
+                tabContent(for: .posts)
+            }
+            Tab("Inbox", systemImage: "envelope", value: AppTab.inbox) {
+                tabContent(for: .inbox)
+            }
                 .badge(store.unreadCount)
-                .tag(AppTab.inbox)
-            tabContent(for: .account)
-                .tabItem { Label(dependencies.accounts.selectedAccount?.username ?? "Accounts", systemImage: "person.crop.circle") }
-                .tag(AppTab.account)
-            tabContent(for: .search)
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
-                .tag(AppTab.search)
-            tabContent(for: .settings)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(AppTab.settings)
+            Tab(dependencies.accounts.selectedAccount?.username ?? "Accounts", systemImage: "person.crop.circle", value: AppTab.account) {
+                tabContent(for: .account)
+            }
+            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
+                tabContent(for: .search)
+            }
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
+                tabContent(for: .settings)
+            }
         }
     }
 

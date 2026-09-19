@@ -232,6 +232,18 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.summaryEndpoint, "https://openrouter.ai/api/v1")
         XCTAssertEqual(settings.summaryModel, "openai/gpt-5.6-luna")
         XCTAssertFalse(settings.keyExcerptsFallback)
+        XCTAssertFalse(settings.showBottomNavigationOnLargeScreens)
+    }
+
+    func testLargeScreenNavigationPlacementRoundTripsThroughDefaults() {
+        let suite = "OctonautTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+
+        settings.showBottomNavigationOnLargeScreens = true
+
+        XCTAssertTrue(SettingsStore(defaults: defaults).showBottomNavigationOnLargeScreens)
     }
 
     func testChangingFilterIncrementsFilterRevision() {
