@@ -56,10 +56,14 @@ private actor OctonautImageDataCache {
 
         do {
             let data = try await task.value
-            inFlight[url] = nil
+            if inFlight[url] == task {
+                inFlight[url] = nil
+            }
             return data
         } catch {
-            inFlight[url] = nil
+            if inFlight[url] == task {
+                inFlight[url] = nil
+            }
             throw error
         }
     }
@@ -94,17 +98,29 @@ enum OctonautImageCache {
         return cache
     }()
 
+    private static var inFlightDecodes: [URL: Task<UIImage, Error>] = [:]
+
     static func image(for url: URL) async throws -> UIImage {
         if let image = cachedImage(for: url) {
             return image
         }
+        if let inFlight = inFlightDecodes[url] {
+            return try await inFlight.value
+        }
 
-        let data = try await OctonautImageDataCache.shared.data(for: url)
-        guard !Task.isCancelled else { throw CancellationError() }
-        let image = try await decoded(data: data, maxPixelSize: defaultMaxPixelSize)
-        guard !Task.isCancelled else { throw CancellationError() }
-        decodedImages.setObject(image, forKey: url as NSURL, cost: image.decodedByteCount)
-        return image
+        let task = Task<UIImage, Error> { @MainActor in
+            defer {
+                inFlightDecodes[url] = nil
+            }
+            let data = try await OctonautImageDataCache.shared.data(for: url)
+            guard !Task.isCancelled else { throw CancellationError() }
+            let image = try await decoded(data: data, maxPixelSize: defaultMaxPixelSize)
+            guard !Task.isCancelled else { throw CancellationError() }
+            decodedImages.setObject(image, forKey: url as NSURL, cost: image.decodedByteCount)
+            return image
+        }
+        inFlightDecodes[url] = task
+        return try await task.value
     }
 
     private static func decoded(data: Data, maxPixelSize: Int) async throws -> UIImage {
@@ -166,6 +182,8 @@ enum OctonautImageCache {
     }
 
     static func removeAll() async {
+        inFlightDecodes.values.forEach { $0.cancel() }
+        inFlightDecodes.removeAll()
         decodedImages.removeAllObjects()
         await OctonautImageDataCache.shared.removeAll()
     }

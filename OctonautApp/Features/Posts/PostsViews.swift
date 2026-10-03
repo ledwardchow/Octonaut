@@ -122,6 +122,8 @@ struct PostsRootView: View {
                 Text("Loading subscriptions…").foregroundStyle(.secondary)
             }
             .wideInterfaceEdgeToEdgeListSeparator(insets: EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        case .loginRequired:
+            RedditLoginRequiredView()
         case .failed(let message) where store.communities.isEmpty:
             VStack(alignment: .leading, spacing: 6) {
                 Label("Communities could not be loaded", systemImage: "exclamationmark.triangle")

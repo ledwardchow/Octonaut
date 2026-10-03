@@ -16,6 +16,7 @@ actor FixtureRedditClient: RedditClient {
     private let postDelay: Duration?
     private let moreCommentsDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
+    private(set) var searchAccounts: [AccountID?] = []
     private(set) var lastListingRequest: ListingRequest?
     private var listingRequestCount = 0
     private var postRequestCount = 0
@@ -115,21 +116,25 @@ actor FixtureRedditClient: RedditClient {
     }
 
     func search(_ request: RedditSearchRequest, account: AccountID? = nil) async throws -> Listing<Post> {
+        searchAccounts.append(account)
         guard let searchData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(searchData)
     }
 
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID? = nil) async throws -> Listing<Community> {
+        searchAccounts.append(account)
         guard let communitiesData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeCommunities(communitiesData)
     }
 
     func users(_ request: RedditUserSearchRequest, account: AccountID? = nil) async throws -> Listing<UserProfile> {
+        searchAccounts.append(account)
         guard let usersData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeUserSearch(usersData)
     }
 
-    func trendingCommunities(limit: Int = 25) async throws -> Listing<Community> {
+    func trendingCommunities(limit: Int = 25, account: AccountID? = nil) async throws -> Listing<Community> {
+        searchAccounts.append(account)
         guard let communitiesData else { return Listing(items: []) }
         return try RedditJSONCodec.decodeCommunities(communitiesData)
     }

@@ -8,7 +8,7 @@ struct PostDetailView: View {
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
     @State private var commentSort = "Best"
-    @State private var composer: ComposerKind?
+    @State private var composerTarget: CommentComposerTarget?
     @State private var isMediaViewerPresented = false
     @State private var selectedMediaPage = 0
     @State private var showingLogin = false
@@ -43,7 +43,7 @@ struct PostDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 OctonautPostRow(
                     post: currentPost,
                     bodyLineLimit: nil,
@@ -70,6 +70,8 @@ struct PostDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal)
                     .padding(.top, 8)
+                } else if case .loginRequired = store.detailState {
+                    RedditLoginRequiredView()
                 } else if case .failed(let message) = store.detailState {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "exclamationmark.triangle")
@@ -105,25 +107,31 @@ struct PostDetailView: View {
                     )
                 }
                 if dependencies.settings.showCommentSummaries,
-                   store.detailState == .loaded,
-                   SummaryEligibility.comments(summaryComments) {
-                    SummaryCardView(
-                        title: "Comments Summary",
-                        input: .comments(
-                            CommentSummaryInput(postID: currentPost.id, comments: summaryComments)
-                        ),
-                        intelligence: dependencies.intelligence,
-                        cache: dependencies.summaryCache,
-                        modelFamily: dependencies.summaryCacheModelFamily,
-                        automatic: dependencies.settings.automaticCommentSummaries,
-                        useFallback: dependencies.settings.keyExcerptsFallback
-                    )
+                   store.detailState == .loaded {
+                    let comments = summaryComments
+                    if SummaryEligibility.comments(comments) {
+                        SummaryCardView(
+                            title: "Comments Summary",
+                            input: .comments(
+                                CommentSummaryInput(postID: currentPost.id, comments: comments)
+                            ),
+                            intelligence: dependencies.intelligence,
+                            cache: dependencies.summaryCache,
+                            modelFamily: dependencies.summaryCacheModelFamily,
+                            automatic: dependencies.settings.automaticCommentSummaries,
+                            useFallback: dependencies.settings.keyExcerptsFallback
+                        )
+                    }
                 }
 
                 HStack {
                     Text("Comments")
                         .font(.title3.weight(.bold))
                     Spacer()
+                    Button("Comment", systemImage: "square.and.pencil") {
+                        beginReply(to: currentPost.fullname)
+                    }
+                    .font(.caption.weight(.semibold))
                     Menu {
                         ForEach(["Best", "New", "Top", "Controversial", "Old"], id: \.self) { value in
                             Button {
@@ -145,7 +153,8 @@ struct PostDetailView: View {
                 .padding(.top, 16)
                 .padding(.bottom, 4)
 
-                ForEach(flattenedComments) { comment in
+                let comments = flattenedComments
+                ForEach(comments) { comment in
                     if comment.isMoreNode {
                         moreCommentsRow(comment)
                     } else {
@@ -157,14 +166,23 @@ struct PostDetailView: View {
                                     store.toggleComment(id: comment.id)
                                 }
                             }, onVote: { performCommentVote(commentID: comment.id, value: $0) },
-                            onReply: { beginReply() })
+                            onReply: {
+                                beginReply(to: IDNormalization.fullname(comment.id, kind: "t1"))
+                            })
                     }
                 }
-                if flattenedComments.isEmpty {
-                    ContentUnavailableView(
-                        "No comments", systemImage: "bubble.left.and.bubble.right",
-                        description: Text("There are no comments to show.")
-                    )
+                if comments.isEmpty {
+                    VStack(spacing: 12) {
+                        ContentUnavailableView(
+                            "No comments", systemImage: "bubble.left.and.bubble.right",
+                            description: Text("There are no comments to show.")
+                        )
+                        Button("Add the first comment") {
+                            beginReply(to: currentPost.fullname)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity)
                     .padding(.top, 40)
                 }
             }
@@ -205,8 +223,12 @@ struct PostDetailView: View {
                 }
             }
         }
-        .sheet(item: $composer) { kind in
-            ComposerView(kind: kind, store: store)
+        .sheet(item: $composerTarget) { target in
+            ComposerView(kind: .comment, store: store, targetID: target.id) {
+                Task {
+                    await store.loadPostDetail(for: target.post, sort: commentSort, forceRefresh: true)
+                }
+            }
         }
         .sheet(isPresented: $showingLogin) {
             RedditLoginView(accounts: dependencies.accounts)
@@ -318,12 +340,12 @@ struct PostDetailView: View {
         }
     }
 
-    private func beginReply() {
+    private func beginReply(to targetID: String) {
         guard dependencies.accounts.selectedAccount?.health == .healthy else {
             showingLogin = true
             return
         }
-        composer = .comment
+        composerTarget = CommentComposerTarget(id: targetID, post: currentPost)
     }
 
     private func performCommentVote(commentID: String, value: Int) {
@@ -344,6 +366,11 @@ struct PostDetailView: View {
         }
     }
 
+}
+
+private struct CommentComposerTarget: Identifiable {
+    let id: String
+    let post: PostCardModel
 }
 
 @MainActor

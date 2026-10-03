@@ -35,7 +35,12 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
     var author: String
     var authorFlair: Flair?
     var title: String
-    var body: String
+    var body: String {
+        didSet {
+            bodyPreview = body.isEmpty ? "" : RedditPostMarkdown.previewText(from: body)
+        }
+    }
+    var bodyPreview: String
     var flair: Flair?
     var score: Int
     var comments: Int
@@ -137,7 +142,8 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         thumbnailURL: URL? = nil,
         mediaKind: String = "none",
         galleryURLs: [URL] = [],
-        audioURL: URL? = nil
+        audioURL: URL? = nil,
+        bodyPreview: String? = nil
     ) {
         self.id = id
         self.community = community
@@ -164,6 +170,7 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         self.mediaKind = mediaKind
         self.galleryURLs = galleryURLs
         self.audioURL = audioURL
+        self.bodyPreview = bodyPreview ?? (body.isEmpty ? "" : RedditPostMarkdown.previewText(from: body))
     }
 
     init(post: Post) {
@@ -1189,7 +1196,8 @@ final class OctonautFeatureStore {
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             nextPage = nil
-            feedState = hasWarmContent ? .loaded : .failed(error.localizedDescription)
+            let failure = OctonautLoadState.failure(error)
+            feedState = hasWarmContent && failure != .loginRequired ? .loaded : failure
         }
     }
 
@@ -1277,7 +1285,7 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            communitiesState = .failed(error.localizedDescription)
+            communitiesState = .failure(error)
         }
     }
 
@@ -1398,7 +1406,7 @@ final class OctonautFeatureStore {
         } catch {
             guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             if !hasCachedContent {
-                userProfileState = .failed(error.localizedDescription)
+                userProfileState = .failure(error)
             }
         }
     }
@@ -1526,8 +1534,8 @@ final class OctonautFeatureStore {
             return false
         } catch {
             guard detailRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return false }
-            if !preservingVisibleComments {
-                detailState = .failed(error.localizedDescription)
+            if !preservingVisibleComments || OctonautLoadState.failure(error) == .loginRequired {
+                detailState = .failure(error)
             }
             return false
         }
@@ -1603,6 +1611,7 @@ final class OctonautFeatureStore {
         } catch {
             guard detailRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
             moreFailedIDs.insert(commentID)
+            if OctonautLoadState.failure(error) == .loginRequired { detailState = .loginRequired }
         }
     }
 
@@ -1715,7 +1724,7 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            feedState = .failed(error.localizedDescription)
+            feedState = .failure(error)
         }
     }
 

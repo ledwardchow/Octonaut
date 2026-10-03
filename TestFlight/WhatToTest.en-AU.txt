@@ -1,11 +1,14 @@
 Changes in current build:
-- Video player now has controls that aren't hidden by labels, AirPlay support, animated GIFs play correctly (thanks @QuiteYellow)
-- User profile page now has saved, upvoted, downvoted, hidden post filters (thanks @QuiteYellow)
+Fix: Some videos didn't play its audio
 
 Changes in previous builds:
-
+Posts with lots of text content now trim correctly 
+You can now comment on posts without any comments
+Build 30:
+- Video player now has controls that aren't hidden by labels, AirPlay support, animated GIFs play correctly (thanks @QuiteYellow)
+- User profile page now has saved, upvoted, downvoted, hidden post filters (thanks @QuiteYellow)
 Build 24:
-- Long delay on Reddit login screen after entering username/password
+- Fixed long delay on Reddit login screen after entering username/password
 - Added "Reset App" feature in Advanced -> Reset App, use this if you have login/keychain issues.
 
 Added UI support for iPhone Duo:

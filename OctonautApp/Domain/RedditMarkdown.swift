@@ -18,9 +18,11 @@ enum RedditMarkdownBlock: Equatable {
 
 struct RedditMarkdownView: View {
     let source: String
+    private let blocks: [RedditMarkdownBlock]
 
-    private var blocks: [RedditMarkdownBlock] {
-        RedditPostMarkdown.blocks(from: source)
+    init(source: String) {
+        self.source = source
+        self.blocks = RedditPostMarkdown.blocks(from: source)
     }
 
     var body: some View {
@@ -98,19 +100,12 @@ private struct RedditMarkdownTableView: View {
     let table: RedditMarkdownTable
 
     var body: some View {
+        let columnWidths = table.headers.indices.map(columnWidth(at:))
         ScrollView(.horizontal) {
-            Grid(horizontalSpacing: 0, verticalSpacing: 0) {
-                GridRow {
-                    ForEach(table.headers.indices, id: \.self) { index in
-                        cell(table.headers[index], isHeader: true)
-                    }
-                }
+            VStack(spacing: 0) {
+                row(table.headers, columnWidths: columnWidths, isHeader: true)
                 ForEach(table.rows.indices, id: \.self) { rowIndex in
-                    GridRow {
-                        ForEach(table.headers.indices, id: \.self) { columnIndex in
-                            cell(value(at: columnIndex, in: table.rows[rowIndex]))
-                        }
-                    }
+                    row(table.rows[rowIndex], columnWidths: columnWidths)
                 }
             }
             .overlay {
@@ -128,23 +123,70 @@ private struct RedditMarkdownTableView: View {
         row.indices.contains(index) ? row[index] : ""
     }
 
-    private func cell(_ source: String, isHeader: Bool = false) -> some View {
+    private func columnWidth(at index: Int) -> CGFloat {
+        let longestCell = table.rows.map { value(at: index, in: $0).count }.max() ?? 0
+        let characterCount = max(table.headers[index].count, longestCell)
+        return min(320, max(88, CGFloat(characterCount) * 8 + 16))
+    }
+
+    private func row(
+        _ values: [String],
+        columnWidths: [CGFloat],
+        isHeader: Bool = false
+    ) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(table.headers.indices, id: \.self) { index in
+                cell(
+                    value(at: index, in: values),
+                    width: columnWidths[index],
+                    isHeader: isHeader
+                )
+            }
+        }
+        .background(isHeader ? Color.secondary.opacity(0.14) : Color.clear)
+        .overlay {
+            GeometryReader { geometry in
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: geometry.size.height))
+                    path.addLine(to: CGPoint(x: geometry.size.width, y: geometry.size.height))
+                    var x: CGFloat = 0
+                    for width in columnWidths.dropLast() {
+                        x += width + 16
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: geometry.size.height))
+                    }
+                }
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func cell(_ source: String, width: CGFloat, isHeader: Bool = false) -> some View {
         RedditSpoilerText(source: source)
             .id(source)
             .fontWeight(isHeader ? .semibold : .regular)
+            .frame(width: width, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(minWidth: 88, maxWidth: 180, alignment: .leading)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(isHeader ? Color.secondary.opacity(0.14) : Color.clear)
-            .overlay {
-                Rectangle().stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
-            }
     }
 }
 
 /// Converts the Markdown returned by Reddit into text SwiftUI can render on every platform.
 enum RedditPostMarkdown {
+    static func previewText(from source: String, maxCharacters: Int = 240) -> String {
+        for block in blocks(from: source) {
+            guard case .text(let text) = block else { continue }
+            let rendered = String(attributedString(from: text).characters)
+            let preview = rendered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+            guard !preview.isEmpty else { continue }
+            guard preview.count > maxCharacters else { return preview }
+            return String(preview.prefix(maxCharacters)) + "…"
+        }
+        return ""
+    }
+
     static func blocks(from source: String) -> [RedditMarkdownBlock] {
         let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -222,16 +264,10 @@ enum RedditPostMarkdown {
             appendText(source, to: &blocks)
             return
         }
-        guard let expression = try? NSRegularExpression(
-            pattern: #"!?\[([^\]\r\n]*)\]\((https://[^)\s]+)\)|https://[^\s<>()]+"#
-        ) else {
-            appendText(source, to: &blocks)
-            return
-        }
 
         let sourceRange = NSRange(source.startIndex..., in: source)
         var cursor = source.startIndex
-        for match in expression.matches(in: source, range: sourceRange) {
+        for match in imageLinkRegex.matches(in: source, range: sourceRange) {
             guard let matchRange = Range(match.range, in: source) else { continue }
             let rawURL: String
             let altText: String?
@@ -273,6 +309,54 @@ enum RedditPostMarkdown {
     }
 
     private static let trailingURLPunctuation = CharacterSet(charactersIn: ".,;:!?")
+
+    private static let imageLinkRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(
+                pattern: #"!?\[([^\]\r\n]*)\]\((https://[^)\s]+)\)|https://[^\s<>()]+"#
+            )
+        } catch {
+            fatalError("Invalid imageLinkRegex pattern: \(error)")
+        }
+    }()
+
+    private static let shouldJoinLinkRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(
+                pattern: #"(?:\[[^\]\r\n]+\]\([^)]+\)|https?://[^\s<>]+)$"#
+            )
+        } catch {
+            fatalError("Invalid shouldJoinLinkRegex pattern: \(error)")
+        }
+    }()
+
+    private static let atxTrailingHeadingRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(pattern: #"[ \t]+#+[ \t]*$"#)
+        } catch {
+            fatalError("Invalid atxTrailingHeadingRegex pattern: \(error)")
+        }
+    }()
+
+    private static let linkSpacingRegex1: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(
+                pattern: #"(\[[^\]\r\n]+\]\([^)]+\))[\r\n]*(?=[\p{L}\p{N}])"#
+            )
+        } catch {
+            fatalError("Invalid linkSpacingRegex1 pattern: \(error)")
+        }
+    }()
+
+    private static let linkSpacingRegex2: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(
+                pattern: #"(https?://[^\s<>]+)[\r\n]+(?=[\p{L}\p{N}])"#
+            )
+        } catch {
+            fatalError("Invalid linkSpacingRegex2 pattern: \(error)")
+        }
+    }()
 
     private static func redditImageURL(from source: String) -> URL? {
         let decoded = source.replacingOccurrences(of: "&amp;", with: "&")
@@ -454,11 +538,8 @@ enum RedditPostMarkdown {
 
     private static func shouldJoinLinkLine(_ line: String, to followingLine: String) -> Bool {
         guard let nextCharacter = followingLine.first,
-              nextCharacter.isLetter || nextCharacter.isNumber,
-              let expression = try? NSRegularExpression(
-                pattern: #"(?:\[[^\]\r\n]+\]\([^)]+\)|https?://[^\s<>]+)$"#
-              ) else { return false }
-        return expression.firstMatch(
+              nextCharacter.isLetter || nextCharacter.isNumber else { return false }
+        return shouldJoinLinkRegex.firstMatch(
             in: line,
             range: NSRange(line.startIndex..., in: line)
         ) != nil
@@ -509,10 +590,11 @@ enum RedditPostMarkdown {
         let remainder = content.dropFirst(level)
         guard remainder.first == " " || remainder.first == "\t" else { return nil }
         var text = String(remainder.drop(while: { $0 == " " || $0 == "\t" }))
-        text = text.replacingOccurrences(
-            of: #"[ \t]+#+[ \t]*$"#,
-            with: "",
-            options: .regularExpression
+        let range = NSRange(text.startIndex..., in: text)
+        text = atxTrailingHeadingRegex.stringByReplacingMatches(
+            in: text,
+            range: range,
+            withTemplate: ""
         )
         return (level, text)
     }
@@ -526,21 +608,18 @@ enum RedditPostMarkdown {
     }
 
     private static func insertingMissingLinkSpacing(in source: String) -> String {
-        let replacements = [
-            (#"(\[[^\]\r\n]+\]\([^)]+\))[\r\n]*(?=[\p{L}\p{N}])"#, "$1 "),
-            (#"(https?://[^\s<>]+)[\r\n]+(?=[\p{L}\p{N}])"#, "$1 "),
-        ]
-
-        return replacements.reduce(source) { result, replacement in
-            guard let expression = try? NSRegularExpression(pattern: replacement.0) else {
-                return result
-            }
-            return expression.stringByReplacingMatches(
-                in: result,
-                range: NSRange(result.startIndex..., in: result),
-                withTemplate: replacement.1
-            )
-        }
+        let range1 = NSRange(source.startIndex..., in: source)
+        let pass1 = linkSpacingRegex1.stringByReplacingMatches(
+            in: source,
+            range: range1,
+            withTemplate: "$1 "
+        )
+        let range2 = NSRange(pass1.startIndex..., in: pass1)
+        return linkSpacingRegex2.stringByReplacingMatches(
+            in: pass1,
+            range: range2,
+            withTemplate: "$1 "
+        )
     }
 
     private static func tableCells(in line: String) -> [String]? {

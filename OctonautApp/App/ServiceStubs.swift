@@ -31,7 +31,7 @@ struct UnavailableRedditClient: RedditClient {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
 
-    func trendingCommunities(limit: Int) async throws -> Listing<Community> {
+    func trendingCommunities(limit: Int, account: AccountID?) async throws -> Listing<Community> {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
 

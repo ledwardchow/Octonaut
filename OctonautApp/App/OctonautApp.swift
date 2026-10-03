@@ -6,7 +6,10 @@ struct OctonautApp: App {
 
     init() {
 #if DEBUG
-        if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
+        if NSClassFromString("XCTestCase") != nil {
+            // The test host must not start live Reddit requests in the background.
+            _dependencies = State(initialValue: AppDependencies.preview())
+        } else if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
             let preview = AppDependencies.preview()
             preview.settings.customFeeds = [
                 CustomFeed(name: "Apple & Swift", communities: ["apple", "swift"]),
@@ -27,6 +30,7 @@ struct OctonautApp: App {
                 .environment(dependencies)
                 .id(dependencies.resetGeneration)
                 .task {
+                    await OctonautAudioSession.prepareForMutedFeedPlayback()
                     await OctonautImageCache.configure(
                         diskCapacityMB: dependencies.settings.imageCacheLimitMB
                     )

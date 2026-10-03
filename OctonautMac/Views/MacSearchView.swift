@@ -6,6 +6,7 @@ struct MacSearchView: View {
     @Binding var selectedPost: PostCardModel?
     let openCommunity: (String) -> Void
 
+    @Environment(AppDependencies.self) private var dependencies
     @State private var query = ""
     @State private var scope: FeatureSearchScope = .posts
 
@@ -34,6 +35,7 @@ struct MacSearchView: View {
             searchResults
         }
         .navigationTitle("Search")
+        .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in submit() }
     }
 
     @ViewBuilder
@@ -50,6 +52,8 @@ struct MacSearchView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .empty:
             ContentUnavailableView.search(text: model.activeQuery)
+        case .loginRequired:
+            RedditLoginRequiredView()
         case .failed(let message):
             ContentUnavailableView(
                 "Search failed",
@@ -104,6 +108,6 @@ struct MacSearchView: View {
     }
 
     private func submit() {
-        Task { await model.submit(query: query, scope: scope) }
+        Task { await model.submit(query: query, scope: scope, account: dependencies.accounts.selectedAccountID) }
     }
 }

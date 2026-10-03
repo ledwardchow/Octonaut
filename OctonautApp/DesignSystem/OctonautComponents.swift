@@ -50,6 +50,8 @@ struct OctonautStateView<Content: View>: View {
             ContentUnavailableView(
                 "Nothing here yet", systemImage: "tray",
                 description: Text("Try refreshing or changing your filters."))
+        case .loginRequired:
+            RedditLoginRequiredView()
         case .failed(let message):
             ContentUnavailableView {
                 Label("Could not load", systemImage: "exclamationmark.triangle")
@@ -227,7 +229,7 @@ struct OctonautPostRow: View {
             if showsFlair, let flair = post.flair {
                 OctonautFlairPill(flair: flair)
             }
-            if !post.body.isEmpty {
+            if !post.body.isEmpty && (bodyLineLimit == nil || !bodyPreview.isEmpty) {
                 postBody
             }
             if post.hasMedia {
@@ -389,13 +391,25 @@ struct OctonautPostRow: View {
         }
     }
 
+    private var bodyPreview: String {
+        post.bodyPreview
+    }
+
+    @ViewBuilder
     private var bodyText: some View {
-        RedditMarkdownView(source: post.body)
-            .font(.subheadline)
-            .foregroundStyle(theme.primaryText)
-            .tint(theme.accent)
-            .lineLimit(bodyLineLimit)
-            .multilineTextAlignment(.leading)
+        if let bodyLineLimit {
+            Text(bodyPreview)
+                .font(.subheadline)
+                .foregroundStyle(theme.primaryText)
+                .lineLimit(bodyLineLimit)
+                .multilineTextAlignment(.leading)
+        } else {
+            RedditMarkdownView(source: post.body)
+                .font(.subheadline)
+                .foregroundStyle(theme.primaryText)
+                .tint(theme.accent)
+                .multilineTextAlignment(.leading)
+        }
     }
 }
 
@@ -407,167 +421,6 @@ private extension View {
                 Capsule()
                     .stroke(theme.divider.opacity(0.7), lineWidth: 0.75)
             }
-    }
-}
-
-enum OctonautMarkdown {
-    static func attributedString(from source: String) -> AttributedString {
-        let lines = source
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map(String.init)
-        var renderedLines: [AttributedString] = []
-        var index = 0
-
-        while index < lines.count {
-            if let fence = openingFence(in: lines[index]) {
-                index += 1
-                while index < lines.count, !isClosingFence(lines[index], matching: fence) {
-                    renderedLines.append(renderCode(lines[index]))
-                    index += 1
-                }
-                if index < lines.count { index += 1 }
-                continue
-            }
-            if index + 1 < lines.count,
-               shouldJoinLinkLine(lines[index], to: lines[index + 1]) {
-                renderedLines.append(renderInline(lines[index] + " " + lines[index + 1]))
-                index += 2
-                continue
-            }
-            if index + 1 < lines.count,
-               let level = setextHeadingLevel(for: lines[index + 1]),
-               !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
-                renderedLines.append(
-                    renderInline(insertingMissingLinkSpacing(in: lines[index]), headingLevel: level)
-                )
-                index += 2
-                continue
-            }
-            if let heading = atxHeading(in: lines[index]) {
-                renderedLines.append(
-                    renderInline(
-                        insertingMissingLinkSpacing(in: heading.text),
-                        headingLevel: heading.level
-                    )
-                )
-            } else {
-                renderedLines.append(renderInline(insertingMissingLinkSpacing(in: lines[index])))
-            }
-            index += 1
-        }
-
-        var result = AttributedString()
-        for (lineIndex, line) in renderedLines.enumerated() {
-            if lineIndex > 0 { result.append(AttributedString("\n")) }
-            result.append(line)
-        }
-        return result
-    }
-
-    private struct Fence {
-        let marker: Character
-        let length: Int
-    }
-
-    private static func openingFence(in line: String) -> Fence? {
-        let content = line.drop(while: { $0 == " " })
-        guard line.count - content.count <= 3,
-              let marker = content.first,
-              marker == "`" || marker == "~" else { return nil }
-        let length = content.prefix(while: { $0 == marker }).count
-        guard length >= 3 else { return nil }
-
-        let info = content.dropFirst(length)
-        guard marker != "`" || !info.contains("`") else { return nil }
-        return Fence(marker: marker, length: length)
-    }
-
-    private static func isClosingFence(_ line: String, matching fence: Fence) -> Bool {
-        let content = line.drop(while: { $0 == " " })
-        guard line.count - content.count <= 3 else { return false }
-        let length = content.prefix(while: { $0 == fence.marker }).count
-        guard length >= fence.length else { return false }
-        return content.dropFirst(length).allSatisfy { $0 == " " || $0 == "\t" }
-    }
-
-    private static func renderCode(_ source: String) -> AttributedString {
-        var result = AttributedString(source)
-        result.font = .system(.subheadline, design: .monospaced)
-        return result
-    }
-
-    private static func shouldJoinLinkLine(_ line: String, to followingLine: String) -> Bool {
-        guard let nextCharacter = followingLine.first,
-              nextCharacter.isLetter || nextCharacter.isNumber,
-              let expression = try? NSRegularExpression(
-                pattern: #"(?:\[[^\]\r\n]+\]\([^)]+\)|https?://[^\s<>]+)$"#
-              ) else { return false }
-        return expression.firstMatch(
-            in: line,
-            range: NSRange(line.startIndex..., in: line)
-        ) != nil
-    }
-
-    private static func renderInline(_ source: String, headingLevel: Int? = nil) -> AttributedString {
-        var result = (try? AttributedString(
-            markdown: source,
-            options: AttributedString.MarkdownParsingOptions(
-                interpretedSyntax: .inlineOnlyPreservingWhitespace,
-                failurePolicy: .returnPartiallyParsedIfPossible
-            )
-        )) ?? AttributedString(source)
-        if let headingLevel {
-            result.font = switch headingLevel {
-            case 1: .title3.weight(.bold)
-            case 2: .headline
-            default: .subheadline.weight(.bold)
-            }
-        }
-        return result
-    }
-
-    private static func atxHeading(in line: String) -> (level: Int, text: String)? {
-        let content = line.drop(while: { $0 == " " })
-        guard line.count - content.count <= 3 else { return nil }
-        let level = content.prefix(while: { $0 == "#" }).count
-        guard (1...6).contains(level) else { return nil }
-        let remainder = content.dropFirst(level)
-        guard remainder.first == " " || remainder.first == "\t" else { return nil }
-        var text = String(remainder.drop(while: { $0 == " " || $0 == "\t" }))
-        text = text.replacingOccurrences(
-            of: #"[ \t]+#+[ \t]*$"#,
-            with: "",
-            options: .regularExpression
-        )
-        return (level, text)
-    }
-
-    private static func setextHeadingLevel(for line: String) -> Int? {
-        let marker = line.trimmingCharacters(in: .whitespaces)
-        guard !marker.isEmpty else { return nil }
-        if marker.allSatisfy({ $0 == "=" }) { return 1 }
-        if marker.allSatisfy({ $0 == "-" }) { return 2 }
-        return nil
-    }
-
-    private static func insertingMissingLinkSpacing(in source: String) -> String {
-        let replacements = [
-            (#"(\[[^\]\r\n]+\]\([^)]+\))[\r\n]*(?=[\p{L}\p{N}])"#, "$1 "),
-            (#"(https?://[^\s<>]+)[\r\n]+(?=[\p{L}\p{N}])"#, "$1 "),
-        ]
-
-        return replacements.reduce(source) { result, replacement in
-            guard let expression = try? NSRegularExpression(pattern: replacement.0) else {
-                return result
-            }
-            return expression.stringByReplacingMatches(
-                in: result,
-                range: NSRange(result.startIndex..., in: result),
-                withTemplate: replacement.1
-            )
-        }
     }
 }
 

@@ -1,13 +1,7 @@
 import Foundation
 import Observation
 
-enum SearchLoadState: Sendable, Equatable {
-    case idle
-    case loading
-    case loaded
-    case empty
-    case failed(String)
-}
+typealias SearchLoadState = OctonautLoadState
 
 @MainActor
 @Observable
@@ -16,6 +10,9 @@ final class SearchFeatureModel {
     @ObservationIgnored private var postsAfter: String?
     @ObservationIgnored private var communitiesAfter: String?
     @ObservationIgnored private var requestGeneration = 0
+
+    private var accountID: AccountID?
+    private var trendingGeneration = 0
 
     var posts: [PostCardModel] = []
     var communities: [CommunityCardModel] = []
@@ -31,24 +28,29 @@ final class SearchFeatureModel {
         self.reddit = reddit
     }
 
-    func loadTrendingCommunities(forceRefresh: Bool = false) async {
+    func loadTrendingCommunities(forceRefresh: Bool = false, account: AccountID? = nil) async {
         if !forceRefresh, trendingState == .loading || trendingState == .loaded { return }
+        trendingGeneration &+= 1
+        let generation = trendingGeneration
         trendingState = .loading
         do {
-            let listing = try await reddit.trendingCommunities(limit: 25)
-            guard !Task.isCancelled else { return }
+            let listing = try await reddit.trendingCommunities(limit: 25, account: account)
+            guard !Task.isCancelled, generation == trendingGeneration else { return }
             trendingCommunities = listing.items.map(CommunityCardModel.init)
             trendingState = trendingCommunities.isEmpty ? .empty : .loaded
         } catch is CancellationError {
+            guard generation == trendingGeneration else { return }
             trendingState = trendingCommunities.isEmpty ? .idle : .loaded
             return
         } catch {
-            trendingState = .failed(error.localizedDescription)
+            guard generation == trendingGeneration else { return }
+            trendingState = .failure(error)
         }
     }
 
-    func submit(query: String, scope: FeatureSearchScope) async {
+    func submit(query: String, scope: FeatureSearchScope, account: AccountID? = nil) async {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        accountID = account
         activeQuery = query
         activeScope = scope
         requestGeneration &+= 1
@@ -67,7 +69,7 @@ final class SearchFeatureModel {
         do {
             switch scope {
             case .posts:
-                let listing = try await reddit.search(RedditSearchRequest(query: query, sort: .hot), account: nil)
+                let listing = try await reddit.search(RedditSearchRequest(query: query, sort: .hot), account: accountID)
                 guard generation == requestGeneration else { return }
                 paginationError = nil
                 posts = listing.items.map(PostCardModel.init)
@@ -76,7 +78,7 @@ final class SearchFeatureModel {
                 users = []
                 state = posts.isEmpty ? .empty : .loaded
             case .communities:
-                let listing = try await reddit.communities(RedditCommunitySearchRequest(query: query), account: nil)
+                let listing = try await reddit.communities(RedditCommunitySearchRequest(query: query), account: accountID)
                 guard generation == requestGeneration else { return }
                 paginationError = nil
                 communities = listing.items.map(CommunityCardModel.init)
@@ -85,7 +87,7 @@ final class SearchFeatureModel {
                 users = []
                 state = communities.isEmpty ? .empty : .loaded
             case .users:
-                let listing = try await reddit.users(RedditUserSearchRequest(query: query), account: nil)
+                let listing = try await reddit.users(RedditUserSearchRequest(query: query), account: accountID)
                 guard generation == requestGeneration else { return }
                 paginationError = nil
                 posts = []
@@ -97,7 +99,7 @@ final class SearchFeatureModel {
             return
         } catch {
             guard generation == requestGeneration else { return }
-            state = .failed(error.localizedDescription)
+            state = .failure(error)
         }
     }
 
@@ -110,7 +112,7 @@ final class SearchFeatureModel {
                 guard let postsAfter else { return }
                 let listing = try await reddit.search(
                     RedditSearchRequest(query: activeQuery, sort: .hot, after: postsAfter),
-                    account: nil
+                    account: accountID
                 )
                 guard generation == requestGeneration else { return }
                 let existing = Set(posts.map(\.id))
@@ -120,7 +122,7 @@ final class SearchFeatureModel {
                 guard let communitiesAfter else { return }
                 let listing = try await reddit.communities(
                     RedditCommunitySearchRequest(query: activeQuery, after: communitiesAfter),
-                    account: nil
+                    account: accountID
                 )
                 guard generation == requestGeneration else { return }
                 let existing = Set(communities.map(\.id))
@@ -134,6 +136,7 @@ final class SearchFeatureModel {
         } catch {
             guard generation == requestGeneration else { return }
             paginationError = error.localizedDescription
+            if OctonautLoadState.failure(error) == .loginRequired { state = .loginRequired }
         }
     }
 }

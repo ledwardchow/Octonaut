@@ -18,6 +18,8 @@ struct MacFeedListView: View {
             case .idle, .loading:
                 ProgressView("Loading \(descriptor.macTitle)…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .loginRequired:
+                RedditLoginRequiredView()
             case .failed(let message) where store.posts.isEmpty:
                 ContentUnavailableView(
                     "Feed unavailable",
@@ -31,7 +33,7 @@ struct MacFeedListView: View {
                     description: Text("This feed is empty or its posts were filtered.")
                 )
             default:
-                List(selection: $selectedPost) {
+                List(selection: dependencies.settings.feedLayout == .full ? nil : $selectedPost) {
                     if store.filteredPostCount > 0 {
                         Label(
                             "\(store.filteredPostCount) posts hidden by filters",
@@ -59,6 +61,16 @@ struct MacFeedListView: View {
                         }
                             .contentShape(Rectangle())
                             .tag(post)
+                            .overlay(alignment: .leading) {
+                                if dependencies.settings.feedLayout == .full,
+                                   selectedPost?.id == post.id {
+                                    Capsule()
+                                        .fill(Color.accentColor)
+                                        .frame(width: 3)
+                                        .padding(.vertical, 8)
+                                        .allowsHitTesting(false)
+                                }
+                            }
                             .simultaneousGesture(
                                 TapGesture().onEnded {
                                     selectedPost = post
@@ -92,13 +104,14 @@ struct MacFeedListView: View {
                             }
                     }
 
-                    if !store.posts.isEmpty {
-                        Button("Load More") {
-                            Task { await store.loadMorePosts(for: descriptor) }
-                        }
-                        .frame(maxWidth: .infinity)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                    if store.feedState == .loaded,
+                       let nextPage = store.galleryPageCursor(for: descriptor) {
+                        ProgressView("Loading more posts…")
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
+                            .task(id: nextPage) {
+                                await store.loadMorePosts(for: descriptor)
+                            }
                     }
                 }
                 .listStyle(.plain)
@@ -235,14 +248,13 @@ private struct MacPostMediaCard: View {
                     .background(.quaternary, in: Capsule())
             }
 
-            if !post.body.isEmpty {
-                RedditMarkdownView(source: post.body)
+            let preview = post.bodyPreview
+            if !preview.isEmpty {
+                Text(preview)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .tint(.accentColor)
                     .lineLimit(post.hasMedia ? 3 : 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
             }
 
             if post.hasMedia {
@@ -473,6 +485,7 @@ struct MacPostDetailView: View {
                         fillsPane: true,
                         onTogglePaneFill: toggleMediaPaneFill
                     )
+                    .id(displayedPost.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     postContent(displayedPost)
@@ -582,6 +595,7 @@ struct MacPostDetailView: View {
                             fillsPane: false,
                             onTogglePaneFill: toggleMediaPaneFill
                         )
+                        .id(post.id)
                         .frame(height: effectiveEmbeddedMediaHeight)
 
                         mediaResizeHandle
@@ -596,7 +610,9 @@ struct MacPostDetailView: View {
                     ProgressView("Loading comments…")
                 }
 
-                if case .failed(let message) = store.detailState {
+                if case .loginRequired = store.detailState {
+                    RedditLoginRequiredView()
+                } else if case .failed(let message) = store.detailState {
                     Label(message, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
                 }
@@ -712,11 +728,13 @@ struct MacPostDetailView: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .modifier(MacMediaDownloadContextMenu(post: post))
+                .id(post.id)
             } else if let mediaURL = post.mediaURL {
                 Link(destination: mediaURL) {
                     Label("Open \(post.mediaTitle.lowercased())", systemImage: "play.rectangle")
                 }
                 .modifier(MacMediaDownloadContextMenu(post: post))
+                .id(post.id)
             }
 
             HStack(spacing: 16) {
@@ -797,6 +815,7 @@ private struct MacMediaLightboxView: View {
     @State private var saveMessage: String?
     @State private var saveError: String?
     @State private var player: AVPlayer?
+    @State private var playbackWarning: String?
 
     private let saver = MacMediaSaver()
 
@@ -878,11 +897,23 @@ private struct MacMediaLightboxView: View {
         .onAppear(perform: keepPageInBounds)
         .onChange(of: mediaURLs) { _, _ in keepPageInBounds() }
         .onChange(of: currentURL, initial: true) { _, newURL in
+            player?.pause()
+            playbackWarning = nil
             guard isVideo, let newURL else {
                 player = nil
                 return
             }
-            player = AVPlayer(url: newURL)
+            player = AVPlayer(url: RedditVideoPlayback.url(
+                for: newURL,
+                isGIF: post.mediaKind == "gif"
+            ))
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVPlayerItem.failedToPlayToEndTimeNotification)) { notification in
+            guard let item = notification.object as? AVPlayerItem,
+                  item === player?.currentItem else { return }
+            playbackWarning = RedditVideoPlayback.failureMessage(
+                for: notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? NSError
+            )
         }
         .onDisappear {
             player?.pause()
@@ -903,6 +934,16 @@ private struct MacMediaLightboxView: View {
                 fillsPane: fillsPane,
                 onDoubleClick: onTogglePaneFill
             )
+            .overlay(alignment: .topLeading) {
+                if let playbackWarning {
+                    Text(playbackWarning)
+                        .font(.caption)
+                        .padding(8)
+                        .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                        .padding(.top, 48)
+                        .padding(.horizontal, 12)
+                }
+            }
         } else if post.mediaKind == "embeddedVideo" {
             VStack(spacing: 14) {
                 if let thumbnailURL = post.thumbnailURL {

@@ -109,6 +109,8 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     let container: ModelContainer
     private let context: ModelContext
     private var communitiesVisitedThisSession: Set<String> = []
+    private var seenIDsCache: Set<String>?
+    private var seenCount: Int?
 
     init(container: ModelContainer) {
         self.container = container
@@ -122,8 +124,13 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     }
 
     func saveAccount(_ account: Account) async throws {
-        let records = try context.fetch(FetchDescriptor<AccountRecord>())
-        if let existing = records.first(where: { $0.id == account.id.rawValue }) {
+        let targetID = account.id.rawValue
+        var descriptor = FetchDescriptor<AccountRecord>(
+            predicate: #Predicate<AccountRecord> { $0.id == targetID }
+        )
+        descriptor.fetchLimit = 1
+        let records = try context.fetch(descriptor)
+        if let existing = records.first {
             existing.update(from: account)
         } else {
             context.insert(AccountRecord(account: account))
@@ -132,74 +139,130 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     }
 
     func deleteAccount(_ id: AccountID) async throws {
-        let records = try context.fetch(FetchDescriptor<AccountRecord>())
-        records.filter { $0.id == id.rawValue }.forEach(context.delete)
-        let drafts = try context.fetch(FetchDescriptor<DraftRecord>())
-        drafts.filter { $0.accountIDString == id.description }.forEach(context.delete)
+        let targetID = id.rawValue
+        let accountDescriptor = FetchDescriptor<AccountRecord>(
+            predicate: #Predicate<AccountRecord> { $0.id == targetID }
+        )
+        try context.fetch(accountDescriptor).forEach(context.delete)
+        let accountKey = id.description
+        let draftDescriptor = FetchDescriptor<DraftRecord>(
+            predicate: #Predicate<DraftRecord> { $0.accountIDString == accountKey }
+        )
+        try context.fetch(draftDescriptor).forEach(context.delete)
         try context.save()
     }
 
     func loadSeenPostIDs() async throws -> [String] {
-        try context.fetch(FetchDescriptor<SeenPostRecord>())
-            .sorted { $0.lastSeenAt > $1.lastSeenAt }
-            .map(\.postID)
+        var descriptor = FetchDescriptor<SeenPostRecord>(
+            sortBy: [SortDescriptor(\.lastSeenAt, order: .reverse)]
+        )
+        let records = try context.fetch(descriptor)
+        let ids = records.map(\.postID)
+        seenIDsCache = Set(ids)
+        seenCount = ids.count
+        return ids
     }
 
     func markPostSeen(_ id: String, seenAt: Date = .now) async throws {
-        let records = try context.fetch(FetchDescriptor<SeenPostRecord>())
-        if let record = records.first(where: { $0.postID == id }) {
+        var descriptor = FetchDescriptor<SeenPostRecord>(
+            predicate: #Predicate<SeenPostRecord> { $0.postID == id }
+        )
+        descriptor.fetchLimit = 1
+        let records = try context.fetch(descriptor)
+        if let record = records.first {
             record.lastSeenAt = seenAt
         } else {
             context.insert(SeenPostRecord(postID: id, seenAt: seenAt))
+            seenIDsCache?.insert(id)
+            if let count = seenCount {
+                seenCount = count + 1
+            }
         }
-        let refreshed = try context.fetch(FetchDescriptor<SeenPostRecord>())
-        if refreshed.count > 5_000 {
-            let excess = refreshed.sorted { $0.lastSeenAt < $1.lastSeenAt }.prefix(refreshed.count - 5_000)
-            excess.forEach(context.delete)
+        let currentCount = seenCount ?? (try? context.fetchCount(FetchDescriptor<SeenPostRecord>())) ?? 0
+        seenCount = currentCount
+        if currentCount > 5_000 {
+            let excess = currentCount - 5_000
+            var pruneDescriptor = FetchDescriptor<SeenPostRecord>(
+                sortBy: [SortDescriptor(\.lastSeenAt, order: .forward)]
+            )
+            pruneDescriptor.fetchLimit = excess
+            let oldest = try context.fetch(pruneDescriptor)
+            for record in oldest {
+                seenIDsCache?.remove(record.postID)
+                context.delete(record)
+            }
+            seenCount = 5_000
         }
         try context.save()
     }
 
     func removePostSeen(_ id: String) async throws {
-        let records = try context.fetch(FetchDescriptor<SeenPostRecord>())
-        records.filter { $0.postID == id }.forEach(context.delete)
+        let descriptor = FetchDescriptor<SeenPostRecord>(
+            predicate: #Predicate<SeenPostRecord> { $0.postID == id }
+        )
+        let records = try context.fetch(descriptor)
+        records.forEach(context.delete)
+        seenIDsCache?.remove(id)
+        if let count = seenCount {
+            seenCount = max(0, count - records.count)
+        }
         try context.save()
     }
 
     func clearSeenPosts() async throws {
         try context.fetch(FetchDescriptor<SeenPostRecord>()).forEach(context.delete)
+        seenIDsCache?.removeAll()
+        seenCount = 0
         try context.save()
     }
 
     func loadDrafts(accountID: AccountID?) async throws -> [Draft] {
         let accountKey = accountID?.description
-        return try context.fetch(FetchDescriptor<DraftRecord>())
-            .filter { $0.accountIDString == accountKey }
+        var descriptor = FetchDescriptor<DraftRecord>(
+            predicate: #Predicate<DraftRecord> { $0.accountIDString == accountKey },
+            sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+        )
+        return try context.fetch(descriptor)
             .compactMap(\.domainValue)
-            .sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
     func saveDraft(_ draft: Draft) async throws {
-        let records = try context.fetch(FetchDescriptor<DraftRecord>())
-        if let existing = records.first(where: { $0.id == draft.id }) {
+        let targetID = draft.id
+        var descriptor = FetchDescriptor<DraftRecord>(
+            predicate: #Predicate<DraftRecord> { $0.id == targetID }
+        )
+        descriptor.fetchLimit = 1
+        let records = try context.fetch(descriptor)
+        if let existing = records.first {
             context.delete(existing)
         }
         context.insert(DraftRecord(draft: draft))
-        let updated = try context.fetch(FetchDescriptor<DraftRecord>())
-        if updated.count > 100 {
-            updated.sorted { $0.modifiedAt < $1.modifiedAt }.prefix(updated.count - 100).forEach(context.delete)
+        let totalDrafts = (try? context.fetchCount(FetchDescriptor<DraftRecord>())) ?? 0
+        if totalDrafts > 100 {
+            let excess = totalDrafts - 100
+            var pruneDescriptor = FetchDescriptor<DraftRecord>(
+                sortBy: [SortDescriptor(\.modifiedAt, order: .forward)]
+            )
+            pruneDescriptor.fetchLimit = excess
+            try context.fetch(pruneDescriptor).forEach(context.delete)
         }
         try context.save()
     }
 
     func deleteDraft(_ id: UUID) async throws {
-        try context.fetch(FetchDescriptor<DraftRecord>()).filter { $0.id == id }.forEach(context.delete)
+        let descriptor = FetchDescriptor<DraftRecord>(
+            predicate: #Predicate<DraftRecord> { $0.id == id }
+        )
+        try context.fetch(descriptor).forEach(context.delete)
         try context.save()
     }
 
     func clearDrafts(accountID: AccountID?) async throws {
         let key = accountID?.description
-        try context.fetch(FetchDescriptor<DraftRecord>()).filter { $0.accountIDString == key }.forEach(context.delete)
+        let descriptor = FetchDescriptor<DraftRecord>(
+            predicate: #Predicate<DraftRecord> { $0.accountIDString == key }
+        )
+        try context.fetch(descriptor).forEach(context.delete)
         try context.save()
     }
 
@@ -232,8 +295,12 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     func recordCommunityVisit(_ community: String) async throws {
         let normalized = IDNormalization.community(community)
         guard !normalized.isEmpty, communitiesVisitedThisSession.insert(normalized).inserted else { return }
-        let records = try context.fetch(FetchDescriptor<CommunityVisitRecord>())
-        if let existing = records.first(where: { $0.normalizedCommunity == normalized }) {
+        var descriptor = FetchDescriptor<CommunityVisitRecord>(
+            predicate: #Predicate<CommunityVisitRecord> { $0.normalizedCommunity == normalized }
+        )
+        descriptor.fetchLimit = 1
+        let records = try context.fetch(descriptor)
+        if let existing = records.first {
             existing.visitCount += 1
         } else {
             context.insert(CommunityVisitRecord(normalizedCommunity: normalized, visitCount: 1))
@@ -263,6 +330,8 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
         try context.fetch(FetchDescriptor<SummaryCacheRecord>()).forEach(context.delete)
         try context.fetch(FetchDescriptor<HelpIndexRecord>()).forEach(context.delete)
         communitiesVisitedThisSession.removeAll()
+        seenIDsCache = nil
+        seenCount = 0
         try context.save()
     }
 }

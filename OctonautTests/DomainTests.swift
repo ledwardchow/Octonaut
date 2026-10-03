@@ -5,6 +5,43 @@ import XCTest
 @testable import Octonaut
 
 final class DomainTests: XCTestCase {
+    @MainActor
+    func testSearchUsesSelectedAccountAndReturnsToAnonymous() async {
+        let client = FixtureRedditClient()
+        let model = SearchFeatureModel(reddit: client)
+        let account = AccountID()
+        for scope in FeatureSearchScope.allCases {
+            await model.submit(query: "swift", scope: scope, account: account)
+        }
+        await model.loadTrendingCommunities(account: account)
+        await model.submit(query: "swift", scope: .posts, account: nil)
+        let accounts = await client.searchAccounts
+        XCTAssertEqual(accounts, [account, account, account, account, nil])
+    }
+
+    func testBlockedAnonymousResponsesOfferLogin() throws {
+        for status in [401, 403, 200] {
+            let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            let data = Data((status == 200 ? "  <html>Blocked</html>" : "{}").utf8)
+            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(data, response: response, isAnonymous: true)) { error in
+                XCTAssertEqual(error as? RedditClientError, .anonymousAccessBlocked)
+                XCTAssertEqual(OctonautLoadState.failure(error), .loginRequired)
+            }
+        }
+    }
+
+    func testSignedInAndRateLimitErrorsDoNotOfferAnonymousLogin() throws {
+        for (status, anonymous, expected) in [(403, false, RedditClientError.accessDenied), (401, false, .authenticationRequired), (429, true, .rateLimited(retryAfter: 10)), (404, true, .notFound), (500, true, .http(statusCode: 500, message: nil))] {
+            let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: status, httpVersion: nil, headerFields: ["Retry-After": "10"])!
+            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(Data("{}".utf8), response: response, isAnonymous: anonymous)) { error in
+                XCTAssertEqual(error as? RedditClientError, expected)
+                XCTAssertNotEqual(OctonautLoadState.failure(error), .loginRequired)
+            }
+        }
+        let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        XCTAssertNoThrow(try URLSessionRedditClient.validateResponse(Data("{}".utf8), response: response, isAnonymous: true))
+    }
+
     func testWideInterfaceFollowsHorizontalSizeClass() {
         XCTAssertTrue(OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: .regular))
         XCTAssertFalse(OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: .compact))
@@ -125,6 +162,44 @@ final class DomainTests: XCTestCase {
         XCTAssertThrowsError(try MediaDownloadTransport.validate(response))
     }
 
+    func testRedditVideoPlaybackUsesPlaylistForSeparateAudio() throws {
+        for filename in ["DASH_720.mp4", "CMAF_360.mp4"] {
+            let source = try XCTUnwrap(URL(string: "https://v.redd.it/clip/\(filename)?source=fallback#fragment"))
+            XCTAssertEqual(
+                RedditVideoPlayback.url(for: source, isGIF: false).absoluteString,
+                "https://v.redd.it/clip/HLSPlaylist.m3u8"
+            )
+            XCTAssertEqual(RedditVideoPlayback.url(for: source, isGIF: true), source)
+        }
+    }
+
+    func testRedditVideoPlaybackPreservesOtherSources() throws {
+        for value in [
+            "https://v.redd.it/clip/HLSPlaylist.m3u8?f=hd",
+            "https://example.com/movie.mp4",
+            "https://v.redd.it.example.com/clip/CMAF_360.mp4",
+            "http://v.redd.it/clip/CMAF_360.mp4",
+            "https://user:password@v.redd.it/clip/CMAF_360.mp4",
+            "https://v.redd.it:8443/clip/CMAF_360.mp4",
+            "https://v.redd.it/CMAF_360.mp4"
+        ] {
+            let source = try XCTUnwrap(URL(string: value))
+            XCTAssertEqual(RedditVideoPlayback.url(for: source, isGIF: false), source)
+        }
+    }
+
+    func testRedditVideoPlaybackExplainsAudioOutputFailure() {
+        let outputError = NSError(domain: NSOSStatusErrorDomain, code: 2003329396)
+        let wrapped = NSError(domain: AVFoundationErrorDomain, code: -11800, userInfo: [NSUnderlyingErrorKey: outputError])
+        XCTAssertTrue(RedditVideoPlayback.failureMessage(for: wrapped).contains("audio output could not start"))
+        XCTAssertEqual(RedditVideoPlayback.failureMessage(for: outputError), RedditVideoPlayback.failureMessage(for: wrapped))
+        XCTAssertEqual(RedditVideoPlayback.failureMessage(for: nil), "The video could not play. Reopen it to try again.")
+        XCTAssertEqual(
+            RedditVideoPlayback.failureMessage(for: NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)),
+            RedditVideoPlayback.failureMessage(for: nil)
+        )
+    }
+
     func testRedditDASHManifestSelectsHighestQualityTracks() throws {
         let mediaURL = try XCTUnwrap(
             URL(string: "https://v.redd.it/clip123/HLSPlaylist.m3u8?source=fallback")
@@ -197,15 +272,21 @@ final class DomainTests: XCTestCase {
     }
 
     func testCommentBuildsWebsiteCommentRequest() {
-        let request = URLSessionRedditClient.mutationRequest(
-            for: .comment(thingID: "t3_example", text: "A comment")
-        )
+        let postID = IDNormalization.fullname("example", kind: "t3")
+        let request = URLSessionRedditClient.mutationRequest(for: .comment(thingID: postID, text: "A comment"))
 
         XCTAssertEqual(request.method, "POST")
         XCTAssertEqual(request.path, "/api/comment")
         XCTAssertEqual(request.fields["thing_id"], "t3_example")
         XCTAssertEqual(request.fields["text"], "A comment")
         XCTAssertEqual(request.fields["api_type"], "json")
+
+        let commentID = IDNormalization.fullname("reply", kind: "t1")
+        let replyRequest = URLSessionRedditClient.mutationRequest(
+            for: .comment(thingID: commentID, text: "A reply")
+        )
+        XCTAssertEqual(replyRequest.path, "/api/comment")
+        XCTAssertEqual(replyRequest.fields["thing_id"], "t1_reply")
     }
 
     func testUserSearchBuildsPublicWebsiteJSONRoute() {
@@ -471,6 +552,19 @@ final class DomainTests: XCTestCase {
                 )),
                 .text("\nAfter"),
             ]
+        )
+    }
+
+    func testPostPreviewUsesTextBeforeTableAndKeepsSpoilersHidden() {
+        let source = "Welcome to [the roundup](https://example.com). >!secret!<\n\n|Thread|Votes|\n|:-|:-|\n|A long story|42|"
+
+        XCTAssertEqual(
+            RedditPostMarkdown.previewText(from: source),
+            "Welcome to the roundup. [Reveal spoiler]"
+        )
+        XCTAssertEqual(
+            RedditPostMarkdown.previewText(from: "|Thread|Votes|\n|:-|:-|\n|A long story|42|"),
+            ""
         )
     }
 

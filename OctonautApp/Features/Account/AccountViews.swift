@@ -182,6 +182,8 @@ struct UserProfileView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            case .loginRequired:
+                RedditLoginRequiredView()
             case .failed(let message):
                 Section {
                     ContentUnavailableView {
@@ -421,6 +423,8 @@ struct UserSectionView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+            case .loginRequired:
+                RedditLoginRequiredView()
             case .failed(let message):
                 ContentUnavailableView {
                     Label("\(section.title) unavailable", systemImage: "exclamationmark.triangle")
@@ -523,7 +527,7 @@ struct UserSectionView: View {
             return
         } catch {
             guard !Task.isCancelled else { return }
-            state = .failed(error.localizedDescription)
+            state = .failure(error)
         }
     }
 

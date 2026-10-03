@@ -8,6 +8,7 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
     case rateLimited(retryAfter: TimeInterval?)
     case authenticationRequired
     case accessDenied
+    case anonymousAccessBlocked
     case notFound
     case malformedResponse
     case reddit(errors: [String])
@@ -20,6 +21,7 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
         case .http(let statusCode, let message): return message ?? "Reddit returned HTTP \(statusCode)."
         case .rateLimited: return "Reddit is rate limiting requests. Try again shortly."
         case .authenticationRequired: return "This Reddit account needs to sign in again."
+        case .anonymousAccessBlocked: return "Reddit's currently blocking unauthenticated requests; log in to continue."
         case .accessDenied: return "Reddit denied access to this content."
         case .notFound: return "Reddit could not find this content."
         case .malformedResponse: return "Reddit returned data Octonaut could not read."
@@ -41,7 +43,7 @@ protocol RedditClient: Sendable {
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post>
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID?) async throws -> Listing<Community>
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile>
-    func trendingCommunities(limit: Int) async throws -> Listing<Community>
+    func trendingCommunities(limit: Int, account: AccountID?) async throws -> Listing<Community>
     func subscribedCommunities(after: String?, account: AccountID) async throws -> Listing<Community>
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile
     func userComments(
@@ -280,14 +282,14 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeUserSearch(data)
     }
 
-    func trendingCommunities(limit: Int = 25) async throws -> Listing<Community> {
+    func trendingCommunities(limit: Int = 25, account: AccountID? = nil) async throws -> Listing<Community> {
         let route = Self.trendingCommunitiesRoute(limit: limit)
         let data = try await requestData(
             method: "GET",
             path: route.path,
             query: route.query,
             body: nil,
-            account: nil,
+            account: account,
             retryable: true
         )
         return try RedditJSONCodec.decodeCommunities(data)
@@ -461,24 +463,7 @@ actor URLSessionRedditClient: RedditClient {
         }
 
         guard let http = response as? HTTPURLResponse else { throw RedditClientError.invalidResponse }
-        if http.statusCode == 401 || http.statusCode == 403 {
-            if http.statusCode == 403 { throw RedditClientError.accessDenied }
-            throw RedditClientError.authenticationRequired
-        }
-        if http.statusCode == 404 { throw RedditClientError.notFound }
-        if http.statusCode == 429 {
-            throw RedditClientError.rateLimited(retryAfter: retryAfter(from: http))
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            throw RedditClientError.http(statusCode: http.statusCode, message: nil)
-        }
-
-        let firstNonWhitespace = data.first { byte in
-            byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
-        }
-        if firstNonWhitespace == 0x3C { // '<' - an HTML login/error page
-            throw RedditClientError.authenticationRequired
-        }
+        try Self.validateResponse(data, response: http, isAnonymous: account == nil)
         if let result = try? RedditJSONCodec.decodeActionResult(data),
            !result.succeeded,
            let message = result.message {
@@ -488,6 +473,28 @@ actor URLSessionRedditClient: RedditClient {
             RedditResponseCache.store(data, response: http, for: cacheRequest)
         }
         return data
+    }
+
+    static func validateResponse(_ data: Data, response http: HTTPURLResponse, isAnonymous: Bool) throws {
+        if http.statusCode == 401 || http.statusCode == 403 {
+            if isAnonymous { throw RedditClientError.anonymousAccessBlocked }
+            if http.statusCode == 403 { throw RedditClientError.accessDenied }
+            throw RedditClientError.authenticationRequired
+        }
+        if http.statusCode == 404 { throw RedditClientError.notFound }
+        if http.statusCode == 429 {
+            throw RedditClientError.rateLimited(retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init))
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw RedditClientError.http(statusCode: http.statusCode, message: nil)
+        }
+
+        let firstNonWhitespace = data.first { byte in
+            byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
+        }
+        if firstNonWhitespace == 0x3C { // '<' - an HTML login/error page
+            throw isAnonymous ? RedditClientError.anonymousAccessBlocked : RedditClientError.authenticationRequired
+        }
     }
 
     private func bootstrapAnonymousSessionIfNeeded() async {
@@ -725,11 +732,6 @@ actor URLSessionRedditClient: RedditClient {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
         return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-    }
-
-    private func retryAfter(from response: HTTPURLResponse) -> TimeInterval? {
-        guard let value = response.value(forHTTPHeaderField: "Retry-After") else { return nil }
-        return TimeInterval(value)
     }
 
     private func shouldRetry(_ error: RedditClientError) -> Bool {

@@ -572,6 +572,8 @@ private struct MacSidebarView: View {
                     switch communitiesState {
                     case .idle, .loading:
                         ProgressView("Loading communities…")
+                    case .loginRequired:
+                        RedditLoginRequiredView()
                     case .failed(let message):
                         Text("Couldn’t load communities. \(message)")
                             .font(.caption)

@@ -499,6 +499,22 @@ enum RedditJSONCodec {
         return RichText(plainText: stripHTML(source))
     }
 
+    private static let htmlTagRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(pattern: "<[^>]+>", options: [])
+        } catch {
+            fatalError("Invalid htmlTagRegex: \(error)")
+        }
+    }()
+
+    private static let urlExtractionRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(pattern: #"https?://[^\s<>]+"#)
+        } catch {
+            fatalError("Invalid urlExtractionRegex: \(error)")
+        }
+    }()
+
     private static func stripHTML(_ string: String) -> String {
         var value = string
             .replacingOccurrences(of: "&amp;", with: "&")
@@ -506,13 +522,11 @@ enum RedditJSONCodec {
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&#39;", with: "'")
             .replacingOccurrences(of: "&quot;", with: "\"")
-        if let expression = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
-            value = expression.stringByReplacingMatches(
-                in: value,
-                range: NSRange(value.startIndex..., in: value),
-                withTemplate: ""
-            )
-        }
+        value = htmlTagRegex.stringByReplacingMatches(
+            in: value,
+            range: NSRange(value.startIndex..., in: value),
+            withTemplate: ""
+        )
         return value
             .replacingOccurrences(of: "\\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -768,13 +782,12 @@ enum RedditJSONCodec {
     }
 
     private static func URLs(in text: String?) -> [URL] {
-        guard let text, !text.isEmpty,
-              let expression = try? NSRegularExpression(pattern: #"https?://[^\s<>]+"#) else {
+        guard let text, !text.isEmpty else {
             return []
         }
 
         let range = NSRange(text.startIndex..., in: text)
-        return expression.matches(in: text, range: range).compactMap { match in
+        return urlExtractionRegex.matches(in: text, range: range).compactMap { match in
             guard let matchRange = Range(match.range, in: text) else { return nil }
             let candidate = String(text[matchRange])
                 .trimmingCharacters(in: CharacterSet(charactersIn: "])}>,."))

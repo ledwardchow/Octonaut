@@ -274,6 +274,40 @@ enum MediaDownloadTransport {
     }
 }
 
+enum RedditVideoPlayback {
+    /// The playlist includes the audio that Reddit's standalone video MP4s omit.
+    static func url(for source: URL, isGIF: Bool) -> URL {
+        guard !isGIF,
+              source.scheme?.lowercased() == "https",
+              source.host?.lowercased() == "v.redd.it",
+              source.user == nil, source.password == nil,
+              source.port == nil || source.port == 443,
+              source.pathExtension.lowercased() == "mp4",
+              source.path.split(separator: "/").count == 2,
+              var components = URLComponents(url: source, resolvingAgainstBaseURL: false) else {
+            return source
+        }
+        let parent = (components.path as NSString).deletingLastPathComponent
+        components.path = "\(parent)/HLSPlaylist.m3u8"
+        components.query = nil
+        components.fragment = nil
+        return components.url ?? source
+    }
+
+    static func failureMessage(for error: NSError?) -> String {
+        var current = error
+        // AVFoundation wraps CoreAudio errors in its own error domain.
+        for _ in 0..<8 {
+            guard let value = current else { break }
+            if value.domain == NSOSStatusErrorDomain && value.code == 2003329396 {
+                return "The audio output could not start. Choose another output in macOS Sound settings, then reopen this video."
+            }
+            current = value.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return "The video could not play. Reopen it to try again."
+    }
+}
+
 enum RedditDASHManifest {
     struct Media: Equatable {
         let video: URL

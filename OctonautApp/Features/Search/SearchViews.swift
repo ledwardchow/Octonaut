@@ -32,11 +32,14 @@ struct SearchRootView: View {
         }
         .onSubmit(of: .search) {
             submittedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            Task { await model.submit(query: submittedQuery, scope: scope) }
+            Task { await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID) }
         }
         .onChange(of: scope) { _, newScope in
             guard !submittedQuery.isEmpty else { return }
-            Task { await model.submit(query: submittedQuery, scope: newScope) }
+            Task { await model.submit(query: submittedQuery, scope: newScope, account: dependencies.accounts.selectedAccountID) }
+        }
+        .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
+            Task { await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID) }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -44,7 +47,7 @@ struct SearchRootView: View {
                     Button("Clear") {
                         query = ""
                         submittedQuery = ""
-                        Task { await model.submit(query: "", scope: scope) }
+                        Task { await model.submit(query: "", scope: scope, account: dependencies.accounts.selectedAccountID) }
                     }
                 }
             }
@@ -79,6 +82,8 @@ struct SearchRootView: View {
                 case .empty:
                     Text("No trending communities found.")
                         .foregroundStyle(.secondary)
+                case .loginRequired:
+                    RedditLoginRequiredView()
                 case .failed(let message):
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Trending communities could not be loaded", systemImage: "exclamationmark.triangle")
@@ -102,7 +107,9 @@ struct SearchRootView: View {
             }
         }
         .listStyle(.insetGrouped)
-        .task { await model.loadTrendingCommunities() }
+        .task(id: dependencies.accounts.selectionGeneration) {
+            await model.loadTrendingCommunities(forceRefresh: true, account: dependencies.accounts.selectedAccountID)
+        }
     }
 
     @ViewBuilder
@@ -114,6 +121,8 @@ struct SearchRootView: View {
                 Text("Searching Reddit…").foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loginRequired:
+            RedditLoginRequiredView()
         case .failed(let message):
             ContentUnavailableView("Search failed", systemImage: "wifi.exclamationmark", description: Text(message))
         case .empty, .idle:

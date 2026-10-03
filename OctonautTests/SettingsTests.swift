@@ -3,6 +3,15 @@ import XCTest
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testFeedVideoAudioDefaultsOffAndPersists() {
+        let defaults = UserDefaults(suiteName: "FeedVideoAudio.\(UUID())")!
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertFalse(settings.playFeedVideoAudio)
+
+        settings.playFeedVideoAudio = true
+        XCTAssertTrue(SettingsStore(defaults: defaults).playFeedVideoAudio)
+    }
+
     func testCustomFeedsSyncCreateEditDeleteAndKeepOfflineCopiesDeleted() throws {
         let aDefaults = UserDefaults(suiteName: "FeedSync.A.\(UUID())")!
         let bDefaults = UserDefaults(suiteName: "FeedSync.B.\(UUID())")!

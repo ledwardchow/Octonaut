@@ -95,7 +95,8 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
             guard let id = string(payload, "id") ?? string(payload, "name") else { return nil }
             let fullname = string(payload, "name") ?? IDNormalization.fullname(id, kind: "t4")
             let subject = string(payload, "subject") ?? "Reddit notification"
-            let bodyText = string(payload, "body") ?? string(payload, "body_html").map(stripMarkup)
+            let rawBody = string(payload, "body") ?? string(payload, "body_html")
+            let body = rawBody.map { RichText(plainText: stripMarkup($0)) }
             let author = string(payload, "author") ?? string(payload, "author_name")
             let community = string(payload, "subreddit")
             let permalink = (string(payload, "link_permalink") ?? string(payload, "permalink")).flatMap(URL.init(string:))
@@ -105,7 +106,7 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
                 id: id,
                 fullname: fullname,
                 subject: subject,
-                body: bodyText.map { RichText(plainText: stripMarkup($0)) },
+                body: body,
                 author: author.map(UserReference.init(username:)),
                 community: community.map { CommunityReference(name: $0) },
                 postPermalink: permalink,
@@ -127,8 +128,16 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         return nil
     }
 
+    private static let markupRegex: NSRegularExpression = {
+        do {
+            return try NSRegularExpression(pattern: "<[^>]+>")
+        } catch {
+            fatalError("Invalid markupRegex: \(error)")
+        }
+    }()
+
     private func stripMarkup(_ value: String) -> String {
-        value
+        var result = value
             .replacingOccurrences(of: "<br>", with: "\n")
             .replacingOccurrences(of: "<br/>", with: "\n")
             .replacingOccurrences(of: "<br />", with: "\n")
@@ -137,8 +146,12 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&#39;", with: "'")
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        result = Self.markupRegex.stringByReplacingMatches(
+            in: result,
+            range: NSRange(result.startIndex..., in: result),
+            withTemplate: ""
+        )
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

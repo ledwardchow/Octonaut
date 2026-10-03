@@ -229,11 +229,13 @@ struct OctonautTabsView: View {
 
     private var usesFloatingTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
-            && dependencies.settings.showBottomNavigationOnLargeScreens
+            && (UIDevice.current.userInterfaceIdiom == .pad
+                || dependencies.settings.showBottomNavigationOnLargeScreens)
     }
 
     private var usesSidebarTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+            && UIDevice.current.userInterfaceIdiom != .pad
             && !dependencies.settings.showBottomNavigationOnLargeScreens
     }
 
@@ -433,7 +435,7 @@ private struct PostsSplitView: View {
     var body: some View {
         GeometryReader { geometry in
             if geometry.size.width >= 1100 {
-                threeColumnLayout
+                threeColumnLayout(availableWidth: geometry.size.width)
             } else {
                 twoColumnLayout
             }
@@ -462,8 +464,9 @@ private struct PostsSplitView: View {
         .navigationSplitViewStyle(.balanced)
     }
 
-    private var threeColumnLayout: some View {
+    private func threeColumnLayout(availableWidth: CGFloat) -> some View {
         @Bindable var router = router
+        let feedWidth = min(500, max(440, availableWidth * 0.38))
 
         return HStack(spacing: 0) {
             if sidebarVisible {
@@ -475,7 +478,7 @@ private struct PostsSplitView: View {
                         selectedFeed: state.selectedFeed
                     )
                 }
-                .frame(width: 240)
+                .frame(width: 220)
                 Divider()
             }
 
@@ -483,7 +486,7 @@ private struct PostsSplitView: View {
                 selectedFeedView
                     .toolbar { sidebarButton }
             }
-            .frame(width: 380)
+            .frame(width: feedWidth)
             Divider()
 
             NavigationStack(path: $router.path) {

@@ -4,6 +4,8 @@ import SwiftUI
 struct ComposerView: View {
     let kind: ComposerKind
     let store: OctonautFeatureStore
+    let targetID: String?
+    let onSubmitted: (() -> Void)?
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
     @State private var community = ""
@@ -21,17 +23,28 @@ struct ComposerView: View {
     @State private var draftAccountID: AccountID?
     @FocusState private var isBodyFocused: Bool
 
-    init(kind: ComposerKind, store: OctonautFeatureStore, community: String = "") {
+    init(
+        kind: ComposerKind,
+        store: OctonautFeatureStore,
+        community: String = "",
+        targetID: String? = nil,
+        onSubmitted: (() -> Void)? = nil
+    ) {
         self.kind = kind
         self.store = store
+        self.targetID = targetID
+        self.onSubmitted = onSubmitted
         _community = State(initialValue: community)
     }
 
     private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }
+    private var isPostComment: Bool { kind == .comment && targetID?.hasPrefix("t3_") == true }
     private var canSubmit: Bool {
         switch kind {
         case .post: return !community.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (postType != "Link" || URL(string: link) != nil)
-        case .comment, .edit: return !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .comment, .edit:
+            return targetID?.isEmpty == false
+                && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .message: return !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
@@ -93,13 +106,13 @@ struct ComposerView: View {
                         if kind == .post, postType == "Link" {
                             Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
                         }
-                        Section(kind == .post ? "Body" : "Reply") {
+                        Section(kind == .post ? "Body" : isPostComment ? "Comment" : "Reply") {
                             TextEditor(text: $bodyText)
                                 .focused($isBodyFocused)
                                 .frame(minHeight: 180)
                                 .overlay(alignment: .topLeading) {
                                     if bodyText.isEmpty, !isBodyFocused {
-                                        Text(kind == .post ? "Write something useful…" : "Write your reply…")
+                                        Text(kind == .post ? "Write something useful…" : isPostComment ? "Write a comment…" : "Write your reply…")
                                             .foregroundStyle(.tertiary)
                                             .padding(.top, 8)
                                             .allowsHitTesting(false)
@@ -113,7 +126,7 @@ struct ComposerView: View {
                 }
                 formattingBar
             }
-            .navigationTitle(kind.title)
+            .navigationTitle(isPostComment ? "Comment" : kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -202,7 +215,7 @@ struct ComposerView: View {
                 sendReplies: sendReplies
             )
         case .comment, .edit:
-            let target = store.posts.first?.id ?? ""
+            let target = targetID ?? ""
             action = kind == .edit ? .edit(thingID: target, text: bodyText) : .comment(thingID: target, text: bodyText)
         case .message:
             action = .composeMessage(to: recipient.trimmingCharacters(in: .whitespacesAndNewlines), subject: title, text: bodyText)
@@ -212,6 +225,7 @@ struct ComposerView: View {
                 _ = try await dependencies.authenticated.perform(action, accountID: accountID)
                 try? await dependencies.persistence.deleteDraft(draftID)
                 sending = false
+                onSubmitted?()
                 dismiss()
             } catch let error as RedditClientError where error == .authenticationRequired {
                 await dependencies.accounts.markNeedsLogin(accountID)
@@ -235,7 +249,7 @@ struct ComposerView: View {
             id: draftID,
             kind: draftKind,
             accountID: accountID,
-            target: kind == .post ? community : recipient,
+            target: kind == .post ? community : (targetID ?? recipient),
             title: title,
             body: bodyText,
             link: URL(string: link),

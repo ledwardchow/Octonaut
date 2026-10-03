@@ -196,6 +196,7 @@ final class SettingsStore {
     var summaryEndpoint: String { didSet { persist(summaryEndpoint, key: Keys.summaryEndpoint); configurationRevision &+= 1 } }
     var summaryModel: String { didSet { persist(summaryModel, key: Keys.summaryModel); configurationRevision &+= 1 } }
     var autoplayVideo: AutoplayVideo { didSet { persist(autoplayVideo.rawValue, key: Keys.autoplayVideo) } }
+    var playFeedVideoAudio: Bool { didSet { persist(playFeedVideoAudio, key: Keys.playFeedVideoAudio) } }
     var enableLiveText: Bool { didSet { persist(enableLiveText, key: Keys.enableLiveText) } }
 
     var hideSeenPosts: Bool { didSet { persist(hideSeenPosts, key: Keys.hideSeenPosts); filterRevision &+= 1 } }
@@ -372,6 +373,7 @@ final class SettingsStore {
         summaryEndpoint = defaults.string(forKey: Keys.summaryEndpoint) ?? "https://openrouter.ai/api/v1"
         summaryModel = defaults.string(forKey: Keys.summaryModel) ?? "openai/gpt-5.6-luna"
         autoplayVideo = AutoplayVideo(rawValue: defaults.string(forKey: Keys.autoplayVideo) ?? "wifi") ?? .wifi
+        playFeedVideoAudio = defaults.object(forKey: Keys.playFeedVideoAudio) as? Bool ?? false
         enableLiveText = defaults.object(forKey: Keys.enableLiveText) as? Bool ?? true
         hideSeenPosts = defaults.object(forKey: Keys.hideSeenPosts) as? Bool ?? false
         autoMarkSeenWhileScrolling = defaults.object(forKey: Keys.autoMarkSeenWhileScrolling) as? Bool ?? false
@@ -432,6 +434,7 @@ final class SettingsStore {
         summaryEndpoint = fresh.summaryEndpoint
         summaryModel = fresh.summaryModel
         autoplayVideo = fresh.autoplayVideo
+        playFeedVideoAudio = fresh.playFeedVideoAudio
         enableLiveText = fresh.enableLiveText
         hideSeenPosts = fresh.hideSeenPosts
         autoMarkSeenWhileScrolling = fresh.autoMarkSeenWhileScrolling
@@ -524,6 +527,7 @@ final class SettingsStore {
         static let summaryEndpoint = "intelligence.summaryEndpoint"
         static let summaryModel = "intelligence.summaryModel"
         static let autoplayVideo = "appearance.autoplayVideo"
+        static let playFeedVideoAudio = "appearance.playFeedVideoAudio"
         static let enableLiveText = "appearance.enableLiveText"
         static let hideSeenPosts = "filters.hideSeenPosts"
         static let autoMarkSeenWhileScrolling = "filters.autoMarkSeenWhileScrolling"
