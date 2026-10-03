@@ -917,6 +917,14 @@ final class OctonautFeatureStore {
     @ObservationIgnored private var loadedFeed: FeedDescriptorModel?
     @ObservationIgnored private var feedCache: [FeedCacheKey: FeedCacheEntry] = [:]
     @ObservationIgnored private let feedCacheFreshness: TimeInterval = 15 * 60
+    /// The filter revision the loaded posts were actually filtered under.
+    ///
+    /// Not the same thing as the revision in force now. Stamping the current
+    /// one onto a list produced under an older one is what let a mutation --
+    /// a vote, a save, a post marked read -- write the pre-toggle list into
+    /// the cache under the post-toggle revision, where a later refresh
+    /// accepted it as a hit and served filtered-out posts straight back.
+    @ObservationIgnored private var loadedFilterRevision = 0
     @ObservationIgnored private var detailCache: [DetailCacheKey: DetailCacheEntry] = [:]
     @ObservationIgnored private let detailCacheFreshness: TimeInterval = 10 * 60
     @ObservationIgnored private let detailCacheCapacity = 20
@@ -1137,6 +1145,7 @@ final class OctonautFeatureStore {
         if !forceRefresh,
            let cached = feedCache[cacheKey],
            cached.filterRevision == filterRevision {
+            loadedFilterRevision = cached.filterRevision
             posts = cached.posts
             filteredPostCount = cached.filteredPostCount
             nextPage = cached.nextPage
@@ -1179,6 +1188,7 @@ final class OctonautFeatureStore {
             let filtered = await applyFilters(to: listing.items)
             guard feedRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
+            loadedFilterRevision = filterRevision
             posts = filtered.posts.map(PostCardModel.init)
             filteredPostCount = filtered.removedCount
             nextPage = listing.after
@@ -1717,7 +1727,7 @@ final class OctonautFeatureStore {
                 posts: posts,
                 filteredPostCount: filteredPostCount,
                 nextPage: self.nextPage,
-                filterRevision: Int(settings?.filterRevision ?? 0),
+                filterRevision: loadedFilterRevision,
                 storedAt: .now
             )
         } catch is CancellationError {
@@ -2012,7 +2022,10 @@ final class OctonautFeatureStore {
             posts: posts,
             filteredPostCount: filteredPostCount,
             nextPage: nextPage,
-            filterRevision: Int(settings?.filterRevision ?? 0),
+            // The revision these posts were filtered under, not whichever is
+            // in force now: a mutation must not re-stamp a list as though it
+            // had been filtered by the current settings.
+            filterRevision: loadedFilterRevision,
             storedAt: feedCache[key]?.storedAt ?? .now
         )
     }

@@ -239,6 +239,17 @@ final class SettingsStore {
     private(set) var configurationRevision: UInt = 0
     private(set) var filterRevision: UInt = 0
 
+    /// Invalidates cached feeds after a change to a filter that is applied
+    /// when posts are fetched.
+    ///
+    /// The keyword, community and semantic rules are written straight to
+    /// `@AppStorage` by their settings view, so they never reached this
+    /// store and never invalidated anything -- a cached feed kept serving
+    /// posts a new keyword rule should have removed.
+    func noteFilterChanged() {
+        filterRevision &+= 1
+    }
+
     @ObservationIgnored private var feedCloud: (any CustomFeedCloudStore)?
     @ObservationIgnored private var feedCloudObserver: AnyCancellable?
     @ObservationIgnored private var feedVersions: [String: CustomFeedSyncRecord] = [:]

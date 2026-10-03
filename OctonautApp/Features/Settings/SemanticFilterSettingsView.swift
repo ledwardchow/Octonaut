@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct SemanticFilterSettingsView: View {
     let intelligence: any IntelligenceService
+    @Environment(AppDependencies.self) private var dependencies
     @AppStorage("filters.semantic.enabled") private var isEnabled = false
     @AppStorage("filters.semantic.instruction") private var instruction = "Hide posts that are mainly promotional."
     @AppStorage("filters.blockedCommunities") private var blockedCommunities = ""
@@ -38,6 +39,12 @@ struct SemanticFilterSettingsView: View {
         .task {
             availability = await intelligence.availability
         }
+        // These are applied when a page is fetched, so a cached feed has to
+        // be dropped for a change to them to take effect.
+        .onChange(of: blockedCommunities) { _, _ in dependencies.settings.noteFilterChanged() }
+        .onChange(of: keywordTerms) { _, _ in dependencies.settings.noteFilterChanged() }
+        .onChange(of: isEnabled) { _, _ in dependencies.settings.noteFilterChanged() }
+        .onChange(of: instruction) { _, _ in dependencies.settings.noteFilterChanged() }
     }
 
     private var statusText: String {
