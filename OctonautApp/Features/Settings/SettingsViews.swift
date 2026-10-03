@@ -342,6 +342,20 @@ struct SettingsDetailView: View {
                     fromByteCount: Int64(responseCacheBytes),
                     countStyle: .file
                 ))
+                if let persistenceFailure = dependencies.persistenceFailure {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Nothing is being saved to this device")
+                                .font(.footnote.weight(.semibold))
+                            Text("Read posts, drafts and statistics will be gone when Octonaut quits. \(persistenceFailure)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
                 Button("Clear Network and Media Cache") {
                     RedditResponseCache.removeAll()
                     responseCacheBytes = 0

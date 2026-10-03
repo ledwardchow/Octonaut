@@ -15,6 +15,14 @@ final class AppDependencies {
     let summaryAPIKeyStore: any SummaryAPIKeyStore
     let links: any LinkRouter
     let settings: SettingsStore
+    /// Why the on-device database could not be opened, when it could not.
+    ///
+    /// The app falls back to an in-memory store so it still runs, but that
+    /// store forgets everything on quit. Silently, this is indistinguishable
+    /// from working: posts mark as read, the count climbs, and the whole lot
+    /// is gone next launch. Surfaced in Settings so it can be told apart
+    /// from a bug in the seen record itself.
+    let persistenceFailure: String?
     var summaryCacheModelFamily: String {
         switch settings.summaryProvider {
         case .onDevice: "on-device"
@@ -33,7 +41,8 @@ final class AppDependencies {
         intelligence: any IntelligenceService,
         summaryAPIKeyStore: any SummaryAPIKeyStore,
         links: any LinkRouter,
-        settings: SettingsStore
+        settings: SettingsStore,
+        persistenceFailure: String? = nil
     ) {
         self.router = router
         self.accounts = accounts
@@ -45,6 +54,7 @@ final class AppDependencies {
         self.summaryAPIKeyStore = summaryAPIKeyStore
         self.links = links
         self.settings = settings
+        self.persistenceFailure = persistenceFailure
     }
 
     func resetAllData() async throws {
@@ -85,10 +95,14 @@ final class AppDependencies {
 
     static func live() -> AppDependencies {
         let persistence: any PersistenceStore
-        if let container = try? PersistenceSchema.makeContainer() {
-            persistence = SwiftDataPersistenceStore(container: container)
-        } else {
+        var persistenceFailure: String?
+        do {
+            persistence = SwiftDataPersistenceStore(container: try PersistenceSchema.makeContainer())
+        } catch {
+            // Keep running, but say so: everything written from here is lost
+            // when the app quits.
             persistence = InMemoryPersistenceStore()
+            persistenceFailure = error.localizedDescription
         }
         let vault = KeychainCredentialVault()
         let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault))
@@ -125,7 +139,8 @@ final class AppDependencies {
             intelligence: intelligence,
             summaryAPIKeyStore: summaryAPIKeyStore,
             links: DefaultLinkRouter(),
-            settings: settings
+            settings: settings,
+            persistenceFailure: persistenceFailure
         )
         Task {
             let modelAvailable = await intelligence.summaryAvailability == .available
