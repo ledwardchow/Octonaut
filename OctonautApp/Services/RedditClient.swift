@@ -497,20 +497,44 @@ actor URLSessionRedditClient: RedditClient {
         }
     }
 
+    /// Seeds Reddit's logged-out edge cookies by fetching an ordinary page.
+    ///
+    /// Reddit's edge answers a cookie-less anonymous request with a 403 and
+    /// an HTML "blocked by network security" page. A plain page fetch is what
+    /// earns the cookies the JSON routes then accept.
+    ///
+    /// Three things made the previous version a no-op that reported success:
+    ///
+    /// - It marked itself done *before* the request and only undid that on a
+    ///   thrown error. A 403 does not throw, so a blocked seed counted as a
+    ///   good one for the rest of the process.
+    /// - It never read the status code, so it could not tell those apart.
+    /// - It fetched `old.reddit.com`, which is not the host the JSON calls
+    ///   use, and which answered those calls with a 404 when measured on
+    ///   2026-09-28.
     private func bootstrapAnonymousSessionIfNeeded() async {
         guard !didBootstrapAnonymousSession else { return }
-        didBootstrapAnonymousSession = true
-        guard let url = URL(string: "https://old.reddit.com/") else { return }
+        guard let url = URL(string: "https://www.reddit.com/") else { return }
         var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
-        do {
-            _ = try await session.data(for: request)
-        } catch {
-            // A later manual refresh should be able to retry the cookie seed.
-            didBootstrapAnonymousSession = false
+        request.setValue(
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            forHTTPHeaderField: "Accept"
+        )
+        // The reader's own language, so the seed is not pinned to one locale.
+        if let language = Locale.preferredLanguages.first {
+            request.setValue("\(language),en;q=0.9", forHTTPHeaderField: "Accept-Language")
         }
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode)
+        else {
+            // Left unset on purpose: the next request seeds again instead of
+            // spending the process assuming cookies it never received.
+            return
+        }
+        didBootstrapAnonymousSession = true
     }
 
     private func makeURL(path: String, query: [URLQueryItem], websiteHost: String? = nil) -> URL? {
