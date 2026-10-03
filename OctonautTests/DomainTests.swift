@@ -1551,4 +1551,133 @@ extension DomainTests {
         // Nothing to take a host from falls back to the whole thing.
         XCTAssertEqual(try host("mailto:someone@example.com"), "mailto:someone@example.com")
     }
+
+    private static func listingJSON(ids: [String], after: String?) -> Data {
+        let children = ids.map { id in
+            #"{"kind":"t3","data":{"id":"\#(id)","name":"t3_\#(id)","title":"Post \#(id)","subreddit":"swift","permalink":"/r/swift/comments/\#(id)/title/","author":"reader"}}"#
+        }
+        let afterValue = after.map { "\"\($0)\"" } ?? "null"
+        return Data(#"{"data":{"children":[\#(children.joined(separator: ","))],"after":\#(afterValue)}}"#.utf8)
+    }
+
+    @MainActor
+    private static func sortSettings(
+        rememberCommunity: Bool = false,
+        rememberMultireddit: Bool = false
+    ) -> SettingsStore {
+        let settings = SettingsStore(defaults: UserDefaults(suiteName: "OctonautTests.\(UUID())")!)
+        settings.rememberSortPerCommunity = rememberCommunity
+        settings.rememberSortPerMultireddit = rememberMultireddit
+        return settings
+    }
+
+    /// The sort a community was last read with comes back when the reader
+    /// returns to it, and does not follow them to another community.
+    @MainActor
+    func testSortIsRememberedPerCommunity() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let apple = FeedDescriptorModel(kind: .community, name: "apple")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, topTime: .week, for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+
+        // A different community does not inherit it.
+        await store.refreshPosts(for: apple)
+        XCTAssertEqual(store.selectedSort, .best)
+
+        // Returning does.
+        await store.refreshPosts(for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+        XCTAssertEqual(store.selectedTopTime, .week)
+    }
+
+    /// The record survives the store, which is the point of writing it.
+    @MainActor
+    func testARememberedSortOutlivesTheStore() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+
+        let first = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+        await first.refreshPosts(for: swift)
+        await first.applySort(.new, for: swift)
+
+        let second = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+        await second.refreshPosts(for: swift)
+
+        XCTAssertEqual(second.selectedSort, .new)
+    }
+
+    /// With the setting off, sort behaves as it always has: one value that
+    /// follows the reader between feeds for the session, and nothing stored.
+    @MainActor
+    func testSortIsNotRememberedWhenTheSettingIsOff() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let apple = FeedDescriptorModel(kind: .community, name: "apple")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(), persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, for: swift)
+        await store.refreshPosts(for: apple)
+
+        XCTAssertEqual(store.selectedSort, .top, "Sort still carries across feeds when nothing is remembered")
+        let stored = try await persistence.loadFeedPreference(
+            feedKey: "community:swift", accountScope: "anonymous")
+        XCTAssertNil(stored)
+    }
+
+    /// Switching account resolves again, so the sort one reader left on a
+    /// community does not carry into another reader's session.
+    @MainActor
+    func testARememberedSortDoesNotCarryAcrossAnAccountSwitch() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let store = OctonautFeatureStore(
+            reddit: client, accountID: AccountID(),
+            settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, topTime: .week, for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+
+        store.synchronizeAccount(id: AccountID(), generation: 1, accounts: [])
+        await store.refreshPosts(for: swift)
+
+        // The second reader has no record for this community, so it opens at
+        // the configured default and not on the first reader's Top.
+        XCTAssertEqual(store.selectedSort, .best)
+    }
+
+    /// Communities and multireddits are governed by their own settings.
+    @MainActor
+    func testMultiredditSortIsGovernedByItsOwnSetting() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let multi = FeedDescriptorModel(kind: .multireddit, name: "devtools")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: multi)
+        await store.applySort(.rising, for: multi)
+
+        let stored = try await persistence.loadFeedPreference(
+            feedKey: "multireddit:devtools", accountScope: "anonymous")
+        XCTAssertNil(stored)
+    }
 }

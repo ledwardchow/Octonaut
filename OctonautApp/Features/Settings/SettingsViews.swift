@@ -141,6 +141,10 @@ struct SettingsDetailView: View {
                     ForEach(["best", "new", "top", "controversial", "old", "qa"], id: \.self) { value in Text(value == "qa" ? "Q&A" : value.capitalized).tag(CommentSort(rawValue: value)) }
                 }
                 Toggle("Remember sort per community", isOn: Binding(get: { dependencies.settings.rememberSortPerCommunity }, set: { dependencies.settings.rememberSortPerCommunity = $0 }))
+                // `spec/07-settings-reference.md` asks for this one too. The
+                // property was persisted from the first commit but never had a
+                // control, so nothing could turn it on.
+                Toggle("Remember sort per multireddit", isOn: Binding(get: { dependencies.settings.rememberSortPerMultireddit }, set: { dependencies.settings.rememberSortPerMultireddit = $0 }))
             }
         }
     }
