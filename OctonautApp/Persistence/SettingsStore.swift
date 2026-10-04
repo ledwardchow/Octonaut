@@ -245,12 +245,43 @@ final class SettingsStore {
     @ObservationIgnored private var applyingCloudFeeds = false
     private(set) var customFeedSyncStatus = "Saved on this device."
 
+    private var customFeedUsername: String?
+
+    /// Screens edit only the feeds belonging to the current Reddit user.
     var customFeeds: [CustomFeed] {
+        get { allCustomFeeds.filter { $0.ownerUsername == (customFeedUsername ?? "") } }
+        set {
+            let owner = customFeedUsername ?? ""
+            let hidden = allCustomFeeds.filter { $0.ownerUsername != owner }
+            let visible = newValue.filter { feed in !hidden.contains { $0.id == feed.id } }.map { feed in
+                var owned = feed
+                owned.ownerUsername = owner
+                return owned
+            }
+            allCustomFeeds = hidden + visible
+        }
+    }
+
+    func setCustomFeedUser(_ username: String?) {
+        customFeedUsername = username?.lowercased()
+        assignLegacyCustomFeeds()
+    }
+
+    private func assignLegacyCustomFeeds() {
+        guard let customFeedUsername, allCustomFeeds.contains(where: { $0.ownerUsername == nil }) else { return }
+        allCustomFeeds = allCustomFeeds.map { feed in
+            var owned = feed
+            if owned.ownerUsername == nil { owned.ownerUsername = customFeedUsername }
+            return owned
+        }
+    }
+
+    private var allCustomFeeds: [CustomFeed] {
         didSet {
-            persistCodable(customFeeds, key: "feeds.custom")
+            persistCodable(allCustomFeeds, key: "feeds.custom")
             guard !applyingCloudFeeds else { return }
             let previous = Dictionary(oldValue.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
-            let current = Dictionary(customFeeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+            let current = Dictionary(allCustomFeeds.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
             for id in Set(previous.keys).union(current.keys) where previous[id] != current[id] {
                 let timestamp = max(Date.now.timeIntervalSince1970, (feedVersions[id.uuidString]?.modifiedAt ?? 0) + 0.001)
                 feedVersions[id.uuidString] = CustomFeedSyncRecord(id: id, feed: current[id], modifiedAt: timestamp)
@@ -286,7 +317,7 @@ final class SettingsStore {
     func startCustomFeedSync(using cloud: any CustomFeedCloudStore) {
         guard feedCloud == nil else { return }
         feedCloud = cloud
-        for feed in customFeeds where feedVersions[feed.id.uuidString] == nil {
+        for feed in allCustomFeeds where feedVersions[feed.id.uuidString] == nil {
             // An existing cloud revision takes precedence over an unmigrated local copy.
             feedVersions[feed.id.uuidString] = CustomFeedSyncRecord(id: feed.id, feed: feed, modifiedAt: 0)
         }
@@ -315,8 +346,9 @@ final class SettingsStore {
             return comparison == .orderedSame ? $0.id.uuidString < $1.id.uuidString : comparison == .orderedAscending
         }
         applyingCloudFeeds = true
-        customFeeds = merged
+        allCustomFeeds = merged
         applyingCloudFeeds = false
+        assignLegacyCustomFeeds()
         publishCustomFeeds()
     }
 
@@ -348,7 +380,7 @@ final class SettingsStore {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        customFeeds = defaults.data(forKey: "feeds.custom").flatMap { try? JSONDecoder().decode([CustomFeed].self, from: $0) } ?? []
+        allCustomFeeds = defaults.data(forKey: "feeds.custom").flatMap { try? JSONDecoder().decode([CustomFeed].self, from: $0) } ?? []
         feedVersions = defaults.data(forKey: "feeds.syncVersions").flatMap { try? JSONDecoder().decode([String: CustomFeedSyncRecord].self, from: $0) } ?? [:]
         communityFeedLayouts = defaults.dictionary(forKey: "appearance.communityFeedLayouts") as? [String: String] ?? [:]
 
@@ -480,7 +512,7 @@ final class SettingsStore {
         }
 
         applyingCloudFeeds = true
-        customFeeds = []
+        allCustomFeeds = []
         applyingCloudFeeds = false
         feedVersions = [:]
         customFeedSyncStatus = "Syncs with iCloud when available."
@@ -570,6 +602,8 @@ struct CustomFeed: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var communities: [String]
+    // Empty means created while signed out; nil means an older feed with no owner recorded.
+    var ownerUsername: String? = ""
 
     var descriptor: FeedDescriptorModel {
         FeedDescriptorModel(kind: .custom, name: name, customFeedID: id, communities: communities)

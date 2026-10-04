@@ -39,6 +39,10 @@ struct UnavailableRedditClient: RedditClient {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }
 
+    func blockedUsers(after: String?, account: AccountID) async throws -> Listing<UserReference> {
+        throw RedditClientError.authenticationRequired
+    }
+
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile {
         throw DisplayableError(title: "Reddit is not connected", message: "The Reddit transport has not been configured yet.")
     }

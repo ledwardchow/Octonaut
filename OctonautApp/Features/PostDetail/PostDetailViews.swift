@@ -12,6 +12,7 @@ struct PostDetailView: View {
     @State private var isMediaViewerPresented = false
     @State private var selectedMediaPage = 0
     @State private var showingLogin = false
+    @State private var reportTarget: RedditReportTarget?
     @State private var crosspostPost: PostCardModel?
 
     private var currentPost: PostCardModel {
@@ -159,6 +160,7 @@ struct PostDetailView: View {
                         moreCommentsRow(comment)
                     } else {
                         OctonautCommentRow(
+                            onReport: { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(commentID: comment.id, post: currentPost) } },
                             comment: comment,
                             postAuthor: currentPost.author,
                             onCollapse: {
@@ -193,6 +195,7 @@ struct PostDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: currentPost) } }
                     Button {
                         store.markSeen(postID: currentPost.id)
                     } label: {
@@ -223,6 +226,7 @@ struct PostDetailView: View {
                 }
             }
         }
+        .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .sheet(item: $composerTarget) { target in
             ComposerView(kind: .comment, store: store, targetID: target.id) {
                 Task {
@@ -230,9 +234,7 @@ struct PostDetailView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingLogin) {
-            RedditLoginView(accounts: dependencies.accounts)
-        }
+        .loginRequiredModal(isPresented: $showingLogin)
         .sheet(item: $crosspostPost) { post in
             CrosspostComposerView(post: post)
         }

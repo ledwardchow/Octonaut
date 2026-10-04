@@ -16,6 +16,7 @@ Just want to try it on iPhone? [TestFlight](https://testflight.apple.com/join/kR
 - Switch between multiple Reddit accounts.
 - Create custom feeds from subscribed or other communities, and sync them across your Apple devices with iCloud.
 - Read threaded comments and view images, galleries, GIFs, and video.
+- Report posts and comments using community rules, or continue on Reddit for other reporting reasons.
 - Search posts, communities, and users.
 - Use local filters, drafts, seen-post history, and usage statistics.
 - Generate summaries on device with an Apple Intelligence-supported device or with an optional OpenAI-compatible LLM provider.
@@ -66,6 +67,12 @@ For the Mac app, you can also build and launch from Terminal:
 ```bash
 ./script/build_and_run.sh
 ```
+
+### Reporting content
+
+Choose **Report** from a post or comment menu. On Mac, posts also have a Report button above the detail view. Sign in to submit a report using one of the community’s rules. **Open post on Reddit** or **Open comment on Reddit** opens the content for other reporting reasons or if submission fails. Use its ⋯ menu and choose **Report**. The browser has its own Reddit login, separate from Octonaut. **Copy link** lets you use another browser.
+
+Reporting uses the existing Reddit website session. It does not require developer registration. Automated reporting tests use synthetic responses and never send reports to Reddit. Live submission still needs to be checked in a private test community.
 
 ### 4. Run the Tests
 

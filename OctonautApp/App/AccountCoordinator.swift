@@ -6,6 +6,10 @@ import Observation
 final class AccountCoordinator {
     private let persistence: any PersistenceStore
     private let secrets: any SecretStore
+    private let selectionDefaults: UserDefaults?
+    private var hasResolvedSelection = false
+    @ObservationIgnored var accountSelectionDidChange: ((Account?) -> Void)?
+    private static let selectionKey = "accounts.selectedAccount"
 
     private(set) var accounts: [Account] = []
     private(set) var selectedAccountID: AccountID?
@@ -13,9 +17,28 @@ final class AccountCoordinator {
     private(set) var isLoading = false
     private(set) var lastError: DisplayableError?
 
-    init(persistence: any PersistenceStore, secrets: any SecretStore) {
+    init(persistence: any PersistenceStore, secrets: any SecretStore, selectionDefaults: UserDefaults? = nil) {
         self.persistence = persistence
         self.secrets = secrets
+        self.selectionDefaults = selectionDefaults
+    }
+
+    private func saveSelection() {
+        accountSelectionDidChange?(selectedAccount)
+        // Only the local account ID is stored here. Session secrets stay in Keychain.
+        selectionDefaults?.set(selectedAccountID?.description ?? "anonymous", forKey: Self.selectionKey)
+    }
+
+    var showingLoginRequired = false
+
+    /// Call before opening a screen or sending an action that needs a session.
+    @discardableResult
+    func requireLogin() -> Bool {
+        guard selectedAccount?.health == .healthy else {
+            showingLoginRequired = true
+            return false
+        }
+        return true
     }
 
     var selectedAccount: Account? {
@@ -28,11 +51,24 @@ final class AccountCoordinator {
         defer { isLoading = false }
         do {
             accounts = try await persistence.loadAccounts()
-            if let selectedAccountID, accounts.contains(where: { $0.id == selectedAccountID }) {
-                self.selectedAccountID = selectedAccountID
-            } else {
-                self.selectedAccountID = accounts.first?.id
+            if !hasResolvedSelection {
+                let savedSelection = selectionDefaults?.string(forKey: Self.selectionKey)
+                let restoredID: AccountID?
+                if let savedSelection {
+                    restoredID = accounts.first { $0.id.description == savedSelection }?.id
+                } else {
+                    restoredID = accounts.first?.id
+                }
+                hasResolvedSelection = true
+                if selectedAccountID != restoredID {
+                    selectionGeneration &+= 1
+                    selectedAccountID = restoredID
+                }
+                saveSelection()
+            } else if let selectedAccountID, !accounts.contains(where: { $0.id == selectedAccountID }) {
+                clearSelection()
             }
+            accountSelectionDidChange?(selectedAccount)
         } catch {
             lastError = DisplayableError(error: error)
         }
@@ -61,13 +97,12 @@ final class AccountCoordinator {
     }
 
     func select(_ id: AccountID?) async throws {
+        hasResolvedSelection = true
         selectionGeneration &+= 1
-        selectedAccountID = id
-        guard let id else { return }
-        guard var account = accounts.first(where: { $0.id == id }) else {
-            selectedAccountID = nil
-            return
-        }
+        selectedAccountID = id.flatMap { candidate in accounts.first { $0.id == candidate }?.id }
+        saveSelection()
+        guard let id = selectedAccountID,
+              var account = accounts.first(where: { $0.id == id }) else { return }
         account.lastUsedAt = .now
         if account.health == .needsLogin {
             // Selecting an expired account is still allowed so the UI can offer reauthentication.
@@ -95,6 +130,7 @@ final class AccountCoordinator {
         do {
             try await persistence.saveAccount(account)
             accounts = try await persistence.loadAccounts()
+            accountSelectionDidChange?(selectedAccount)
         } catch {
             lastError = DisplayableError(error: error)
         }
@@ -107,6 +143,7 @@ final class AccountCoordinator {
         do {
             try await persistence.saveAccount(account)
             accounts = try await persistence.loadAccounts()
+            accountSelectionDidChange?(selectedAccount)
         } catch {
             lastError = DisplayableError(error: error)
         }
@@ -120,14 +157,23 @@ final class AccountCoordinator {
         token.generation == selectionGeneration && token.accountID == selectedAccountID
     }
 
-    func logOut() {
+    func logOut() async throws {
+        let accountID = selectedAccountID
+        clearSelection()
+        if let accountID {
+            try await remove(accountID)
+        }
+    }
+
+    private func clearSelection() {
+        hasResolvedSelection = true
         selectionGeneration &+= 1
         selectedAccountID = nil
+        saveSelection()
     }
 
     func removeAll() async throws {
-        selectionGeneration &+= 1
-        selectedAccountID = nil
+        clearSelection()
         try await secrets.removeAll()
         for account in accounts {
             try await persistence.deleteAccount(account.id)

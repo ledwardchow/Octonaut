@@ -3,6 +3,76 @@ import XCTest
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testCustomFeedsStayInCloudWhenUserLogsOutAndReturnForSameUsername() async throws {
+        let dependencies = AppDependencies.preview()
+        let settings = dependencies.settings
+        // The preview suite can contain feeds from other preview runs.
+        settings.removeAllData()
+        let cloud = MemoryFeedCloud()
+        settings.startCustomFeedSync(using: cloud)
+        let firstAccount = Account(username: "Reader", health: .healthy)
+        try await dependencies.persistence.saveAccount(firstAccount)
+        await dependencies.accounts.load()
+        settings.customFeeds = [CustomFeed(name: "Tech", communities: ["swift"])]
+        let owned = try XCTUnwrap(settings.customFeeds.first)
+        XCTAssertEqual(owned.ownerUsername, "reader")
+        let cloudBeforeLogout = cloud.values
+
+        try await dependencies.accounts.logOut()
+        XCTAssertTrue(settings.customFeeds.isEmpty)
+        XCTAssertEqual(cloud.values, cloudBeforeLogout)
+
+        // Logging in creates a new local ID after logout removed the old account.
+        let newAccount = Account(username: "READER", health: .healthy)
+        try await dependencies.persistence.saveAccount(newAccount)
+        await dependencies.accounts.load()
+        try await dependencies.accounts.select(newAccount.id)
+        XCTAssertEqual(settings.customFeeds, [owned])
+    }
+
+    func testCustomFeedSyncAndDeletionAreScopedToUsername() throws {
+        let settings = SettingsStore(defaults: UserDefaults(suiteName: "OwnedFeed.A.\(UUID())")!)
+        let cloud = MemoryFeedCloud()
+        settings.startCustomFeedSync(using: cloud)
+        settings.setCustomFeedUser("alice")
+        settings.customFeeds = [CustomFeed(name: "Alice's feed", communities: ["swift"])]
+        let aliceFeed = try XCTUnwrap(settings.customFeeds.first)
+        settings.setCustomFeedUser("bob")
+        XCTAssertTrue(settings.customFeeds.isEmpty)
+        settings.customFeeds = [CustomFeed(name: "Bob's feed", communities: ["games"])]
+        settings.customFeeds = []
+        settings.setCustomFeedUser("alice")
+        XCTAssertEqual(settings.customFeeds, [aliceFeed])
+
+        let otherDevice = SettingsStore(defaults: UserDefaults(suiteName: "OwnedFeed.B.\(UUID())")!)
+        otherDevice.startCustomFeedSync(using: cloud)
+        XCTAssertTrue(otherDevice.customFeeds.isEmpty)
+        otherDevice.setCustomFeedUser("ALICE")
+        XCTAssertEqual(otherDevice.customFeeds, [aliceFeed])
+        otherDevice.setCustomFeedUser("bob")
+        XCTAssertTrue(otherDevice.customFeeds.isEmpty)
+    }
+
+    func testLegacyFeedsAreAssignedOnceAndAnonymousFeedsStaySeparate() throws {
+        let defaults = UserDefaults(suiteName: "OwnedFeed.Legacy.\(UUID())")!
+        let legacy = CustomFeed(name: "Old feed", communities: ["swift"], ownerUsername: nil)
+        defaults.set(try JSONEncoder().encode([legacy]), forKey: "feeds.custom")
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertTrue(settings.customFeeds.isEmpty)
+        settings.setCustomFeedUser("alice")
+        XCTAssertEqual(settings.customFeeds.first?.ownerUsername, "alice")
+        settings.setCustomFeedUser("bob")
+        XCTAssertTrue(settings.customFeeds.isEmpty)
+        settings.setCustomFeedUser(nil)
+        settings.customFeeds = [CustomFeed(name: "Anonymous feed", communities: ["games"])]
+        settings.setCustomFeedUser("alice")
+        XCTAssertEqual(settings.customFeeds.map(\.name), ["Old feed"])
+        let restarted = SettingsStore(defaults: defaults)
+        XCTAssertEqual(restarted.customFeeds.map(\.name), ["Anonymous feed"])
+        restarted.setCustomFeedUser("alice")
+        XCTAssertEqual(restarted.customFeeds.map(\.name), ["Old feed"])
+    }
+
     func testFeedVideoAudioDefaultsOffAndPersists() {
         let defaults = UserDefaults(suiteName: "FeedVideoAudio.\(UUID())")!
         let settings = SettingsStore(defaults: defaults)
@@ -303,9 +373,9 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(reloaded.showUsernameInAccountTab)
     }
 
-    private func post(isNSFW: Bool, isSpoiler: Bool) -> PostCardModel {
+    private func post(id: String = "t3_blur", isNSFW: Bool, isSpoiler: Bool) -> PostCardModel {
         PostCardModel(
-            id: "t3_blur", community: "pics", author: "someone", title: "Title", body: "",
+            id: id, community: "pics", author: "someone", title: "Title", body: "",
             score: 1, comments: 0, age: "1h", vote: 0, isSaved: false, isSeen: false,
             isNSFW: isNSFW, isSpoiler: isSpoiler, isSticky: false, isVideo: false,
             hasMedia: true, mediaTitle: "",
@@ -443,6 +513,185 @@ final class SettingsTests: XCTestCase {
     }
 
     // MARK: - Profile sections
+
+    func testFailedUnsaveRestoresOnlyItsPostAfterAnotherUnsaveSucceeds() throws {
+        let first = post(id: "first", isNSFW: false, isSpoiler: false)
+        let second = post(id: "second", isNSFW: false, isSpoiler: false)
+        let third = post(id: "third", isNSFW: false, isSpoiler: false)
+        var posts = [first, second, third]
+
+        let failed = try XCTUnwrap(UserSectionPostRemoval(postID: first.id, posts: &posts))
+        _ = try XCTUnwrap(UserSectionPostRemoval(postID: second.id, posts: &posts))
+        failed.restore(in: &posts)
+
+        XCTAssertEqual(posts.map(\.id), ["first", "third"])
+        failed.restore(in: &posts)
+        XCTAssertEqual(posts.map(\.id), ["first", "third"])
+    }
+
+    func testProfileActionsUseOnlyTheSelectedWebsiteSession() async throws {
+        UserSectionRouteProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UserSectionRouteProtocol.self]
+        let selected = AccountID()
+        let other = AccountID()
+        let vault = InMemoryCredentialVault(values: [
+            selected: RedditCredential(cookieValue: "synthetic-selected", modhash: "synthetic-modhash"),
+            other: RedditCredential(cookieValue: "synthetic-other")
+        ])
+        let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
+        for action in [RedditAction.follow(username: "reader", following: true), .block(username: "reader", blocked: true)] {
+            _ = try await client.perform(action, account: selected)
+        }
+        XCTAssertEqual(UserSectionRouteProtocol.requests.count, 2)
+        for request in UserSectionRouteProtocol.requests {
+            XCTAssertEqual(request.url?.scheme, "https")
+            XCTAssertEqual(request.url?.host, "www.reddit.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-selected")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Modhash"), "synthetic-modhash")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        }
+        do {
+            _ = try await client.perform(.follow(username: "reader", following: true), account: AccountID())
+            XCTFail("Missing website session should require login")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+        }
+        XCTAssertEqual(UserSectionRouteProtocol.requests.count, 2)
+    }
+
+    func testUnblockUsesTheSignedInUsersIDAndWebsiteSession() async throws {
+        UserSectionRouteProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UserSectionRouteProtocol.self]
+        let account = AccountID()
+        let vault = InMemoryCredentialVault(values: [
+            account: RedditCredential(cookieValue: "synthetic-selected", modhash: "synthetic-modhash")
+        ])
+        let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
+        _ = try await client.perform(.block(username: "reader", blocked: false), account: account)
+        let requests = UserSectionRouteProtocol.requests
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.first?.url?.path, "/user/me/about.json")
+        let mutation = try XCTUnwrap(requests.last)
+        XCTAssertEqual(mutation.url?.path, "/api/unfriend")
+        XCTAssertEqual(mutation.httpMethod, "POST")
+        let body = try XCTUnwrap(mutation.httpBody ?? mutation.httpBodyStream.flatMap { stream in
+            stream.open()
+            defer { stream.close() }
+            var bytes = [UInt8](repeating: 0, count: 4096)
+            let count = stream.read(&bytes, maxLength: bytes.count)
+            return count > 0 ? Data(bytes.prefix(count)) : nil
+        })
+        var components = URLComponents()
+        components.percentEncodedQuery = String(decoding: body, as: UTF8.self)
+        let fields = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(fields["name"], "reader")
+        XCTAssertEqual(fields["type"], "enemy")
+        XCTAssertEqual(fields["container"], "t2_abc123")
+        for request in requests {
+            XCTAssertEqual(request.url?.scheme, "https")
+            XCTAssertEqual(request.url?.host, "www.reddit.com")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-selected")
+            XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        }
+        XCTAssertEqual(mutation.value(forHTTPHeaderField: "X-Modhash"), "synthetic-modhash")
+    }
+
+    func testUnblockDoesNotSendAMutationWithoutTheSignedInUsersID() async throws {
+        UserSectionRouteProtocol.reset()
+        UserSectionRouteProtocol.identityData = Data(#"{"data":{"name":"selected"}}"#.utf8)
+        defer { UserSectionRouteProtocol.reset() }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UserSectionRouteProtocol.self]
+        let account = AccountID()
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-selected")])
+        let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
+        do {
+            _ = try await client.perform(.block(username: "reader", blocked: false), account: account)
+            XCTFail("Unblock must require a valid signed-in user ID")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+        }
+        XCTAssertEqual(UserSectionRouteProtocol.requests.count, 1)
+        XCTAssertEqual(UserSectionRouteProtocol.requests.first?.httpMethod, "GET")
+    }
+
+    func testBlockedUsersListingUsesTheSelectedWebsiteSessionAndPaging() async throws {
+        UserSectionRouteProtocol.reset()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UserSectionRouteProtocol.self]
+        let account = AccountID()
+        let client = URLSessionRedditClient(
+            credentialVault: InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-selected")]),
+            sessionConfiguration: configuration
+        )
+        let page = try await client.blockedUsers(after: "t2_previous", account: account)
+        XCTAssertEqual(page.items.map(\.username), ["blocked_reader"])
+        let request = try XCTUnwrap(UserSectionRouteProtocol.requests.first)
+        XCTAssertEqual(request.url?.scheme, "https")
+        XCTAssertEqual(request.url?.host, "www.reddit.com")
+        XCTAssertEqual(request.url?.path, "/prefs/blocked.json")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-selected")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertTrue(query.contains(URLQueryItem(name: "after", value: "t2_previous")))
+        XCTAssertTrue(query.contains(URLQueryItem(name: "limit", value: "100")))
+        do {
+            _ = try await client.blockedUsers(after: nil, account: AccountID())
+            XCTFail("Missing session must require login")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+        }
+        XCTAssertEqual(UserSectionRouteProtocol.requests.count, 1)
+    }
+
+    func testBlockedUsersCodecHandlesWebsiteUserListsAndWrappedUsers() throws {
+        let data = Data(#"{"kind":"UserList","data":{"children":[{"name":"reader","id":"t2_1"},{"kind":"t2","data":{"name":"other","id":"2"}},{"name":"READER","id":"t2_1"}],"after":"t2_next"}}"#.utf8)
+        let page = try RedditJSONCodec.decodeBlockedUsers(data)
+        XCTAssertEqual(page.items.map(\.username), ["reader", "other"])
+        XCTAssertEqual(page.after, "t2_next")
+        XCTAssertThrowsError(try RedditJSONCodec.decodeBlockedUsers(Data(#"{"data":{}}"#.utf8)))
+        XCTAssertThrowsError(try RedditJSONCodec.decodeBlockedUsers(Data(#"{"data":{"children":[{"name":"../unsafe"}]}}"#.utf8)))
+    }
+
+    func testBlockedUsersSettingsLoadsAddsAndRemovesWithoutDuplicates() async {
+        let client = FixtureRedditClient(blockedUsers: ["zebra", "reader", "READER"])
+        let model = BlockedUsersSettingsModel(reddit: client)
+        await model.load(accountID: AccountID(), context: "account")
+        XCTAssertEqual(model.users.map(\.username), ["reader", "zebra"])
+        let added = await model.setBlocked(true, username: " u/new_reader ")
+        XCTAssertTrue(added)
+        XCTAssertEqual(model.users.map(\.username), ["new_reader", "reader", "zebra"])
+        let removed = await model.setBlocked(false, username: "READER")
+        XCTAssertTrue(removed)
+        XCTAssertEqual(model.users.map(\.username), ["new_reader", "zebra"])
+        XCTAssertNil(BlockedUsersSettingsModel.normalizedUsername("invalid/name"))
+        XCTAssertNil(BlockedUsersSettingsModel.normalizedUsername(""))
+    }
+
+    func testFailedBlockListChangeKeepsTheUserVisible() async {
+        let client = FixtureRedditClient(blockedUsers: ["reader"], actionResult: ActionResult(succeeded: false, message: "Denied"))
+        let model = BlockedUsersSettingsModel(reddit: client)
+        await model.load(accountID: AccountID(), context: "account")
+        let removed = await model.setBlocked(false, username: "reader")
+        XCTAssertFalse(removed)
+        XCTAssertEqual(model.users.map(\.username), ["reader"])
+        XCTAssertEqual(model.errorMessage, "Denied")
+        XCTAssertFalse(model.isUpdating)
+    }
+
+    func testChangingAccountDiscardsThePreviousBlockedUsersResponse() async {
+        let client = FixtureRedditClient(blockedUsers: ["private_reader"], listingDelay: .milliseconds(100))
+        let model = BlockedUsersSettingsModel(reddit: client)
+        let pending = Task { await model.load(accountID: AccountID(), context: "old-account") }
+        while !model.isLoading { await Task.yield() }
+        await model.load(accountID: nil, context: "signed-out")
+        await pending.value
+        XCTAssertTrue(model.users.isEmpty)
+        XCTAssertTrue(model.needsLogin)
+        XCTAssertFalse(model.isLoading)
+    }
 
     func testUserSectionListingUsesTheSectionRouteWithoutASortPathSegment() async throws {
         UserSectionRouteProtocol.reset()
@@ -630,6 +879,19 @@ private final class UserSectionRouteProtocol: URLProtocol, @unchecked Sendable {
     private final class RequestStorage: @unchecked Sendable {
         let lock = NSLock()
         var values: [URLRequest] = []
+        var identityData = Data(#"{"data":{"id":"abc123","name":"selected"}}"#.utf8)
+    }
+    static var identityData: Data {
+        get {
+            storage.lock.lock()
+            defer { storage.lock.unlock() }
+            return storage.identityData
+        }
+        set {
+            storage.lock.lock()
+            defer { storage.lock.unlock() }
+            storage.identityData = newValue
+        }
     }
     static var requests: [URLRequest] {
         storage.lock.lock()
@@ -640,6 +902,7 @@ private final class UserSectionRouteProtocol: URLProtocol, @unchecked Sendable {
         storage.lock.lock()
         defer { storage.lock.unlock() }
         storage.values = []
+        storage.identityData = Data(#"{"data":{"id":"abc123","name":"selected"}}"#.utf8)
     }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -648,12 +911,20 @@ private final class UserSectionRouteProtocol: URLProtocol, @unchecked Sendable {
         Self.storage.values.append(request)
         Self.storage.lock.unlock()
         let url = request.url!
-        let data = Data(#"""
+        let listingData = Data(#"""
         {"data":{"after":"t3_next","before":null,"children":[
           {"kind":"t3","data":{"id":"saved","name":"t3_saved","title":"A saved post","subreddit":"swift","permalink":"/r/swift/comments/saved/title/","author":"reader"}},
           {"kind":"t1","data":{"id":"savedcomment","name":"t1_savedcomment","parent_id":"t3_saved","body":"A saved comment","subreddit":"swift","author":"reader","link_title":"A saved post","link_permalink":"https://www.reddit.com/r/swift/comments/saved/title/"}}
         ]}}
         """#.utf8)
+        let data: Data
+        if url.path == "/user/me/about.json" {
+            data = Self.identityData
+        } else if url.path == "/prefs/blocked.json" {
+            data = Data(#"{"kind":"UserList","data":{"children":[{"name":"blocked_reader","id":"t2_blocked"}],"after":null}}"#.utf8)
+        } else {
+            data = listingData
+        }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

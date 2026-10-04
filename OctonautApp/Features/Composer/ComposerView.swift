@@ -28,6 +28,7 @@ struct ComposerView: View {
         store: OctonautFeatureStore,
         community: String = "",
         targetID: String? = nil,
+        recipient: String = "",
         onSubmitted: (() -> Void)? = nil
     ) {
         self.kind = kind
@@ -35,6 +36,7 @@ struct ComposerView: View {
         self.targetID = targetID
         self.onSubmitted = onSubmitted
         _community = State(initialValue: community)
+        _recipient = State(initialValue: recipient)
     }
 
     private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }

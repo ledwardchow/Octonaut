@@ -4,6 +4,7 @@ import WebKit
 @MainActor
 struct MacRedditLoginView: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(LegalDocuments.acceptedVersionKey) private var acceptedConsentVersion = ""
     @State private var model: RedditLoginModel
 
     init(accounts: AccountCoordinator) {
@@ -13,7 +14,7 @@ struct MacRedditLoginView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Sign in to Reddit")
+                Text(LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit")
                     .font(.headline)
                 Spacer()
                 Button("Cancel") {
@@ -25,7 +26,9 @@ struct MacRedditLoginView: View {
 
             Divider()
 
-            if case .succeeded(let username) = model.state {
+            if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
+                LoginConsentView { acceptedConsentVersion = LegalDocuments.consentVersion }
+            } else if case .succeeded(let username) = model.state {
                 ContentUnavailableView(
                     "Signed in as u/\(username)",
                     systemImage: "checkmark.circle.fill",

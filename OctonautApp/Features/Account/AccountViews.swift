@@ -6,6 +6,7 @@ struct AccountRootView: View {
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingAddAccount = false
+    @State private var logoutError: String?
 
     private var navigationTitle: String {
         guard dependencies.settings.showUsernameInAccountTab,
@@ -18,29 +19,47 @@ struct AccountRootView: View {
             if let account = dependencies.accounts.selectedAccount, account.health == .needsLogin {
                 NeedsLoginView(username: account.username) { showingAddAccount = true }
             } else if let account = dependencies.accounts.selectedAccount {
-                UserProfileView(username: account.username, store: store, router: router)
+                UserProfileView(
+                    username: account.username, store: store, router: router,
+                    onAddAccount: { showingAddAccount = true }, onLogOut: logOut
+                )
             } else {
                 AccountManagerView(store: store) { showingAddAccount = true }
             }
         }
         .navigationTitle(navigationTitle)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    if let account = dependencies.accounts.selectedAccount, account.health != .needsLogin {
-                        Button { router.push(.composer(.post)) } label: { Label("New Post", systemImage: "square.and.pencil") }
-                        Button {
-                            dependencies.accounts.logOut()
-                        } label: { Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right") }
+            if dependencies.accounts.selectedAccount?.health != .healthy {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showingAddAccount = true } label: {
+                        Image(systemName: "person.badge.plus")
                     }
-                    Button { showingAddAccount = true } label: { Label("Add Account", systemImage: "person.badge.plus") }
-                } label: { Image(systemName: "plus") }
+                    .accessibilityLabel("Add Account")
+                }
             }
         }
         .sheet(isPresented: $showingAddAccount) {
             RedditLoginView(accounts: dependencies.accounts)
         }
+        .alert("Could not remove saved login", isPresented: Binding(
+            get: { logoutError != nil },
+            set: { if !$0 { logoutError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(logoutError ?? "")
+        }
         .task { await dependencies.accounts.load() }
+    }
+
+    private func logOut() {
+        Task {
+            do {
+                try await dependencies.accounts.logOut()
+            } catch {
+                logoutError = error.localizedDescription
+            }
+        }
     }
 
 }
@@ -71,22 +90,15 @@ struct AccountManagerView: View {
 
     var body: some View {
         List {
-            Section {
-                Button {
-                    dependencies.accounts.logOut()
-                } label: {
-                    Label("Continue without signing in", systemImage: "person.crop.circle.badge.xmark")
-                }
-            } header: {
-                OctonautSectionHeader("Current session")
-            }
+            Text("You are not signed in.")
+                .foregroundStyle(.secondary)
             Section {
                 ForEach(dependencies.accounts.accounts) { account in
                     HStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.fill").font(.title2).foregroundStyle(.orange)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(account.username).font(.body.weight(.semibold))
-                            Text(account.health == .needsLogin ? "Needs sign in" : "Ready").font(.caption).foregroundStyle(account.health == .needsLogin ? .red : .secondary)
+                            Text(account.health == .needsLogin ? "Needs sign in" : (dependencies.accounts.selectedAccountID == account.id ? "Selected" : "Saved account")).font(.caption).foregroundStyle(account.health == .needsLogin ? .red : .secondary)
                         }
                         Spacer()
                             if dependencies.accounts.selectedAccountID == account.id { Image(systemName: "checkmark").foregroundStyle(.tint) }
@@ -126,6 +138,11 @@ struct AccountManagerView: View {
     }
 }
 
+private struct ProfileMessageRecipient: Identifiable, Sendable {
+    let username: String
+    var id: String { username }
+}
+
 @MainActor
 struct UserProfileView: View {
     private enum ProfileSection: String, CaseIterable, Identifiable {
@@ -138,9 +155,15 @@ struct UserProfileView: View {
     let username: String
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var onAddAccount: (() -> Void)? = nil
+    var onLogOut: (() -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.openURL) private var openURL
     @State private var showingLogin = false
+    @State private var messageRecipient: ProfileMessageRecipient?
+    @State private var confirmingBlock = false
+    @State private var actionInProgress = false
+    @State private var profileActionError: String?
     @State private var selectedSection: ProfileSection = .posts
 
     /// Reddit serves Saved, Upvoted, Downvoted, and Hidden only to the account
@@ -150,6 +173,12 @@ struct UserProfileView: View {
             return false
         }
         return account.username.caseInsensitiveCompare(username) == .orderedSame
+    }
+
+    private var profile: UserProfile? {
+        guard let profile = store.userProfile,
+              profile.reference.username.caseInsensitiveCompare(username) == .orderedSame else { return nil }
+        return profile
     }
 
     private var privateSections: [UserSection] {
@@ -216,11 +245,37 @@ struct UserProfileView: View {
         .contentMargins(.top, 8, for: .scrollContent)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(onAddAccount == nil ? .automatic : .hidden, for: .navigationBar)
         .refreshable {
             await store.loadUserProfile(username: username, forceRefresh: true)
         }
-        .sheet(isPresented: $showingLogin) {
-            RedditLoginView(accounts: dependencies.accounts)
+        .loginRequiredModal(isPresented: $showingLogin)
+        .sheet(item: $messageRecipient) { recipient in
+            NavigationStack {
+                ComposerView(kind: .message, store: store, recipient: recipient.username)
+            }
+        }
+        .confirmationDialog("\(profile?.isBlocked == true ? "Unblock" : "Block") u/\(username)?", isPresented: $confirmingBlock, titleVisibility: .visible) {
+            Button(profile?.isBlocked == true ? "Unblock user" : "Block user", role: profile?.isBlocked == true ? nil : .destructive) {
+                performProfileAction(.block(username: username, blocked: !(profile?.isBlocked ?? false)))
+            }
+        } message: {
+            Text(profile?.isBlocked == true
+                 ? "This unblocks the user on your selected Reddit account."
+                 : "This blocks the user on your selected Reddit account.")
+        }
+        .alert("Profile action failed", isPresented: Binding(
+            get: { profileActionError != nil },
+            set: { if !$0 { profileActionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { profileActionError = nil }
+        } message: {
+            Text(profileActionError ?? "")
+        }
+        .onChange(of: store.accountContextKey) { _, _ in
+            messageRecipient = nil
+            confirmingBlock = false
+            profileActionError = nil
         }
         .task(id: "\(username):\(store.accountContextKey)") {
             await store.loadUserProfile(username: username)
@@ -230,7 +285,7 @@ struct UserProfileView: View {
     private var profileHeader: some View {
         Section {
             VStack(spacing: 10) {
-                if let avatarURL = store.userProfile?.avatarURL {
+                if let avatarURL = profile?.avatarURL {
                     OctonautAsyncImage(url: avatarURL)
                         .frame(width: 78, height: 78)
                         .clipShape(Circle())
@@ -240,9 +295,9 @@ struct UserProfileView: View {
                         .foregroundStyle(.orange)
                         .accessibilityHidden(true)
                 }
-                Text("u/\(store.userProfile?.reference.username ?? username)")
+                Text("u/\(profile?.reference.username ?? username)")
                     .font(.title2.weight(.bold))
-                if let profile = store.userProfile {
+                if let profile {
                     HStack(spacing: 18) {
                         profileMetric(title: "Karma", value: profile.karma?.formatted() ?? "—")
                         if let createdAt = profile.createdAt {
@@ -263,7 +318,7 @@ struct UserProfileView: View {
                 }
                 HStack {
                     Button {
-                        if let url = URL(string: "https://www.reddit.com/user/\(username)") {
+                        if let url = OctonautUserDestination.profileURL(for: username) {
                             openURL(url)
                         }
                     } label: {
@@ -272,7 +327,7 @@ struct UserProfileView: View {
                     .buttonStyle(.bordered)
                     Button {
                         if dependencies.accounts.selectedAccount?.health == .healthy {
-                            router.push(.composer(.message))
+                            messageRecipient = ProfileMessageRecipient(username: username)
                         } else {
                             showingLogin = true
                         }
@@ -281,10 +336,54 @@ struct UserProfileView: View {
                     }
                     .buttonStyle(.bordered)
                 }
-                .padding(.top, 3)
+                .disabled(actionInProgress)
+                if !isOwnProfile {
+                    HStack {
+                        Button {
+                            performProfileAction(.follow(username: username, following: !(profile?.isFollowing ?? false)))
+                        } label: {
+                            Label(profile?.isFollowing == true ? "Unfollow" : "Follow", systemImage: "person.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(actionInProgress || profile == nil || profile?.isBlocked == true)
+                        Button(role: profile?.isBlocked == true ? nil : .destructive) {
+                            if dependencies.accounts.selectedAccount?.health == .healthy {
+                                confirmingBlock = true
+                            } else {
+                                showingLogin = true
+                            }
+                        } label: {
+                            Label(profile?.isBlocked == true ? "Unblock" : "Block", systemImage: profile?.isBlocked == true ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.xmark")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(actionInProgress || profile == nil)
+                    }
+                    if actionInProgress { ProgressView("Updating profile…") }
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 13)
+            .overlay(alignment: .topTrailing) {
+                if let onAddAccount {
+                    Menu {
+                        Button { router.push(.composer(.post)) } label: {
+                            Label("New Post", systemImage: "square.and.pencil")
+                        }
+                        Button { onLogOut?() } label: {
+                            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        }
+                        Button(action: onAddAccount) {
+                            Label("Add Account", systemImage: "person.badge.plus")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel("Account actions")
+                }
+            }
         }
     }
 
@@ -321,6 +420,30 @@ struct UserProfileView: View {
                     } else {
                         UserCommentProfileRow(comment: comment)
                     }
+                }
+            }
+        }
+    }
+
+    private func performProfileAction(_ action: RedditAction) {
+        guard let account = dependencies.accounts.selectedAccount, account.health == .healthy else {
+            showingLogin = true
+            return
+        }
+        guard !actionInProgress else { return }
+        let token = dependencies.accounts.token(for: account.id)
+        actionInProgress = true
+        Task {
+            defer { actionInProgress = false }
+            do {
+                try await store.performProfileAction(action, username: username, accountID: account.id)
+            } catch {
+                guard dependencies.accounts.isCurrent(token) else { return }
+                if error as? RedditClientError == .authenticationRequired {
+                    await dependencies.accounts.markNeedsLogin(account.id)
+                    showingLogin = true
+                } else {
+                    profileActionError = error.localizedDescription
                 }
             }
         }
@@ -553,21 +676,21 @@ struct UserSectionView: View {
     private func unsave(_ post: PostCardModel) {
         guard let accountID = dependencies.accounts.selectedAccountID else { return }
         let token = dependencies.accounts.token(for: accountID)
-        let removed = posts
-        posts.removeAll { $0.id == post.id }
+        let context = taskID
+        guard let removal = UserSectionPostRemoval(postID: post.id, posts: &posts) else { return }
         if posts.isEmpty { state = .empty }
         Task {
             do {
                 try await store.setSaved(false, postID: post.id, accountID: accountID)
-            } catch let error as RedditClientError where error == .authenticationRequired {
-                guard dependencies.accounts.isCurrent(token) else { return }
-                await dependencies.accounts.markNeedsLogin(accountID)
-                posts = removed
-                state = .loaded
             } catch {
-                posts = removed
+                guard dependencies.accounts.isCurrent(token), taskID == context else { return }
+                removal.restore(in: &posts)
                 state = .loaded
-                actionError = error.localizedDescription
+                if let clientError = error as? RedditClientError, clientError == .authenticationRequired {
+                    await dependencies.accounts.markNeedsLogin(accountID)
+                } else {
+                    actionError = error.localizedDescription
+                }
             }
         }
     }

@@ -64,7 +64,7 @@ struct ExternalURLView: View {
         ContentUnavailableView {
             Label("External link", systemImage: "safari")
         } description: {
-            Text(url.host ?? url.absoluteString)
+            Text(LinkHostName.display(for: url))
         } actions: {
             Button("Open in Browser") { openURL(url) }
                 .buttonStyle(.borderedProminent)

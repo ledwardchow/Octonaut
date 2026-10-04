@@ -45,6 +45,10 @@ final class AppDependencies {
         self.summaryAPIKeyStore = summaryAPIKeyStore
         self.links = links
         self.settings = settings
+        accounts.accountSelectionDidChange = { [weak settings] account in
+            settings?.setCustomFeedUser(account?.health == .healthy ? account?.username : nil)
+        }
+        settings.setCustomFeedUser(accounts.selectedAccount?.health == .healthy ? accounts.selectedAccount?.username : nil)
     }
 
     func resetAllData() async throws {
@@ -91,7 +95,7 @@ final class AppDependencies {
             persistence = InMemoryPersistenceStore()
         }
         let vault = KeychainCredentialVault()
-        let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault))
+        let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault), selectionDefaults: .standard)
         let reddit = URLSessionRedditClient(credentialVault: vault)
         let authenticated = LiveAuthenticatedRedditService(credentialVault: vault, reddit: reddit)
         let onDeviceIntelligence: any IntelligenceService
@@ -140,7 +144,7 @@ final class AppDependencies {
         let persistence = InMemoryPersistenceStore()
         let vault = InMemoryCredentialVault()
         let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault))
-        let reddit = FixtureRedditClient()
+        let reddit = FixtureRedditClient(blockedUsers: ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "blocked-users" ? ["example_spammer", "unwanted_replies"] : [])
         let summaryAPIKeyStore = InMemorySummaryAPIKeyStore()
         return AppDependencies(
             router: AppRouter(),

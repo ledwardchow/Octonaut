@@ -315,6 +315,7 @@ struct ListingRequest: Hashable, Codable, Sendable {
 }
 
 enum RedditAction: Hashable, Codable, Sendable {
+    case report(fullname: String, community: String, reason: String)
     case vote(fullname: String, direction: Int)
     case save(fullname: String, saved: Bool)
     case hide(fullname: String, hidden: Bool)

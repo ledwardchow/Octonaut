@@ -1004,7 +1004,7 @@ final class DomainTests: XCTestCase {
             permalink: URL(string: "https://www.reddit.com/r/swift/comments/abc")!,
             community: CommunityReference(name: "swift"),
             title: "Media",
-            media: .video(url: imageURL, audioURL: audioURL, thumbnailURL: secondURL, isGIF: false)
+            media: .video(url: imageURL, audioURL: audioURL, thumbnailURL: secondURL, isGIF: false, width: 1280, height: 720)
         )
 
         let mapped = PostCardModel(post: post)
@@ -1012,6 +1012,7 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(mapped.thumbnailURL, secondURL)
         XCTAssertEqual(mapped.audioURL, audioURL)
         XCTAssertEqual(mapped.mediaKind, "video")
+        XCTAssertEqual(try XCTUnwrap(mapped.mediaAspectRatio), 1280.0 / 720.0, accuracy: 0.0001)
     }
 
     func testPostCardDoesNotRepeatImageURLAsBodyText() throws {
@@ -1086,9 +1087,9 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(card.thumbnailURL?.absoluteString, "https://preview.redd.it/second-thumb.jpg")
     }
 
-    func testRedditHostedVideoBecomesNativeVideoWithAudioAndPreview() async throws {
+    func testRedditHostedVideoPrefersTheHLSPlaylistOverTheDASHFallback() async throws {
         let data = Data(
-            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"video1","name":"t3_video1","permalink":"/r/videos/comments/video1/example/","title":"Example video","subreddit":"videos","url":"https://v.redd.it/clip123","is_self":false,"is_video":true,"post_hint":"hosted:video","secure_media":{"reddit_video":{"fallback_url":"https://v.redd.it/clip123/DASH_720.mp4?source=fallback","hls_url":"https://v.redd.it/clip123/HLSPlaylist.m3u8","has_audio":true,"is_gif":false}},"preview":{"images":[{"source":{"url":"https://preview.redd.it/clip123.jpg?width=1080&amp;format=pjpg"}}]}}}]}}"#
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"video1","name":"t3_video1","permalink":"/r/videos/comments/video1/example/","title":"Example video","subreddit":"videos","url":"https://v.redd.it/clip123","is_self":false,"is_video":true,"post_hint":"hosted:video","secure_media":{"reddit_video":{"fallback_url":"https://v.redd.it/clip123/DASH_720.mp4?source=fallback","hls_url":"https://v.redd.it/clip123/HLSPlaylist.m3u8","has_audio":true,"is_gif":false,"width":1920,"height":1080}},"preview":{"images":[{"source":{"url":"https://preview.redd.it/clip123.jpg?width=1080&amp;format=pjpg"}}]}}}]}}"#
                 .utf8)
         let client = FixtureRedditClient(listingData: data)
 
@@ -1098,13 +1099,36 @@ final class DomainTests: XCTestCase {
         )
         let post = try XCTUnwrap(listing.items.first)
 
-        guard case .video(let videoURL, let audioURL, let thumbnailURL, let isGIF) = post.media else {
+        guard case .video(let videoURL, let audioURL, let thumbnailURL, let isGIF, let width, let height) = post.media else {
             return XCTFail("Expected native video media")
         }
-        XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/clip123/DASH_720.mp4?source=fallback")
-        XCTAssertEqual(audioURL?.absoluteString, "https://v.redd.it/clip123/DASH_AUDIO_128.mp4?source=fallback")
+        // The playlist carries audio in-stream, so nothing has to be guessed,
+        // fetched or composed before the video can play.
+        XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/clip123/HLSPlaylist.m3u8")
+        XCTAssertNil(audioURL)
         XCTAssertEqual(thumbnailURL?.absoluteString, "https://preview.redd.it/clip123.jpg?width=1080&format=pjpg")
         XCTAssertFalse(isGIF)
+        XCTAssertEqual(width, 1920)
+        XCTAssertEqual(height, 1080)
+    }
+
+    func testRedditHostedVideoWithoutAPlaylistStillComposesTheDASHAudio() async throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"video2","name":"t3_video2","permalink":"/r/videos/comments/video2/example/","title":"Example video","subreddit":"videos","url":"https://v.redd.it/clip789","is_self":false,"is_video":true,"post_hint":"hosted:video","secure_media":{"reddit_video":{"fallback_url":"https://v.redd.it/clip789/DASH_720.mp4?source=fallback","has_audio":true,"is_gif":false}}}}]}}"#
+                .utf8)
+        let client = FixtureRedditClient(listingData: data)
+
+        let listing = try await client.listing(
+            ListingRequest(feed: FeedDescriptor(destination: .home)),
+            account: nil
+        )
+        let post = try XCTUnwrap(listing.items.first)
+
+        guard case .video(let videoURL, let audioURL, _, _, _, _) = post.media else {
+            return XCTFail("Expected native video media")
+        }
+        XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/clip789/DASH_720.mp4?source=fallback")
+        XCTAssertEqual(audioURL?.absoluteString, "https://v.redd.it/clip789/DASH_AUDIO_128.mp4?source=fallback")
     }
 
     func testBareRedditVideoLinkUsesPlayableHLSURL() async throws {
@@ -1119,7 +1143,7 @@ final class DomainTests: XCTestCase {
         )
         let post = try XCTUnwrap(listing.items.first)
 
-        guard case .video(let videoURL, _, _, _) = post.media else {
+        guard case .video(let videoURL, _, _, _, _, _) = post.media else {
             return XCTFail("Expected a bare v.redd.it link to be treated as video")
         }
         XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/clip456/HLSPlaylist.m3u8")
@@ -1137,7 +1161,7 @@ final class DomainTests: XCTestCase {
         )
         let post = try XCTUnwrap(listing.items.first)
 
-        guard case .video(let videoURL, _, let thumbnailURL, _) = post.media else {
+        guard case .video(let videoURL, _, let thumbnailURL, _, _, _) = post.media else {
             return XCTFail("Expected crosspost parent video media")
         }
         XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/parentclip/DASH_480.mp4")
@@ -1215,7 +1239,7 @@ final class DomainTests: XCTestCase {
               "icon_img":"https://example.com/avatar.png",
               "created_utc":1700000000,
               "total_karma":12345,
-              "subreddit":{"public_description":"Swift and native UI."},
+              "subreddit":{"public_description":"Swift and native UI.","user_is_subscriber":true},
               "is_friend":true
             }
             """#.utf8)
@@ -1395,8 +1419,7 @@ final class DomainTests: XCTestCase {
 
     @MainActor
     func testVideoLooperRestartsPlaybackWhenTheItemEnds() async throws {
-        let url = try XCTUnwrap(URL(string: "https://preview.redd.it/example.gif?format=mp4"))
-        let item = AVPlayerItem(url: url)
+        let item = AVPlayerItem(asset: AVMutableComposition())
         let player = AVPlayer(playerItem: item)
         let looper = OctonautVideoLooper()
 
@@ -1509,5 +1532,291 @@ final class DomainTests: XCTestCase {
         coordinator.releaseAudio(for: first)
         XCTAssertEqual(activations, 2)
         XCTAssertEqual(deactivations, 2)
+    }
+}
+
+extension DomainTests {
+    @MainActor
+    func testCancelledRecoveryDoesNotAdoptItsLateResult() async {
+        let recovery = OctonautPlaybackRecovery()
+        let started = expectation(description: "Recovery started")
+        let adopted = expectation(description: "Cancelled result adopted")
+        adopted.isInverted = true
+        var pending: CheckedContinuation<Int, Never>?
+        recovery.start(load: {
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started.fulfill()
+            }
+        }, onReady: { _ in adopted.fulfill() })
+        await fulfillment(of: [started], timeout: 1)
+        recovery.cancel()
+        pending?.resume(returning: 1)
+        await fulfillment(of: [adopted], timeout: 0.1)
+    }
+
+    @MainActor
+    func testNewRecoveryReplacesThePendingRequest() async {
+        let recovery = OctonautPlaybackRecovery()
+        let started = expectation(description: "First recovery started")
+        let current = expectation(description: "Current result adopted")
+        let stale = expectation(description: "Old result adopted")
+        stale.isInverted = true
+        var pending: CheckedContinuation<Int, Never>?
+        recovery.start(load: {
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started.fulfill()
+            }
+        }, onReady: { _ in stale.fulfill() })
+        await fulfillment(of: [started], timeout: 1)
+        recovery.start(load: { 2 }, onReady: { value in
+            XCTAssertEqual(value, 2)
+            current.fulfill()
+        })
+        pending?.resume(returning: 1)
+        await fulfillment(of: [current, stale], timeout: 0.1)
+    }
+
+    func testStreamingVideoDimensionsUsePortraitSizeAndIgnoreUnloadedSizes() {
+        XCTAssertEqual(OctonautVideoDimensions.aspectRatio(for: CGSize(width: 720, height: 1280)), 0.5625)
+        XCTAssertNil(OctonautVideoDimensions.aspectRatio(for: .zero))
+        XCTAssertNil(OctonautVideoDimensions.aspectRatio(for: CGSize(width: 720, height: 0)))
+        XCTAssertNil(OctonautVideoDimensions.aspectRatio(for: CGSize(width: CGFloat.infinity, height: 1280)))
+    }
+
+    func testLinkHostNameDropsOnlyALeadingWWW() throws {
+        func host(_ string: String) throws -> String {
+            LinkHostName.display(for: try XCTUnwrap(URL(string: string)))
+        }
+
+        XCTAssertEqual(try host("https://www.theverge.com/2026/story"), "theverge.com")
+        XCTAssertEqual(try host("https://WWW.Example.com"), "Example.com")
+        XCTAssertEqual(try host("https://theverge.com/story"), "theverge.com")
+        // Not a `www.` prefix, however much it looks like one.
+        XCTAssertEqual(try host("https://www2.example.com"), "www2.example.com")
+        XCTAssertEqual(try host("https://wwwtheverge.com"), "wwwtheverge.com")
+        // Nothing to take a host from falls back to the whole thing.
+        XCTAssertEqual(try host("mailto:someone@example.com"), "mailto:someone@example.com")
+    }
+}
+
+
+extension DomainTests {
+    func testUsernameProfileDestinationsRejectDeletedUsersAndUnsafePaths() {
+        XCTAssertEqual(OctonautUserDestination.route(for: "some_user-1"), .account("some_user-1"))
+        for invalid in ["", "[deleted]", "../settings", "user?x=1", "https://example.com", "user name"] {
+            XCTAssertNil(OctonautUserDestination.route(for: invalid))
+            XCTAssertNil(OctonautUserDestination.profileURL(for: invalid))
+        }
+        XCTAssertEqual(OctonautUserDestination.profileURL(for: "some_user")?.absoluteString,
+                       "https://www.reddit.com/user/some_user/")
+    }
+
+    func testFollowUsesProfileSubscriptionAndUnfollowReversesIt() {
+        let follow = URLSessionRedditClient.mutationRequest(for: .follow(username: "some_user", following: true))
+        XCTAssertEqual(follow.method, "POST")
+        XCTAssertEqual(follow.path, "/api/subscribe")
+        XCTAssertEqual(follow.fields["sr_name"], "u_some_user")
+        XCTAssertEqual(follow.fields["action"], "sub")
+        let unfollow = URLSessionRedditClient.mutationRequest(for: .follow(username: "some_user", following: false))
+        XCTAssertEqual(unfollow.fields["action"], "unsub")
+    }
+
+    func testBlockRequestNamesTheSelectedUser() {
+        let request = URLSessionRedditClient.mutationRequest(for: .block(username: "some_user", blocked: true))
+        XCTAssertEqual(request.path, "/api/block_user")
+        XCTAssertEqual(request.fields["name"], "some_user")
+        XCTAssertEqual(request.fields["api_type"], "json")
+    }
+
+    func testProfileFollowingUsesSubscriptionRatherThanFriendStatus() throws {
+        let data = Data(#"{"data":{"name":"some_user","is_friend":false,"subreddit":{"user_is_subscriber":true}}}"#.utf8)
+        XCTAssertTrue(try RedditJSONCodec.decodeUserProfile(data).isFollowing)
+        let friend = Data(#"{"data":{"name":"some_user","is_friend":true,"subreddit":{"user_is_subscriber":false}}}"#.utf8)
+        XCTAssertFalse(try RedditJSONCodec.decodeUserProfile(friend).isFollowing)
+    }
+}
+
+
+extension DomainTests {
+    @MainActor
+    func testProfileActionsUpdateOnlyAfterSuccessAndAccountSwitchClearsProfile() async throws {
+        let account = AccountID()
+        let store = OctonautFeatureStore(reddit: FixtureRedditClient(), accountID: account)
+        await store.loadUserProfile(username: "reader", forceRefresh: true)
+        try await store.performProfileAction(.follow(username: "reader", following: true), username: "reader", accountID: account)
+        XCTAssertEqual(store.userProfile?.isFollowing, true)
+        try await store.performProfileAction(.follow(username: "reader", following: false), username: "reader", accountID: account)
+        XCTAssertEqual(store.userProfile?.isFollowing, false)
+        try await store.performProfileAction(.block(username: "reader", blocked: true), username: "reader", accountID: account)
+        XCTAssertEqual(store.userProfile?.isBlocked, true)
+        try await store.performProfileAction(.block(username: "reader", blocked: false), username: "reader", accountID: account)
+        XCTAssertEqual(store.userProfile?.isBlocked, false)
+        store.setAccountID(AccountID())
+        XCTAssertNil(store.userProfile)
+        XCTAssertTrue(store.userProfilePosts.isEmpty)
+        do {
+            try await store.performProfileAction(.follow(username: "reader", following: true), username: "reader", accountID: account)
+            XCTFail("Old account must not perform a profile action")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+        }
+    }
+
+    @MainActor
+    func testFailedProfileActionPreservesRelationshipState() async {
+        let account = AccountID()
+        let client = FixtureRedditClient(actionResult: ActionResult(succeeded: false, message: "Action denied"))
+        let store = OctonautFeatureStore(reddit: client, accountID: account)
+        await store.loadUserProfile(username: "reader", forceRefresh: true)
+        do {
+            try await store.performProfileAction(.follow(username: "reader", following: true), username: "reader", accountID: account)
+            XCTFail("Failed action must report the error")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .reddit(errors: ["Action denied"]))
+        }
+        XCTAssertEqual(store.userProfile?.isFollowing, false)
+    }
+}
+
+
+extension DomainTests {
+    func testUnblockRemovesTheBlockedRelationship() {
+        let request = URLSessionRedditClient.mutationRequest(for: .block(username: "reader", blocked: false))
+        XCTAssertEqual(request.method, "POST")
+        XCTAssertEqual(request.path, "/api/unfriend")
+        XCTAssertEqual(request.fields["name"], "reader")
+        XCTAssertEqual(request.fields["type"], "enemy")
+        XCTAssertNil(request.fields["container"])
+    }
+}
+
+@MainActor
+final class LoginRequirementTests: XCTestCase {
+    func testAnonymousActionsRequestLogin() {
+        let dependencies = AppDependencies.preview()
+        XCTAssertFalse(dependencies.accounts.requireLogin())
+        XCTAssertTrue(dependencies.accounts.showingLoginRequired)
+        dependencies.accounts.showingLoginRequired = false
+        XCTAssertNil(dependencies.accounts.selectedAccountID)
+    }
+
+    func testHealthyAccountAllowsActionsAndExpiredAccountRequestsLogin() async throws {
+        let dependencies = AppDependencies.preview()
+        let healthy = Account(username: "reader", health: .healthy)
+        try await dependencies.persistence.saveAccount(healthy)
+        await dependencies.accounts.load()
+        XCTAssertTrue(dependencies.accounts.requireLogin())
+        XCTAssertFalse(dependencies.accounts.showingLoginRequired)
+        let router = OctonautFeatureRouter()
+        router.accounts = dependencies.accounts
+        router.push(.account("reader"))
+        XCTAssertEqual(router.path, [.account("reader")])
+        router.presentedSheet = .composer(.post, community: "swift")
+        XCTAssertEqual(router.presentedSheet, .composer(.post, community: "swift"))
+        await dependencies.accounts.markNeedsLogin(healthy.id)
+        XCTAssertFalse(dependencies.accounts.requireLogin())
+        XCTAssertTrue(dependencies.accounts.showingLoginRequired)
+    }
+
+    func testProtectedRoutesAndComposerStayClosedWhenAnonymous() {
+        let dependencies = AppDependencies.preview()
+        let router = OctonautFeatureRouter(path: [.feed(.home)])
+        router.accounts = dependencies.accounts
+        router.push(.account("reader"))
+        XCTAssertEqual(router.path, [.feed(.home)])
+        router.path = [.composer(.post)]
+        XCTAssertEqual(router.path, [.feed(.home)])
+        router.presentedSheet = .composer(.post, community: "swift")
+        XCTAssertNil(router.presentedSheet)
+        XCTAssertTrue(dependencies.accounts.showingLoginRequired)
+        router.push(.community("swift"))
+        XCTAssertEqual(router.path.last, .community("swift"))
+    }
+}
+
+@MainActor
+final class AccountLogoutTests: XCTestCase {
+    func testLogoutStaysAnonymousAfterAccountListReloads() async throws {
+        let dependencies = AppDependencies.preview()
+        let account = Account(username: "reader", health: .healthy)
+        try await dependencies.persistence.saveAccount(account)
+        await dependencies.accounts.load()
+        XCTAssertEqual(dependencies.accounts.selectedAccountID, account.id)
+        let previousToken = dependencies.accounts.token()
+
+        try await dependencies.accounts.logOut()
+        await dependencies.accounts.load()
+        await dependencies.accounts.load()
+
+        XCTAssertNil(dependencies.accounts.selectedAccountID)
+        XCTAssertNil(dependencies.accounts.selectedAccount)
+        XCTAssertTrue(dependencies.accounts.accounts.isEmpty)
+        XCTAssertFalse(dependencies.accounts.isCurrent(previousToken))
+        XCTAssertFalse(dependencies.accounts.requireLogin())
+    }
+
+    func testAnonymousSelectionBeforeInitialLoadIsPreserved() async throws {
+        let dependencies = AppDependencies.preview()
+        try await dependencies.persistence.saveAccount(Account(username: "reader", health: .healthy))
+        try await dependencies.accounts.select(nil)
+        await dependencies.accounts.load()
+        XCTAssertNil(dependencies.accounts.selectedAccountID)
+    }
+
+    func testLogoutAndExplicitAccountSelectionSurviveRestart() async throws {
+        let suite = "OctonautTests.account-selection.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let persistence = InMemoryPersistenceStore()
+        let vault = InMemoryCredentialVault()
+        let account = Account(username: "reader", health: .healthy)
+        try await persistence.saveAccount(account)
+        func coordinator() -> AccountCoordinator {
+            AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault), selectionDefaults: defaults)
+        }
+        let first = coordinator()
+        await first.load()
+        try await first.logOut()
+
+        let restarted = coordinator()
+        await restarted.load()
+        XCTAssertNil(restarted.selectedAccountID)
+        let remainingAccounts = try await persistence.loadAccounts()
+        XCTAssertTrue(remainingAccounts.isEmpty)
+        try await persistence.saveAccount(account)
+        await restarted.load()
+        try await restarted.select(account.id)
+
+        let selectedAgain = coordinator()
+        await selectedAgain.load()
+        XCTAssertEqual(selectedAgain.selectedAccountID, account.id)
+    }
+}
+
+@MainActor
+final class LogoutCredentialTests: XCTestCase {
+    func testLogoutDeletesCredentialAndKeepsOtherAccountsUnselected() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let vault = InMemoryCredentialVault()
+        let secrets = CredentialVaultSecretStore(vault: vault)
+        let coordinator = AccountCoordinator(persistence: persistence, secrets: secrets)
+        let other = Account(username: "other", health: .healthy)
+        let selected = Account(username: "reader", health: .healthy)
+        let secret = SessionSecret(cookieName: "reddit_session", cookieValue: "synthetic-session", modhash: "synthetic-modhash", redditUser: "reader", validatedAt: .now)
+        try await coordinator.add(other, secret: secret)
+        try await coordinator.add(selected, secret: secret)
+        try await coordinator.logOut()
+        await coordinator.load()
+
+        XCTAssertNil(coordinator.selectedAccountID)
+        XCTAssertEqual(coordinator.accounts.map(\.id), [other.id])
+        let deletedCredential = try await vault.credential(for: selected.id)
+        let otherCredential = try await vault.credential(for: other.id)
+        XCTAssertNil(deletedCredential)
+        XCTAssertNotNil(otherCredential)
+        let savedAccounts = try await persistence.loadAccounts()
+        XCTAssertEqual(savedAccounts.map(\.id), [other.id])
     }
 }

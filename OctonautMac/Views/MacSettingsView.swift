@@ -69,6 +69,13 @@ struct MacSettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
+            Form {
+                Section("Privacy and Terms") {
+                    LegalDocumentLinks()
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 560, height: 390)
         .padding()

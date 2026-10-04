@@ -70,6 +70,21 @@ private struct RedditRawThing: Decodable, Sendable {
 }
 
 enum RedditJSONCodec {
+    static func decodeBlockedUsers(_ data: Data) throws -> Listing<UserReference> {
+        let root = try JSONDecoder().decode(RedditJSONValue.self, from: data)
+        guard let listing = root.objectValue?["data"]?.objectValue,
+              let children = listing["children"]?.arrayValue else { throw RedditClientError.malformedResponse }
+        var seen = Set<String>()
+        let users = try children.map { child -> UserReference in
+            guard let object = child.objectValue else { throw RedditClientError.malformedResponse }
+            let payload = object["data"]?.objectValue ?? object
+            guard let username = payload["name"]?.stringValue,
+                  OctonautUserDestination.route(for: username) != nil else { throw RedditClientError.malformedResponse }
+            return UserReference(username: username)
+        }.filter { seen.insert($0.id).inserted }
+        return Listing(items: users, after: listing["after"]?.stringValue, before: listing["before"]?.stringValue)
+    }
+
     static func decodePosts(_ data: Data) throws -> Listing<Post> {
         let envelope = try JSONDecoder().decode(RedditRawListing.self, from: data)
         let posts = envelope.data.children.compactMap { thing -> Post? in
@@ -291,7 +306,7 @@ enum RedditJSONCodec {
             karma: totalKarma,
             about: about,
             isBlocked: object["is_blocked"]?.boolValue ?? object["block"]?.boolValue ?? false,
-            isFollowing: object["is_friend"]?.boolValue ?? false
+            isFollowing: object["subreddit"]?.objectValue?["user_is_subscriber"]?.boolValue ?? false
         )
     }
 
@@ -628,18 +643,28 @@ enum RedditJSONCodec {
 
             let fallbackURL = url(redditVideo["fallback_url"]?.stringValue)
             let hlsURL = url(redditVideo["hls_url"]?.stringValue)
-            guard let videoURL = fallbackURL ?? hlsURL else { continue }
+            // HLS first. `fallback_url` is DASH video-only, so preferring it
+            // forces the audio to be guessed at `DASH_AUDIO_128.mp4`, the
+            // manifest to be fetched when that misses, and the two tracks to
+            // be composed -- a chain of awaits a feed row sits behind on a
+            // spinner. The HLS playlist carries audio in-stream and plays
+            // without any of it. DASH stays as the fallback for the posts
+            // Reddit publishes without a playlist.
+            guard let videoURL = hlsURL ?? fallbackURL else { continue }
 
             let isGIF = redditVideo["is_gif"]?.boolValue ?? false
             let hasAudio = redditVideo["has_audio"]?.boolValue ?? false
-            let audioURL = hasAudio && !isGIF
+            // Only the DASH fallback needs a separate audio URL.
+            let audioURL = videoURL == fallbackURL && hasAudio && !isGIF
                 ? fallbackURL.flatMap(redditAudioURL(for:))
                 : nil
             return .video(
                 url: videoURL,
                 audioURL: audioURL,
                 thumbnailURL: thumbnail(candidate) ?? thumbnail(object),
-                isGIF: isGIF
+                isGIF: isGIF,
+                width: int(redditVideo["width"]),
+                height: int(redditVideo["height"])
             )
         }
 
@@ -649,7 +674,9 @@ enum RedditJSONCodec {
                 url: redditHLSURL(for: targetURL),
                 audioURL: nil,
                 thumbnailURL: thumbnail(object),
-                isGIF: false
+                isGIF: false,
+                width: nil,
+                height: nil
             )
         }
         guard isDirectVideoURL(targetURL) else { return nil }
@@ -657,7 +684,9 @@ enum RedditJSONCodec {
             url: targetURL,
             audioURL: nil,
             thumbnailURL: thumbnail(object),
-            isGIF: false
+            isGIF: false,
+            width: nil,
+            height: nil
         )
     }
 
@@ -685,7 +714,9 @@ enum RedditJSONCodec {
                 url: playableURL,
                 audioURL: nil,
                 thumbnailURL: thumbnail(candidate) ?? thumbnail(object),
-                isGIF: true
+                isGIF: true,
+                width: nil,
+                height: nil
             )
         }
         return nil
@@ -771,7 +802,9 @@ enum RedditJSONCodec {
                     url: candidate,
                     audioURL: nil,
                     thumbnailURL: thumbnailURL,
-                    isGIF: false
+                    isGIF: false,
+                    width: nil,
+                    height: nil
                 )
             }
             if EmbeddedVideoURL.embedURL(for: candidate) != nil {

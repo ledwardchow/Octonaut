@@ -45,3 +45,34 @@ struct RedditLoginRequiredView: View {
         .environment(AppDependencies.preview())
         .frame(width: 600, height: 420)
 }
+
+/// The login page opens only after the user chooses Log In.
+private struct LoginRequirementModifier: ViewModifier {
+    @Binding var isPresented: Bool
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var showingLogin = false
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Login Required", isPresented: $isPresented) {
+                Button("Cancel", role: .cancel) {}
+                Button("Log In") { showingLogin = true }
+            } message: {
+                Text("You need to be logged in to use this option.")
+            }
+            .sheet(isPresented: $showingLogin) {
+                #if os(macOS)
+                MacRedditLoginView(accounts: dependencies.accounts)
+                    .frame(minWidth: 720, minHeight: 620)
+                #else
+                RedditLoginView(accounts: dependencies.accounts)
+                #endif
+            }
+    }
+}
+
+extension View {
+    func loginRequiredModal(isPresented: Binding<Bool>) -> some View {
+        modifier(LoginRequirementModifier(isPresented: isPresented))
+    }
+}

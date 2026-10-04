@@ -34,6 +34,11 @@ struct OctonautApp: App {
                     await OctonautImageCache.configure(
                         diskCapacityMB: dependencies.settings.imageCacheLimitMB
                     )
+#if DEBUG
+                    if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "blocked-users" {
+                        try? await dependencies.persistence.saveAccount(Account(username: "example_reader", health: .healthy))
+                    }
+#endif
                     await dependencies.accounts.load()
                 }
         }

@@ -10,6 +10,7 @@ struct MacFeedListView: View {
     @Binding var selectedPost: PostCardModel?
     let onComposePost: () -> Void
     @Environment(AppDependencies.self) private var dependencies
+    @State private var reportTarget: RedditReportTarget?
     @State private var actionError: String?
 
     var body: some View {
@@ -48,13 +49,13 @@ struct MacFeedListView: View {
                             if dependencies.settings.feedLayout == .full {
                                 MacPostMediaCard(
                                     post: post,
-                                    canVote: currentAccountID != nil,
+                                    canVote: true,
                                     onVote: { performVote(post, value: $0) }
                                 )
                             } else {
                                 MacPostRow(
                                     post: post,
-                                    canVote: currentAccountID != nil,
+                                    canVote: true,
                                     onVote: { performVote(post, value: $0) }
                                 )
                             }
@@ -84,14 +85,15 @@ struct MacFeedListView: View {
                             .listRowSeparator(.visible)
                             .listRowSeparatorTint(.secondary.opacity(0.22))
                             .contextMenu {
+                                Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
                                 Button(post.vote == 1 ? "Remove Upvote" : "Upvote") {
                                     performVote(post, value: post.vote == 1 ? 0 : 1)
                                 }
-                                .disabled(currentAccountID == nil)
+
                                 Button(post.vote == -1 ? "Remove Downvote" : "Downvote") {
                                     performVote(post, value: post.vote == -1 ? 0 : -1)
                                 }
-                                .disabled(currentAccountID == nil)
+
                                 Divider()
                                 Button("Open in Browser") { NSWorkspace.shared.open(post.shareURL) }
                                 Button("Copy Link") {
@@ -147,6 +149,7 @@ struct MacFeedListView: View {
                 }
             }
         }
+        .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .alert(
             "Reddit action failed",
             isPresented: Binding(
@@ -165,7 +168,7 @@ struct MacFeedListView: View {
     }
 
     private func performVote(_ post: PostCardModel, value: Int) {
-        guard let currentAccountID else { return }
+        guard dependencies.accounts.requireLogin(), let currentAccountID else { return }
         Task {
             do {
                 try await store.performVote(
@@ -461,6 +464,7 @@ struct MacPostDetailView: View {
     let accounts: AccountCoordinator
     let onCompose: (MacComposerContext) -> Void
     @Environment(AppDependencies.self) private var dependencies
+    @State private var reportTarget: RedditReportTarget?
     @State private var actionError: String?
     @State private var isMediaFillingPane = false
     @State private var selectedMediaPage = 0
@@ -492,6 +496,7 @@ struct MacPostDetailView: View {
                 }
             }
             .navigationTitle("r/\(displayedPost.community)")
+            .sheet(item: $reportTarget) { ReportContentView(target: $0) }
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack {
                     Spacer()
@@ -504,7 +509,6 @@ struct MacPostDetailView: View {
                             Label("Add Comment", systemImage: "bubble.left.and.pencil")
                                 .labelStyle(.iconOnly)
                         }
-                        .disabled(currentAccountID == nil)
                         .help("Add Comment")
 
                         Button {
@@ -514,7 +518,6 @@ struct MacPostDetailView: View {
                                 .labelStyle(.iconOnly)
                         }
                         .foregroundStyle(displayedPost.vote == 1 ? .orange : .secondary)
-                        .disabled(currentAccountID == nil)
                         .help(displayedPost.vote == 1 ? "Remove upvote" : "Upvote")
 
                         Button {
@@ -524,7 +527,6 @@ struct MacPostDetailView: View {
                                 .labelStyle(.iconOnly)
                         }
                         .foregroundStyle(displayedPost.vote == -1 ? .blue : .secondary)
-                        .disabled(currentAccountID == nil)
                         .help(displayedPost.vote == -1 ? "Remove downvote" : "Downvote")
 
                         Button {
@@ -536,8 +538,14 @@ struct MacPostDetailView: View {
                             )
                             .labelStyle(.iconOnly)
                         }
-                        .disabled(currentAccountID == nil)
                         .help(displayedPost.isSaved ? "Unsave" : "Save")
+
+                        Button {
+                            if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: displayedPost) }
+                        } label: {
+                            Label("Report", systemImage: "flag").labelStyle(.iconOnly)
+                        }
+                        .help("Report content")
 
                         ShareLink(item: displayedPost.shareURL) {
                             Label("Share", systemImage: "square.and.arrow.up")
@@ -626,19 +634,26 @@ struct MacPostDetailView: View {
                         Button("Add Comment", systemImage: "bubble.left.and.pencil") {
                             onCompose(.comment(postID: post.id, postTitle: post.title))
                         }
-                        .disabled(currentAccountID == nil)
+
                     }
 
                     ForEach(flattenedComments(store.comments)) { comment in
                         MacCommentRow(
                             comment: comment,
                             postAuthor: post.author,
-                            canVote: currentAccountID != nil,
+                            canVote: true,
                             onVote: { vote(comment, value: $0) },
                             onReply: {
                                 onCompose(.reply(commentID: comment.id, author: comment.author))
                             }
                         )
+                        .contextMenu {
+                            if !comment.isMoreNode {
+                                Button("Report", systemImage: "flag") {
+                                    if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(commentID: comment.id, post: post) }
+                                }
+                            }
+                        }
                     }
                 } else if store.detailState == .loaded {
                     VStack(alignment: .leading, spacing: 10) {
@@ -647,7 +662,7 @@ struct MacPostDetailView: View {
                         Button("Add the first comment", systemImage: "bubble.left.and.pencil") {
                             onCompose(.comment(postID: post.id, postTitle: post.title))
                         }
-                        .disabled(currentAccountID == nil)
+
                     }
                 }
             }
@@ -741,7 +756,7 @@ struct MacPostDetailView: View {
                 MacVoteControls(
                     score: post.score,
                     vote: post.vote,
-                    isEnabled: currentAccountID != nil,
+                    isEnabled: true,
                     onVote: { vote(post, value: $0) }
                 )
                 Label(post.comments.formatted(), systemImage: "bubble.left")
@@ -756,7 +771,7 @@ struct MacPostDetailView: View {
     }
 
     private func vote(_ post: PostCardModel, value: Int) {
-        guard let currentAccountID else { return }
+        guard dependencies.accounts.requireLogin(), let currentAccountID else { return }
         Task {
             do {
                 try await store.performVote(
@@ -771,7 +786,7 @@ struct MacPostDetailView: View {
     }
 
     private func save(_ post: PostCardModel) {
-        guard let currentAccountID else { return }
+        guard dependencies.accounts.requireLogin(), let currentAccountID else { return }
         Task {
             do {
                 try await store.performSave(postID: post.id, accountID: currentAccountID)
@@ -782,7 +797,7 @@ struct MacPostDetailView: View {
     }
 
     private func vote(_ comment: CommentCardModel, value: Int) {
-        guard let currentAccountID else { return }
+        guard dependencies.accounts.requireLogin(), let currentAccountID else { return }
         Task {
             do {
                 try await store.performCommentVote(

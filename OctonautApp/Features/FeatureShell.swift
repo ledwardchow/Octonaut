@@ -5,11 +5,30 @@ import Observation
 @MainActor
 @Observable
 final class OctonautFeatureRouter {
-    var path: [FeatureRoute]
-    var presentedSheet: FeatureSheet?
+    var accounts: AccountCoordinator?
+    private var routes: [FeatureRoute]
+    private var sheet: FeatureSheet?
+
+    var path: [FeatureRoute] {
+        get { routes }
+        set {
+            let sharedCount = zip(routes, newValue).prefix { $0 == $1 }.count
+            if newValue.dropFirst(sharedCount).contains(where: \.requiresLogin),
+               let accounts, !accounts.requireLogin() { return }
+            routes = newValue
+        }
+    }
+
+    var presentedSheet: FeatureSheet? {
+        get { sheet }
+        set {
+            if case .composer = newValue, let accounts, !accounts.requireLogin() { return }
+            sheet = newValue
+        }
+    }
 
     init(path: [FeatureRoute] = []) {
-        self.path = path
+        self.routes = path
     }
 
     func push(_ route: FeatureRoute) { path.append(route) }
@@ -94,7 +113,7 @@ struct OctonautTabsView: View {
         self.reddit = reddit
 #if DEBUG
         let screenshot = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"]
-        _selectedTab = State(initialValue: ["settings", "theme"].contains(screenshot) ? .settings : .posts)
+        _selectedTab = State(initialValue: ["settings", "theme", "blocked-users"].contains(screenshot) ? .settings : .posts)
         let path: [FeatureRoute]
         switch screenshot {
         case "feeds": path = []
@@ -102,7 +121,7 @@ struct OctonautTabsView: View {
         default: path = [.feed(.home)]
         }
         _postsRouter = State(initialValue: OctonautFeatureRouter(path: path))
-        _settingsRouter = State(initialValue: OctonautFeatureRouter(path: screenshot == "theme" ? [.settings(.theme)] : []))
+        _settingsRouter = State(initialValue: OctonautFeatureRouter(path: screenshot == "theme" ? [.settings(.theme)] : (screenshot == "blocked-users" ? [.settings(.blockedUsers)] : [])))
 #else
         _selectedTab = State(initialValue: .posts)
         _postsRouter = State(initialValue: OctonautFeatureRouter(path: [.feed(.home)]))
@@ -117,7 +136,7 @@ struct OctonautTabsView: View {
                     .safeAreaPadding(.bottom, 82)
 
                 FloatingTabBar(
-                    selection: $selectedTab,
+                    selection: tabSelection,
                     unreadCount: store.unreadCount,
                     accountTitle: accountTabTitle(whenSignedOut: "Account")
                 )
@@ -132,6 +151,15 @@ struct OctonautTabsView: View {
         }
         .tint(.orange)
         .background(Color(uiColor: .systemBackground))
+        .loginRequiredModal(isPresented: Binding(
+            get: { dependencies.accounts.showingLoginRequired },
+            set: { dependencies.accounts.showingLoginRequired = $0 }
+        ))
+        .onAppear {
+            for router in [postsRouter, inboxRouter, accountRouter, searchRouter, settingsRouter] {
+                router.accounts = dependencies.accounts
+            }
+        }
         .task(id: accountStateKey) {
             store.synchronizeAccount(
                 id: dependencies.accounts.selectedAccountID,
@@ -202,6 +230,7 @@ struct OctonautTabsView: View {
 
     private func handleIncomingURL(_ url: URL) {
         guard let route = OctonautFeatureURLRouter.route(url) else { return }
+        if route.requiresLogin, !dependencies.accounts.requireLogin() { return }
         switch route {
         case .account:
             selectedTab = .account
@@ -239,6 +268,13 @@ struct OctonautTabsView: View {
             && !dependencies.settings.showBottomNavigationOnLargeScreens
     }
 
+    private var tabSelection: Binding<AppTab> {
+        Binding(get: { selectedTab }, set: { tab in
+            if (tab == .account || tab == .inbox), !dependencies.accounts.requireLogin() { return }
+            selectedTab = tab
+        })
+    }
+
     private var persistentTabContent: some View {
         ZStack {
             ForEach(AppTab.allCases) { tab in
@@ -252,7 +288,7 @@ struct OctonautTabsView: View {
     }
 
     private var compactTabs: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: tabSelection) {
             Tab("Posts", systemImage: "rectangle.stack", value: AppTab.posts) {
                 tabContent(for: .posts)
             }
@@ -556,6 +592,7 @@ private struct PostsSplitView: View {
 
 @MainActor
 private struct SubredditSidebarView: View {
+    @Environment(AppDependencies.self) private var dependencies
     let name: String
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
@@ -657,7 +694,7 @@ private struct SubredditSidebarView: View {
         if let community {
             HStack(spacing: 10) {
                 Button {
-                    store.toggleSubscribe(communityID: community.id)
+                    if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) }
                 } label: {
                     Text(community.isSubscribed ? "Joined" : "Join")
                         .frame(maxWidth: .infinity)
@@ -747,6 +784,7 @@ private extension SettingsDestination {
         case .appearance: "rectangle.3.group"
         case .intelligence: "sparkles"
         case .account: "person.crop.circle"
+        case .blockedUsers: "person.crop.circle.badge.xmark"
         case .dataUse: "antenna.radiowaves.left.and.right"
         case .statistics: "chart.bar"
         case .advanced: "wrench.and.screwdriver"

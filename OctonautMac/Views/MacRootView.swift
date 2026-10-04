@@ -37,6 +37,10 @@ struct MacRootView: View {
                 postsSplitView
             }
         }
+        .loginRequiredModal(isPresented: Binding(
+            get: { dependencies.accounts.showingLoginRequired },
+            set: { dependencies.accounts.showingLoginRequired = $0 }
+        ))
         .tint(.orange)
         .background {
             MacWindowTitleAccessory(title: "Octonaut")
@@ -52,6 +56,7 @@ struct MacRootView: View {
             await refreshSelection(force: false)
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
+            editingFeed = nil
             synchronizeAccount()
             selectedPost = nil
             Task {
@@ -161,7 +166,10 @@ struct MacRootView: View {
 
     private var sidebar: some View {
         MacSidebarView(
-            selection: $sidebarSelection,
+            selection: Binding(get: { sidebarSelection }, set: { selection in
+                if selection == .inbox, !dependencies.accounts.requireLogin() { return }
+                sidebarSelection = selection
+            }),
             communities: store.communities,
             communitiesState: store.communitiesState,
             onRefreshCommunities: {
@@ -247,10 +255,7 @@ struct MacRootView: View {
     }
 
     private func beginComposing(_ context: MacComposerContext) {
-        guard dependencies.accounts.selectedAccountID != nil else {
-            sidebarSelection = .accounts
-            return
-        }
+        guard dependencies.accounts.requireLogin() else { return }
         composer = context
     }
 
@@ -278,6 +283,7 @@ struct MacRootView: View {
         case .mediaURL(let url), .web(let url):
             NSWorkspace.shared.open(url)
         case .account, .userSection:
+            guard dependencies.accounts.requireLogin() else { return }
             // The Mac window has no per-section profile screen, so a profile
             // link lands on Accounts.
             sidebarSelection = .accounts

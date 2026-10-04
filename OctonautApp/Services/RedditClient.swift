@@ -45,6 +45,7 @@ protocol RedditClient: Sendable {
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile>
     func trendingCommunities(limit: Int, account: AccountID?) async throws -> Listing<Community>
     func subscribedCommunities(after: String?, account: AccountID) async throws -> Listing<Community>
+    func blockedUsers(after: String?, account: AccountID) async throws -> Listing<UserReference>
     func userProfile(_ username: String, account: AccountID?) async throws -> UserProfile
     func userComments(
         _ username: String,
@@ -52,7 +53,14 @@ protocol RedditClient: Sendable {
         after: String?,
         account: AccountID?
     ) async throws -> Listing<UserComment>
+    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule]
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult
+}
+
+extension RedditClient {
+    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+        throw UnavailableServiceError(service: "Reporting rules")
+    }
 }
 
 /// Replaceable on-disk cache for logged-out Reddit JSON responses. Reddit's
@@ -312,6 +320,16 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeCommunities(data)
     }
 
+    func blockedUsers(after: String? = nil, account: AccountID) async throws -> Listing<UserReference> {
+        var query = [URLQueryItem(name: "raw_json", value: "1"), URLQueryItem(name: "limit", value: "100")]
+        if let after { query.append(URLQueryItem(name: "after", value: after)) }
+        let data = try await requestData(
+            method: "GET", path: "/prefs/blocked.json", query: query, body: nil,
+            account: account, retryable: true, responseCachePolicy: .reloadIgnoringCache
+        )
+        return try RedditJSONCodec.decodeBlockedUsers(data)
+    }
+
     func userProfile(_ username: String, account: AccountID? = nil) async throws -> UserProfile {
         let data = try await requestData(
             method: "GET",
@@ -349,8 +367,46 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeUserComments(data)
     }
 
+    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+        guard RedditReportRule.validCommunity(community) else { throw RedditClientError.invalidURL }
+        let data = try await requestData(
+            method: "GET", path: "/r/\(community)/about/rules.json",
+            query: [URLQueryItem(name: "raw_json", value: "1")], body: nil,
+            account: account, retryable: true
+        )
+        return try RedditReportRule.decode(data)
+    }
+
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {
-        let request = Self.mutationRequest(for: action)
+        if case .report(let fullname, let community, let reason) = action {
+            guard RedditReportTarget.validFullname(fullname), RedditReportRule.validCommunity(community),
+                  !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 100 else {
+                throw RedditClientError.invalidResponse
+            }
+            guard let credential = try await credentialVault.credential(for: account),
+                  let modhash = credential.modhash, !modhash.isEmpty else {
+                throw RedditClientError.authenticationRequired
+            }
+        }
+        var request = Self.mutationRequest(for: action)
+        if case .block(_, false) = action {
+            let identityData = try await requestData(
+                method: "GET",
+                path: "/user/me/about.json",
+                query: [URLQueryItem(name: "raw_json", value: "1")],
+                body: nil,
+                account: account,
+                retryable: true,
+                responseCachePolicy: .reloadIgnoringCache
+            )
+            let envelope = try JSONSerialization.jsonObject(with: identityData) as? [String: Any]
+            let identity = envelope?["data"] as? [String: Any] ?? envelope
+            guard let id = identity?["id"] as? String, !id.isEmpty,
+                  id.unicodeScalars.allSatisfy({
+                      CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789").contains($0)
+                  }) else { throw RedditClientError.authenticationRequired }
+            request.fields["container"] = "t2_\(id)"
+        }
         let data = try await requestData(
             method: request.method,
             path: request.path,
@@ -359,6 +415,7 @@ actor URLSessionRedditClient: RedditClient {
             account: account,
             retryable: false
         )
+        if case .report = action { return try RedditReportRule.decodeSubmission(data) }
         if data.isEmpty { return ActionResult(succeeded: true) }
         return try RedditJSONCodec.decodeActionResult(data)
     }
@@ -416,6 +473,7 @@ actor URLSessionRedditClient: RedditClient {
         websiteHost: String? = nil
     ) async throws -> Data {
         guard let url = makeURL(path: path, query: query, websiteHost: websiteHost) else { throw RedditClientError.invalidURL }
+        guard RedditReportTarget.isRedditURL(url) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
@@ -445,6 +503,12 @@ actor URLSessionRedditClient: RedditClient {
         if let account {
             guard let credential = try await credentialVault.credential(for: account) else {
                 throw RedditClientError.authenticationRequired
+            }
+            if path == "/api/report" {
+                guard !credential.cookieName.isEmpty, !credential.cookieValue.isEmpty,
+                      let modhash = credential.modhash, !modhash.isEmpty else {
+                    throw RedditClientError.authenticationRequired
+                }
             }
             request.setValue("\(credential.cookieName)=\(credential.cookieValue)", forHTTPHeaderField: "Cookie")
             if method != "GET", let modhash = credential.modhash, !modhash.isEmpty {
@@ -526,7 +590,7 @@ actor URLSessionRedditClient: RedditClient {
               components.user == nil, components.password == nil,
               components.port == nil || components.port == 443 else { return nil }
         components.path = path.hasPrefix("/") ? path : "/\(path)"
-        components.queryItems = query.filter { $0.value != nil }
+        components.queryItems = query.isEmpty ? nil : query.filter { $0.value != nil }
         return components.url
     }
 
@@ -578,6 +642,8 @@ actor URLSessionRedditClient: RedditClient {
 
     static func mutationRequest(for action: RedditAction) -> (method: String, path: String, query: [URLQueryItem], fields: [String: String]) {
         switch action {
+        case .report(let fullname, let community, let reason):
+            return ("POST", "/api/report", [], ["thing_id": fullname, "sr_name": community, "reason": reason, "rule_reason": reason, "api_type": "json", "strict_freeform_reports": "true"])
         case .vote(let fullname, let direction):
             return ("POST", "/api/vote", [], ["id": fullname, "dir": String(max(-1, min(direction, 1)))])
         case .save(let fullname, let saved):
@@ -624,9 +690,12 @@ actor URLSessionRedditClient: RedditClient {
                 ]
             )
         case .block(let username, let blocked):
-            return ("POST", "/api/block_user", [], ["name": username, "container": blocked ? "" : "unblock"])
+            if blocked {
+                return ("POST", "/api/block_user", [], ["name": username, "api_type": "json"])
+            }
+            return ("POST", "/api/unfriend", [], ["name": username, "type": "enemy", "api_type": "json"])
         case .follow(let username, let following):
-            return ("POST", "/api/friend", [], ["name": username, "note": following ? "" : "unfollow"])
+            return ("POST", "/api/subscribe", [], ["sr_name": "u_\(username)", "action": following ? "sub" : "unsub", "api_type": "json"])
         }
     }
 
@@ -754,7 +823,8 @@ private final class RedditRedirectDelegate: NSObject, URLSessionTaskDelegate, @u
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let host = request.url?.host?.lowercased(), allowedHosts.contains(host) else {
+        guard let url = request.url, RedditReportTarget.isRedditURL(url),
+              let host = url.host?.lowercased(), allowedHosts.contains(host) else {
             completionHandler(nil)
             return
         }

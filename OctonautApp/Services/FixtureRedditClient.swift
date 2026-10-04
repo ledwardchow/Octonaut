@@ -11,6 +11,7 @@ actor FixtureRedditClient: RedditClient {
     private let searchData: Data?
     private let communitiesData: Data?
     private let usersData: Data?
+    private var blockedUserNames: [String] = []
     private let actionResult: ActionResult
     private let listingDelay: Duration?
     private let postDelay: Duration?
@@ -23,6 +24,7 @@ actor FixtureRedditClient: RedditClient {
     private var subscribedCommunitiesRequestCount = 0
 
     init(
+        blockedUsers: [String] = [],
         listingData: Data? = nil,
         listingsByDestination: [FeedDestination: Data] = [:],
         delaysByDestination: [FeedDestination: Duration] = [:],
@@ -37,6 +39,7 @@ actor FixtureRedditClient: RedditClient {
         subscribedCommunitiesDelay: Duration? = nil,
         actionResult: ActionResult = ActionResult(succeeded: true)
     ) {
+        blockedUserNames = blockedUsers
         self.listingData = listingData
         self.listingsByDestination = listingsByDestination
         self.delaysByDestination = delaysByDestination
@@ -152,6 +155,11 @@ actor FixtureRedditClient: RedditClient {
         subscribedCommunitiesRequestCount
     }
 
+    func blockedUsers(after: String?, account: AccountID) async throws -> Listing<UserReference> {
+        if let listingDelay { try await Task.sleep(for: listingDelay) }
+        return Listing(items: blockedUserNames.map(UserReference.init(username:)))
+    }
+
     func userProfile(_ username: String, account: AccountID? = nil) async throws -> UserProfile {
         UserProfile(
             reference: UserReference(username: username),
@@ -173,7 +181,15 @@ actor FixtureRedditClient: RedditClient {
         Listing(items: [])
     }
 
+    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+        [RedditReportRule(shortName: "Test report", violationReason: "Test report", kind: "all")]
+    }
+
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {
-        actionResult
+        if actionResult.succeeded, case .block(let username, let blocked) = action {
+            blockedUserNames.removeAll { $0.caseInsensitiveCompare(username) == .orderedSame }
+            if blocked { blockedUserNames.append(username) }
+        }
+        return actionResult
     }
 }

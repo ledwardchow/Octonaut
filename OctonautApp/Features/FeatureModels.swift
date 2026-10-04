@@ -5,7 +5,7 @@ extension PostMedia {
     fileprivate var thumbnailURL: URL? {
         switch self {
         case .image(_, let thumbnail, _, _): return thumbnail
-        case .video(_, _, let thumbnail, _): return thumbnail
+        case .video(_, _, let thumbnail, _, _, _): return thumbnail
         case .gallery(let items): return items.first?.thumbnailURL
         case .link(_, let metadata): return metadata?.imageURL
         case .none, .poll, .unsupported: return nil
@@ -19,8 +19,21 @@ extension PostMedia {
     }
 
     fileprivate var audioURL: URL? {
-        if case .video(_, let audio, _, _) = self { return audio }
+        if case .video(_, let audio, _, _, _, _) = self { return audio }
         return nil
+    }
+
+    /// The aspect ratio Reddit publishes alongside the video.
+    ///
+    /// Worth carrying because it removes the only reason a row has to read
+    /// the asset before it can lay out, and because an HLS playlist has no
+    /// asset tracks to read: `loadTracks(withMediaType: .video)` returns
+    /// nothing on one, so measuring it would letterbox every portrait video
+    /// into 16:9.
+    fileprivate var aspectRatio: CGFloat? {
+        guard case .video(_, _, _, _, let width, let height) = self,
+              let width, let height, width > 0, height > 0 else { return nil }
+        return CGFloat(width) / CGFloat(height)
     }
 }
 
@@ -60,6 +73,8 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
     var mediaKind: String
     var galleryURLs: [URL]
     var audioURL: URL?
+    /// Reddit's own dimensions for the video, when it publishes them.
+    var mediaAspectRatio: CGFloat?
 
 #if DEBUG
     static let screenshotCat = PostCardModel(
@@ -143,6 +158,7 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         mediaKind: String = "none",
         galleryURLs: [URL] = [],
         audioURL: URL? = nil,
+        mediaAspectRatio: CGFloat? = nil,
         bodyPreview: String? = nil
     ) {
         self.id = id
@@ -170,6 +186,7 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         self.mediaKind = mediaKind
         self.galleryURLs = galleryURLs
         self.audioURL = audioURL
+        self.mediaAspectRatio = mediaAspectRatio
         self.bodyPreview = bodyPreview ?? (body.isEmpty ? "" : RedditPostMarkdown.previewText(from: body))
     }
 
@@ -199,7 +216,8 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
             thumbnailURL: post.media.thumbnailURL,
             mediaKind: post.media.kind,
             galleryURLs: post.media.galleryURLs,
-            audioURL: post.media.audioURL
+            audioURL: post.media.audioURL,
+            mediaAspectRatio: post.media.aspectRatio
         )
     }
 
@@ -712,7 +730,7 @@ enum ComposerKind: String, CaseIterable, Identifiable, Hashable, Sendable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable, Hashable, Sendable {
-    case general, theme, appearance, intelligence, account, dataUse, statistics, advanced, about
+    case general, theme, appearance, intelligence, account, blockedUsers, dataUse, statistics, advanced, about
 
     var id: String { rawValue }
     var title: String {
@@ -722,6 +740,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable, Hashable, Sendable
         case .appearance: "Appearance"
         case .intelligence: "Intelligence"
         case .account: "Account"
+        case .blockedUsers: "Blocked Users"
         case .dataUse: "Data Use"
         case .statistics: "Statistics"
         case .advanced: "Advanced"
@@ -738,8 +757,24 @@ enum UserSectionContent: String, CaseIterable, Identifiable, Hashable, Sendable 
     var id: String { rawValue }
 }
 
-/// One page of a user-section listing. The screen that asked for it owns the
-/// rows, so pushing one section on top of another cannot cross the two.
+/// Keeps only the removed row, so rollback preserves other saved-list edits.
+struct UserSectionPostRemoval {
+    let post: PostCardModel
+    let index: Int
+
+    init?(postID: String, posts: inout [PostCardModel]) {
+        guard let index = posts.firstIndex(where: { $0.id == postID }) else { return nil }
+        self.index = index
+        post = posts.remove(at: index)
+    }
+
+    func restore(in posts: inout [PostCardModel]) {
+        guard !posts.contains(where: { $0.id == post.id }) else { return }
+        posts.insert(post, at: min(index, posts.count))
+    }
+}
+
+/// One page of a profile section, owned by the screen that requested it.
 struct UserSectionPage: Sendable {
     var posts: [PostCardModel] = []
     var comments: [UserCommentCardModel] = []
@@ -753,7 +788,29 @@ enum FeatureSearchScope: String, CaseIterable, Identifiable, Hashable, Sendable 
     var id: String { rawValue }
 }
 
+enum OctonautUserDestination {
+    static func route(for username: String) -> FeatureRoute? {
+        guard !username.isEmpty, username.count <= 20,
+              username.unicodeScalars.allSatisfy({
+                  CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-").contains($0)
+              }) else { return nil }
+        return .account(username)
+    }
+
+    static func profileURL(for username: String) -> URL? {
+        guard route(for: username) != nil else { return nil }
+        return URL(string: "https://www.reddit.com/user/\(username)/")
+    }
+}
+
 enum FeatureRoute: Hashable {
+    var requiresLogin: Bool {
+        switch self {
+        case .account, .userSection, .conversation, .composer: true
+        default: false
+        }
+    }
+
     case feed(FeedDescriptorModel)
     case post(PostCardModel)
     case postURL(URL)
@@ -1789,6 +1846,10 @@ final class OctonautFeatureStore {
         comments.removeAll()
         inbox.removeAll()
         inboxState = accountID == nil ? .empty : .idle
+        userProfile = nil
+        userProfilePosts.removeAll()
+        userProfileComments.removeAll()
+        userProfileState = .idle
     }
 
     private func domainFeed(for descriptor: FeedDescriptorModel) -> FeedDescriptor {
@@ -1926,6 +1987,38 @@ final class OctonautFeatureStore {
                 save(postID: postID)
             }
             throw error
+        }
+    }
+
+    func performProfileAction(_ action: RedditAction, username: String, accountID: AccountID) async throws {
+        guard self.accountID == accountID, OctonautUserDestination.route(for: username) != nil else {
+            throw RedditClientError.authenticationRequired
+        }
+        switch action {
+        case .follow(let target, _), .block(let target, _):
+            guard target == username else { throw RedditClientError.invalidURL }
+        default:
+            throw RedditClientError.invalidURL
+        }
+        let generation = accountGeneration
+        let result: ActionResult
+        if let authenticated {
+            result = try await authenticated.perform(action, accountID: accountID)
+        } else if let reddit {
+            result = try await reddit.perform(action, account: accountID)
+        } else {
+            throw RedditClientError.authenticationRequired
+        }
+        guard result.succeeded else {
+            throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not complete this action."])
+        }
+        await UserProfileCache.shared.remove(for: accountID)
+        guard isCurrentAccount(accountID, generation: generation),
+              userProfile?.reference.username.caseInsensitiveCompare(username) == .orderedSame else { return }
+        switch action {
+        case .follow(_, let following): userProfile?.isFollowing = following
+        case .block(_, let blocked): userProfile?.isBlocked = blocked
+        default: break
         }
     }
 
@@ -2097,4 +2190,89 @@ final class OctonautFeatureStore {
     }
 
     static let preview = OctonautFeatureStore()
+}
+
+
+@MainActor
+@Observable
+final class BlockedUsersSettingsModel {
+    private let reddit: any RedditClient
+    private var accountID: AccountID?
+    private var context = ""
+    private var revision = UUID()
+    private(set) var users: [UserReference] = []
+    private(set) var isLoading = false
+    private(set) var isUpdating = false
+    private(set) var errorMessage: String?
+    private(set) var needsLogin = false
+
+    init(reddit: any RedditClient) { self.reddit = reddit }
+
+    static func normalizedUsername(_ input: String) -> String? {
+        var username = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if username.lowercased().hasPrefix("u/") { username.removeFirst(2) }
+        return OctonautUserDestination.route(for: username) == nil ? nil : username
+    }
+
+    func load(accountID: AccountID?, context: String) async {
+        let changed = self.accountID != accountID || self.context != context
+        if !changed && isUpdating { return }
+        if changed { users = []; isUpdating = false }
+        self.accountID = accountID
+        self.context = context
+        revision = UUID()
+        let request = revision
+        errorMessage = nil
+        needsLogin = accountID == nil
+        guard let accountID else { isLoading = false; return }
+        isLoading = true
+        defer { if revision == request { isLoading = false } }
+        do {
+            var collected: [UserReference] = []
+            var after: String?
+            var cursors = Set<String>()
+            repeat {
+                let page = try await reddit.blockedUsers(after: after, account: accountID)
+                guard revision == request, !Task.isCancelled else { return }
+                collected.append(contentsOf: page.items)
+                after = page.after
+                if let after, !cursors.insert(after).inserted { throw RedditClientError.malformedResponse }
+            } while after != nil
+            var seen = Set<String>()
+            users = collected.filter { seen.insert($0.id).inserted }.sorted { $0.id < $1.id }
+        } catch {
+            guard revision == request, !Task.isCancelled else { return }
+            record(error)
+        }
+    }
+
+    func setBlocked(_ blocked: Bool, username: String) async -> Bool {
+        guard let accountID, !isLoading, !isUpdating,
+              let username = Self.normalizedUsername(username) else { return false }
+        let request = revision
+        isUpdating = true
+        errorMessage = nil
+        defer { if revision == request { isUpdating = false } }
+        do {
+            let result = try await reddit.perform(.block(username: username, blocked: blocked), account: accountID)
+            guard result.succeeded else {
+                throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not update the block list."])
+            }
+            await UserProfileCache.shared.remove(for: accountID)
+            guard revision == request, !Task.isCancelled else { return false }
+            users.removeAll { $0.id == username.lowercased() }
+            if blocked { users.append(UserReference(username: username)) }
+            users.sort { $0.id < $1.id }
+            return true
+        } catch {
+            guard revision == request, !Task.isCancelled else { return false }
+            record(error)
+            return false
+        }
+    }
+
+    private func record(_ error: Error) {
+        needsLogin = error as? RedditClientError == .authenticationRequired
+        errorMessage = error.localizedDescription
+    }
 }

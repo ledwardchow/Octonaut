@@ -191,9 +191,27 @@ struct OctonautVoteControls: View {
     }
 }
 
+struct OctonautUsernameLink: View {
+    let username: String
+
+    var body: some View {
+        if let route = OctonautUserDestination.route(for: username) {
+            NavigationLink(value: route) {
+                Text("u/\(username)")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open profile for u/\(username)")
+        } else {
+            Text("[deleted]")
+        }
+    }
+}
+
 struct OctonautPostRow: View {
     @Environment(\.octonautTheme) private var theme
     @Environment(\.openURL) private var openURL
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var reportTarget: RedditReportTarget?
     let post: PostCardModel
     var bodyLineLimit: Int? = 4
     var showsFlair = true
@@ -216,7 +234,8 @@ struct OctonautPostRow: View {
                     .foregroundStyle(theme.tertiaryText)
                 communityLabel
                 if !post.author.isEmpty {
-                    Text("• u/\(post.author)").font(.caption).foregroundStyle(theme.secondaryText)
+                    Text("•").font(.caption).foregroundStyle(theme.secondaryText)
+                    OctonautUsernameLink(username: post.author).font(.caption).foregroundStyle(theme.secondaryText)
                     if let authorFlair = post.authorFlair {
                         OctonautUserFlairPill(flair: authorFlair)
                     }
@@ -274,7 +293,9 @@ struct OctonautPostRow: View {
         .accessibilityLabel(
             "r/\(post.community), \(post.title), \(post.score) points, \(post.comments) comments"
         )
+        .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .contextMenu {
+            Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
             Button {
                 onVote?(1)
             } label: {
@@ -426,6 +447,8 @@ private extension View {
 
 struct OctonautCompactPostRow: View {
     @Environment(\.octonautTheme) private var theme
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var reportTarget: RedditReportTarget?
     let post: PostCardModel
     var thumbnailOnRight = false
     var showsFlair = true
@@ -447,7 +470,8 @@ struct OctonautCompactPostRow: View {
                 }
                 HStack(spacing: 3) {
                     communityLabel
-                    Text("• \(post.author.isEmpty ? "deleted" : "u/\(post.author)")")
+                    Text("•")
+                    OctonautUsernameLink(username: post.author)
                         .font(.caption)
                         .foregroundStyle(theme.secondaryText)
                     if let authorFlair = post.authorFlair, !post.author.isEmpty {
@@ -476,7 +500,9 @@ struct OctonautCompactPostRow: View {
         .accessibilityLabel(
             "\(post.isSensitive ? "Sensitive media. " : "")r/\(post.community), \(post.title), \(post.score) points, \(post.comments) comments"
         )
+        .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .contextMenu {
+            Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
             Button {
                 onVote?(1)
             } label: {
@@ -665,6 +691,7 @@ private struct OctonautCommunityIcon: View {
 
 struct OctonautCommentRow: View {
     @Environment(\.octonautTheme) private var theme
+    var onReport: (() -> Void)?
     let comment: CommentCardModel
     var postAuthor = ""
     var onCollapse: (() -> Void)?
@@ -677,27 +704,27 @@ struct OctonautCommentRow: View {
                 .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
                 .frame(width: 3)
             VStack(alignment: .leading, spacing: 7) {
-                Button(action: { onCollapse?() }) {
-                    HStack(spacing: 6) {
+                HStack(spacing: 6) {
+                    Button(action: { onCollapse?() }) {
                         Image(systemName: comment.isCollapsed ? "chevron.right" : "chevron.down")
                             .font(.caption.weight(.bold))
-                        Text(comment.author.isEmpty ? "[deleted]" : "u/\(comment.author)")
-                            .font(.caption.weight(.semibold))
-                        if comment.isOriginalPoster(postAuthor: postAuthor) {
-                            OctonautPill(title: "OP", color: theme.accent)
-                        }
-                        if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
-                            OctonautUserFlairPill(flair: authorFlair)
-                        }
-                        if comment.isModerator { OctonautPill(title: "MOD", color: theme.moderator) }
-                        Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
-                        Spacer()
+                            .frame(minWidth: 24, minHeight: 28)
                     }
-                    .foregroundStyle(theme.primaryText)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
+                    OctonautUsernameLink(username: comment.author)
+                        .font(.caption.weight(.semibold))
+                    if comment.isOriginalPoster(postAuthor: postAuthor) {
+                        OctonautPill(title: "OP", color: theme.accent)
+                    }
+                    if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
+                        OctonautUserFlairPill(flair: authorFlair)
+                    }
+                    if comment.isModerator { OctonautPill(title: "MOD", color: theme.moderator) }
+                    Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
+                .foregroundStyle(theme.primaryText)
                 if !comment.isCollapsed {
                     if !comment.body.isEmpty {
                         RedditMarkdownView(source: comment.body)
@@ -732,6 +759,7 @@ struct OctonautCommentRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityValue("Depth \(comment.depth), \(comment.isCollapsed ? "collapsed" : "expanded")")
         .contextMenu {
+            if let onReport { Button("Report", systemImage: "flag", action: onReport) }
             Button {
                 onVote?(1)
             } label: {

@@ -17,12 +17,14 @@ struct SettingsRootView: View {
             }
             Section {
                 NavigationLink(value: FeatureRoute.settings(.account)) { Label("Account", systemImage: "person.crop.circle") }
+                NavigationLink(value: FeatureRoute.settings(.blockedUsers)) { Label("Blocked Users", systemImage: "person.crop.circle.badge.xmark") }
                 NavigationLink(value: FeatureRoute.settings(.dataUse)) { Label("Data Use", systemImage: "antenna.radiowaves.left.and.right") }
                 NavigationLink(value: FeatureRoute.settings(.statistics)) { Label("Statistics", systemImage: "chart.bar") }
             }
             Section {
                 NavigationLink(value: FeatureRoute.settings(.advanced)) { Label("Advanced", systemImage: "wrench.and.screwdriver") }
                 NavigationLink(value: FeatureRoute.settings(.about)) { Label("About Octonaut", systemImage: "info.circle") }
+                LegalDocumentLinks()
             }
             Section {
                 Text("Octonaut keeps preferences, drafts, filters, summaries, and statistics on this device. Reddit session secrets are stored in Keychain.")
@@ -55,28 +57,7 @@ struct SettingsDetailView: View {
     @State private var apiKeyMessage: String?
 
     var body: some View {
-        Form {
-            switch destination {
-            case .general:
-                general
-            case .theme:
-                theme
-            case .appearance:
-                appearance
-            case .intelligence:
-                intelligence
-            case .account:
-                account
-            case .dataUse:
-                dataUse
-            case .statistics:
-                statistics
-            case .advanced:
-                advanced
-            case .about:
-                about
-            }
-        }
+        settingsContent
         .formStyle(.grouped)
         .navigationTitle(destination.title)
         .confirmationDialog("Reset statistics?", isPresented: $showingReset, titleVisibility: .visible) {
@@ -116,6 +97,38 @@ struct SettingsDetailView: View {
         .onChange(of: dependencies.settings.configurationRevision) { _, _ in
             guard destination == .intelligence else { return }
             Task { summaryAvailability = await dependencies.intelligence.summaryAvailability }
+        }
+    }
+
+    @ViewBuilder
+    private var settingsContent: some View {
+        if destination == .blockedUsers {
+            BlockedUsersSettingsContent(reddit: dependencies.reddit)
+        } else {
+            Form {
+                switch destination {
+                case .general:
+                    general
+                case .theme:
+                    theme
+                case .appearance:
+                    appearance
+                case .intelligence:
+                    intelligence
+                case .account:
+                    account
+                case .blockedUsers:
+                    EmptyView()
+                case .dataUse:
+                    dataUse
+                case .statistics:
+                    statistics
+                case .advanced:
+                    advanced
+                case .about:
+                    about
+                }
+            }
         }
     }
 
@@ -468,4 +481,117 @@ private struct AppResetNotice: Identifiable {
     let id = UUID()
     let title: String
     let message: String
+}
+
+
+@MainActor
+private struct BlockedUsersSettingsContent: View {
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var model: BlockedUsersSettingsModel
+    @State private var username = ""
+    @State private var pendingAction: BlockedUserAction?
+    @State private var showingLogin = false
+
+    init(reddit: any RedditClient) {
+        _model = State(initialValue: BlockedUsersSettingsModel(reddit: reddit))
+    }
+
+    private var accountContext: String {
+        "\(dependencies.accounts.selectedAccountID?.rawValue.uuidString ?? "anonymous"):\(dependencies.accounts.selectionGeneration)"
+    }
+    private var accountID: AccountID? {
+        dependencies.accounts.selectedAccount?.health == .healthy ? dependencies.accounts.selectedAccountID : nil
+    }
+    private var newUsername: String? { BlockedUsersSettingsModel.normalizedUsername(username) }
+    private var busy: Bool { model.isLoading || model.isUpdating }
+
+    var body: some View {
+        Form {
+            Section {
+                if let account = dependencies.accounts.selectedAccount {
+                    Text("Block list for u/\(account.username)")
+                }
+                Text("These changes apply to your Reddit account.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if accountID == nil || model.needsLogin {
+                Section {
+                    Text("Sign in to view and manage blocked users.")
+                    Button("Sign In") { showingLogin = true }
+                }
+            } else {
+                Section("Add a blocked user") {
+                    TextField("Username or u/username", text: $username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .disabled(busy)
+                    Button("Block User", role: .destructive) {
+                        if let newUsername { pendingAction = BlockedUserAction(username: newUsername, blocked: true) }
+                    }
+                    .disabled(busy || newUsername == nil
+                              || newUsername?.caseInsensitiveCompare(dependencies.accounts.selectedAccount?.username ?? "") == .orderedSame
+                              || model.users.contains { $0.id == newUsername?.lowercased() })
+                }
+                Section("Blocked users (\(model.users.count))") {
+                    if model.isLoading { ProgressView("Loading blocked users…") }
+                    if model.isUpdating { ProgressView("Updating block list…") }
+                    if model.users.isEmpty && !model.isLoading && model.errorMessage == nil {
+                        Text("No blocked users.").foregroundStyle(.secondary)
+                    }
+                    ForEach(model.users) { user in
+                        HStack {
+                            OctonautUsernameLink(username: user.username)
+                            Spacer()
+                            Button("Unblock") {
+                                pendingAction = BlockedUserAction(username: user.username, blocked: false)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(busy)
+                            .accessibilityLabel("Unblock u/\(user.username)")
+                        }
+                    }
+                    Button("Refresh") { Task { await reload() } }.disabled(busy)
+                }
+            }
+            if let error = model.errorMessage {
+                Section {
+                    Text(error).foregroundStyle(.secondary)
+                    Button("Retry") { Task { await reload() } }.disabled(busy)
+                }
+            }
+        }
+        .task(id: accountContext) {
+            username = ""
+            pendingAction = nil
+            await reload()
+        }
+        .sheet(isPresented: $showingLogin) {
+            RedditLoginView(accounts: dependencies.accounts)
+        }
+        .confirmationDialog(
+            pendingAction.map { "\($0.blocked ? "Block" : "Unblock") u/\($0.username)?" } ?? "Update block list?",
+            isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } }),
+            titleVisibility: .visible
+        ) {
+            if let action = pendingAction {
+                Button(action.blocked ? "Block User" : "Unblock User", role: action.blocked ? .destructive : nil) {
+                    Task {
+                        if await model.setBlocked(action.blocked, username: action.username), action.blocked {
+                            username = ""
+                        }
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingAction = nil }
+        }
+    }
+
+    private func reload() async {
+        await model.load(accountID: accountID, context: accountContext)
+    }
+}
+
+private struct BlockedUserAction {
+    let username: String
+    let blocked: Bool
 }

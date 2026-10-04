@@ -4,6 +4,7 @@ import WebKit
 struct RedditLoginView: View {
     let accounts: AccountCoordinator
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(LegalDocuments.acceptedVersionKey) private var acceptedConsentVersion = ""
     @State private var model: RedditLoginModel
 
     init(accounts: AccountCoordinator) {
@@ -14,7 +15,9 @@ struct RedditLoginView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if case .succeeded(let username) = model.state {
+                if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
+                    LoginConsentView { acceptedConsentVersion = LegalDocuments.consentVersion }
+                } else if case .succeeded(let username) = model.state {
                     ContentUnavailableView("Signed in as u/\(username)", systemImage: "checkmark.circle.fill", description: Text("This Reddit session is saved securely on this device."))
                 } else {
                     RedditLoginWebView(model: model)
@@ -27,7 +30,7 @@ struct RedditLoginView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
             }
-            .navigationTitle("Sign in to Reddit")
+            .navigationTitle(LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
