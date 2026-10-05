@@ -399,6 +399,7 @@ struct UserProfileView: View {
                     NavigationLink(value: FeatureRoute.post(post)) {
                         OctonautCompactPostRow(
                             post: post,
+                            onUserOpen: { router.push($0) },
                             showsFlair: dependencies.settings.showPostFlair,
                             blursNSFW: dependencies.settings.blurNSFWMedia,
                             blursSpoilers: dependencies.settings.blurSpoilers
@@ -499,6 +500,7 @@ private struct UserCommentProfileRow: View {
 /// first cannot replace what is underneath it.
 @MainActor
 struct UserSectionView: View {
+    let router: OctonautFeatureRouter
     let username: String
     let section: UserSection
     let store: OctonautFeatureStore
@@ -599,6 +601,7 @@ struct UserSectionView: View {
                 NavigationLink(value: FeatureRoute.post(post)) {
                     OctonautCompactPostRow(
                         post: post,
+                        onUserOpen: { router.push($0) },
                         showsFlair: dependencies.settings.showPostFlair,
                         blursNSFW: dependencies.settings.blurNSFWMedia,
                         blursSpoilers: dependencies.settings.blurSpoilers

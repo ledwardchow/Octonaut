@@ -47,6 +47,7 @@ struct PostDetailView: View {
             LazyVStack(alignment: .leading, spacing: 0) {
                 OctonautPostRow(
                     post: currentPost,
+                    onUserOpen: { router.push($0) },
                     bodyLineLimit: nil,
                     showsFlair: dependencies.settings.showPostFlair,
                     onVote: { performVote(postID: currentPost.id, value: $0) },

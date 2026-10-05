@@ -140,6 +140,7 @@ struct SearchRootView: View {
                 ForEach(model.posts) { post in
                     OctonautPostRow(
                         post: post,
+                        onUserOpen: { router.push($0) },
                         showsFlair: dependencies.settings.showPostFlair
                     )
                     .fixedSize(horizontal: false, vertical: true)

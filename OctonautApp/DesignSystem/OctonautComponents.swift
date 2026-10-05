@@ -193,11 +193,23 @@ struct OctonautVoteControls: View {
 
 struct OctonautUsernameLink: View {
     let username: String
+    var onOpen: ((FeatureRoute) -> Void)?
 
     var body: some View {
         if let route = OctonautUserDestination.route(for: username) {
-            NavigationLink(value: route) {
-                Text("u/\(username)")
+            Group {
+                if let onOpen {
+                    Button {
+                        onOpen(route)
+                    } label: {
+                        Text("u/\(username)")
+                            .contentShape(Rectangle())
+                    }
+                } else {
+                    NavigationLink(value: route) {
+                        Text("u/\(username)")
+                    }
+                }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open profile for u/\(username)")
@@ -213,6 +225,7 @@ struct OctonautPostRow: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var reportTarget: RedditReportTarget?
     let post: PostCardModel
+    let onUserOpen: (FeatureRoute) -> Void
     var bodyLineLimit: Int? = 4
     var showsFlair = true
     var mediaPreloader: OctonautFeedMediaPreloader?
@@ -235,14 +248,15 @@ struct OctonautPostRow: View {
                 communityLabel
                 if !post.author.isEmpty {
                     Text("•").font(.caption).foregroundStyle(theme.secondaryText)
-                    OctonautUsernameLink(username: post.author).font(.caption).foregroundStyle(theme.secondaryText)
-                    if let authorFlair = post.authorFlair {
-                        OctonautUserFlairPill(flair: authorFlair)
-                    }
+                    OctonautUsernameLink(username: post.author, onOpen: onUserOpen).font(.caption).foregroundStyle(theme.secondaryText)
                 }
                 Spacer()
                 if post.isSticky { OctonautPill(title: "Pinned", color: theme.moderator) }
                 if post.isNSFW { OctonautPill(title: "18+", color: theme.destructive) }
+            }
+            .lineLimit(1)
+            if let authorFlair = post.authorFlair, !post.author.isEmpty {
+                OctonautUserFlairPill(flair: authorFlair)
             }
             postTitle
             if showsFlair, let flair = post.flair {
@@ -450,6 +464,7 @@ struct OctonautCompactPostRow: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var reportTarget: RedditReportTarget?
     let post: PostCardModel
+    let onUserOpen: (FeatureRoute) -> Void
     var thumbnailOnRight = false
     var showsFlair = true
     var blursNSFW = true
@@ -471,14 +486,14 @@ struct OctonautCompactPostRow: View {
                 HStack(spacing: 3) {
                     communityLabel
                     Text("•")
-                    OctonautUsernameLink(username: post.author)
+                    OctonautUsernameLink(username: post.author, onOpen: onUserOpen)
                         .font(.caption)
                         .foregroundStyle(theme.secondaryText)
-                    if let authorFlair = post.authorFlair, !post.author.isEmpty {
-                        OctonautUserFlairPill(flair: authorFlair)
-                    }
                 }
                 .lineLimit(1)
+                if let authorFlair = post.authorFlair, !post.author.isEmpty {
+                    OctonautUserFlairPill(flair: authorFlair)
+                }
                 HStack(spacing: 10) {
                     Text("↑ \(post.score.formatted())")
                     Text("💬 \(post.comments.formatted())")

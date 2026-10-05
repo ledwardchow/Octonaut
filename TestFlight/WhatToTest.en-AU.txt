@@ -1,7 +1,9 @@
 Changes in current build:
-Fix: Some videos didn't play its audio
+Fix: user profile tap zone is too big on post cards
+Fix: user flair would cause subreddit/user display to compress multiline
 
 Changes in previous builds:
+Fix: Some videos didn't play its audio
 Posts with lots of text content now trim correctly 
 You can now comment on posts without any comments
 Build 30:
