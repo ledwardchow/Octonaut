@@ -3,6 +3,75 @@ import XCTest
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testConcurrentAnonymousRequestsShareCookieBootstrap() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [200], delaySeed: true)
+        let client = makeAnonymousBootstrapClient()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<3 {
+                group.addTask {
+                    _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+                }
+            }
+            try await group.waitForAll()
+        }
+        XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 1)
+        XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
+        let seed = try XCTUnwrap(AnonymousBootstrapProtocol.seedRequests.first)
+        XCTAssertEqual(seed.url?.absoluteString, "https://old.reddit.com/")
+        XCTAssertEqual(seed.httpMethod, "HEAD")
+        XCTAssertNil(seed.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertNil(seed.value(forHTTPHeaderField: "X-Modhash"))
+    }
+
+    func testSuccessfulAnonymousBootstrapIsSkippedOnLaterRequests() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
+        let client = makeAnonymousBootstrapClient()
+        for _ in 0..<3 {
+            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        }
+        XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 1)
+        XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
+    }
+
+    func testRefusedAnonymousBootstrapRetriesThenStopsAfterSuccess() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [403, 200])
+        let client = makeAnonymousBootstrapClient()
+        for _ in 0..<3 {
+            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        }
+        XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
+        XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
+    }
+
+    func testTransportFailureDuringAnonymousBootstrapCanRetry() async throws {
+        // A nil status returns a synthetic transport error.
+        AnonymousBootstrapProtocol.reset(seedStatuses: [nil, 200])
+        let client = makeAnonymousBootstrapClient()
+        for _ in 0..<3 {
+            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        }
+        XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
+    }
+
+    func testAuthenticatedSearchDoesNotBootstrapAnonymousCookies() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
+        let account = AccountID()
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
+        let client = makeAnonymousBootstrapClient(vault: vault)
+        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
+        XCTAssertTrue(AnonymousBootstrapProtocol.seedRequests.isEmpty)
+        XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.first?.value(forHTTPHeaderField: "Cookie"),
+                       "reddit_session=synthetic-session")
+    }
+
+    private func makeAnonymousBootstrapClient(
+        vault: InMemoryCredentialVault = InMemoryCredentialVault()
+    ) -> URLSessionRedditClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AnonymousBootstrapProtocol.self]
+        return URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
+    }
+
     func testCustomFeedsStayInCloudWhenUserLogsOutAndReturnForSameUsername() async throws {
         let dependencies = AppDependencies.preview()
         let settings = dependencies.settings
@@ -971,4 +1040,64 @@ private final class MemoryFeedCloud: CustomFeedCloudStore {
     func set(_ data: Data, forKey key: String) { values[key] = data }
     func removeObject(forKey key: String) { values.removeValue(forKey: key) }
     func synchronize() -> Bool { true }
+}
+
+/// Intercepts every request, including the cookie seed. Never contacts Reddit.
+private final class AnonymousBootstrapProtocol: URLProtocol, @unchecked Sendable {
+    private final class Storage: @unchecked Sendable {
+        let lock = NSLock()
+        var requests: [URLRequest] = []
+        var seedStatuses: [Int?] = []
+        var delaySeed = false
+    }
+    private static let storage = Storage()
+
+    static func reset(seedStatuses: [Int?], delaySeed: Bool = false) {
+        storage.lock.lock()
+        defer { storage.lock.unlock() }
+        storage.requests = []
+        storage.seedStatuses = seedStatuses
+        storage.delaySeed = delaySeed
+    }
+
+    private static var requests: [URLRequest] {
+        storage.lock.lock()
+        defer { storage.lock.unlock() }
+        return storage.requests
+    }
+    static var seedRequests: [URLRequest] { requests.filter { $0.url?.path == "/" } }
+    static var jsonRequests: [URLRequest] { requests.filter { $0.url?.path != "/" } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let isSeed = request.url?.path == "/"
+        Self.storage.lock.lock()
+        Self.storage.requests.append(request)
+        let status: Int? = isSeed && !Self.storage.seedStatuses.isEmpty
+            ? Self.storage.seedStatuses.removeFirst() : 200
+        let delaySeed = Self.storage.delaySeed
+        Self.storage.lock.unlock()
+        if isSeed && delaySeed {
+            // Keep the seed in flight while concurrent searches enter the actor.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { self.respond(status: status, isSeed: true) }
+        } else {
+            respond(status: status, isSeed: isSeed)
+        }
+    }
+
+    private func respond(status: Int?, isSeed: Bool) {
+        guard let status else {
+            client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost))
+            return
+        }
+        let data = isSeed ? Data()
+            : Data(#"{"data":{"children":[],"after":null,"before":null}}"#.utf8)
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status,
+                            httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
