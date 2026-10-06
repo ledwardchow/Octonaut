@@ -1299,9 +1299,21 @@ struct OctonautVideoPlayer: View {
 struct OctonautSystemIsolatedVideoPlayer: UIViewControllerRepresentable {
     let player: AVPlayer
     var showsPlaybackControls = true
+    /// Whether AVKit may analyse frames for text and subjects.
+    ///
+    /// Off by default because its button is placed by the system in the
+    /// bottom trailing corner, with no API to move it -- where it lands
+    /// underneath the feed's own mute control. In a scrolling feed the
+    /// analysis is noise anyway; full screen it is worth having, and there
+    /// is room for it.
+    var allowsFrameAnalysis = false
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        Self.makeViewController(player: player, showsPlaybackControls: showsPlaybackControls)
+        Self.makeViewController(
+            player: player,
+            showsPlaybackControls: showsPlaybackControls,
+            allowsFrameAnalysis: allowsFrameAnalysis
+        )
     }
 
     func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
@@ -1309,6 +1321,7 @@ struct OctonautSystemIsolatedVideoPlayer: UIViewControllerRepresentable {
         controller.showsPlaybackControls = showsPlaybackControls
         controller.updatesNowPlayingInfoCenter = false
         controller.allowsPictureInPicturePlayback = false
+        controller.allowsVideoFrameAnalysis = allowsFrameAnalysis
     }
 
     static func dismantleUIViewController(_ controller: AVPlayerViewController, coordinator: Void) {
@@ -1317,13 +1330,15 @@ struct OctonautSystemIsolatedVideoPlayer: UIViewControllerRepresentable {
 
     static func makeViewController(
         player: AVPlayer,
-        showsPlaybackControls: Bool
+        showsPlaybackControls: Bool,
+        allowsFrameAnalysis: Bool = false
     ) -> AVPlayerViewController {
         let controller = AVPlayerViewController()
         controller.player = player
         controller.showsPlaybackControls = showsPlaybackControls
         controller.updatesNowPlayingInfoCenter = false
         controller.allowsPictureInPicturePlayback = false
+        controller.allowsVideoFrameAnalysis = allowsFrameAnalysis
         return controller
     }
 }
@@ -1610,6 +1625,7 @@ struct OctonautMediaViewer: View {
                                                 audioURL: post.audioURL,
                                                 loops: post.mediaKind == "gif",
                                                 startsMuted: post.mediaKind == "gif",
+                                                allowsFrameAnalysis: dependencies.settings.enableLiveText,
                                                 onPlayerChange: { activePlayer = $0 }
                                             )
                                         } else if post.mediaKind == "embeddedVideo",
@@ -2052,6 +2068,9 @@ struct OctonautVideoDetailView: View {
     var showsSystemControls = false
     /// GIFs carry no audio track; real videos should open audible.
     var startsMuted = false
+    /// The reader's Live Text preference, which had no effect anywhere until
+    /// it reached AVKit's frame analysis.
+    var allowsFrameAnalysis = true
     var onPlayerChange: ((AVPlayer?) -> Void)?
     @State private var player: AVPlayer?
     @State private var looper = OctonautVideoLooper()
@@ -2067,7 +2086,8 @@ struct OctonautVideoDetailView: View {
             if let player {
                 OctonautSystemIsolatedVideoPlayer(
                     player: player,
-                    showsPlaybackControls: showsSystemControls
+                    showsPlaybackControls: showsSystemControls,
+                    allowsFrameAnalysis: allowsFrameAnalysis
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .topLeading) {
