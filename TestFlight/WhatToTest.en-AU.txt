@@ -41,6 +41,7 @@ Semantic filter works with its default rule.
 Private, banned and quarantined communities now say so.
 "Continue this thread" now opens the rest of the thread.
 Inbox now loads older messages as you scroll.
+Report to Reddit for breaking Reddit's rules.
 
 Changes in previous builds:
 Fix: user profile tap zone is too big on post cards

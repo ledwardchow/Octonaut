@@ -53,12 +53,12 @@ protocol RedditClient: Sendable {
         after: String?,
         account: AccountID?
     ) async throws -> Listing<UserComment>
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule]
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult
 }
 
 extension RedditClient {
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
         throw UnavailableServiceError(service: "Reporting rules")
     }
 }
@@ -388,26 +388,36 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeUserComments(data)
     }
 
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
         guard RedditReportRule.validCommunity(community) else { throw RedditClientError.invalidURL }
         let data = try await requestData(
             method: "GET", path: "/r/\(community)/about/rules.json",
             query: [URLQueryItem(name: "raw_json", value: "1")], body: nil,
             account: account, retryable: true
         )
-        return try RedditReportRule.decode(data)
+        return RedditReportOptions(
+            rules: try RedditReportRule.decode(data),
+            siteReasons: RedditSiteReportReason.decode(data)
+        )
+    }
+
+    private func validateReport(fullname: String, community: String, reason: String, account: AccountID) async throws {
+        guard RedditReportTarget.validFullname(fullname), RedditReportRule.validCommunity(community),
+              !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 100 else {
+            throw RedditClientError.invalidResponse
+        }
+        guard let credential = try await credentialVault.credential(for: account),
+              let modhash = credential.modhash, !modhash.isEmpty else {
+            throw RedditClientError.authenticationRequired
+        }
     }
 
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {
         if case .report(let fullname, let community, let reason) = action {
-            guard RedditReportTarget.validFullname(fullname), RedditReportRule.validCommunity(community),
-                  !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 100 else {
-                throw RedditClientError.invalidResponse
-            }
-            guard let credential = try await credentialVault.credential(for: account),
-                  let modhash = credential.modhash, !modhash.isEmpty else {
-                throw RedditClientError.authenticationRequired
-            }
+            try await validateReport(fullname: fullname, community: community, reason: reason, account: account)
+        }
+        if case .reportSiteRule(let fullname, let community, let reason) = action {
+            try await validateReport(fullname: fullname, community: community, reason: reason, account: account)
         }
         var request = Self.mutationRequest(for: action)
         if case .block(_, false) = action {
@@ -436,7 +446,10 @@ actor URLSessionRedditClient: RedditClient {
             account: account,
             retryable: false
         )
-        if case .report = action { return try RedditReportRule.decodeSubmission(data) }
+        switch action {
+        case .report, .reportSiteRule: return try RedditReportRule.decodeSubmission(data)
+        default: break
+        }
         if data.isEmpty { return ActionResult(succeeded: true) }
         return try RedditJSONCodec.decodeActionResult(data)
     }
@@ -694,6 +707,10 @@ actor URLSessionRedditClient: RedditClient {
         switch action {
         case .report(let fullname, let community, let reason):
             return ("POST", "/api/report", [], ["thing_id": fullname, "sr_name": community, "reason": reason, "rule_reason": reason, "api_type": "json", "strict_freeform_reports": "true"])
+        case .reportSiteRule(let fullname, let community, let reason):
+            // Mirrors the community-rule request with Reddit's site_reason field. Strict mode
+            // makes Reddit reject an unrecognised reason instead of filing it as free text.
+            return ("POST", "/api/report", [], ["thing_id": fullname, "sr_name": community, "reason": reason, "site_reason": reason, "api_type": "json", "strict_freeform_reports": "true"])
         case .vote(let fullname, let direction):
             return ("POST", "/api/vote", [], ["id": fullname, "dir": String(max(-1, min(direction, 1)))])
         case .save(let fullname, let saved):

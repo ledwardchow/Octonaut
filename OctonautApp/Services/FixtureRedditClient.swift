@@ -181,8 +181,11 @@ actor FixtureRedditClient: RedditClient {
         Listing(items: [])
     }
 
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
-        [RedditReportRule(shortName: "Test report", violationReason: "Test report", kind: "all")]
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
+        RedditReportOptions(
+            rules: [RedditReportRule(shortName: "Test report", violationReason: "Test report", kind: "all")],
+            siteReasons: [RedditSiteReportReason(label: "This is spam", reasonText: "This is spam", handling: .report)]
+        )
     }
 
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {

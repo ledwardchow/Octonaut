@@ -316,6 +316,8 @@ struct ListingRequest: Hashable, Codable, Sendable {
 
 enum RedditAction: Hashable, Codable, Sendable {
     case report(fullname: String, community: String, reason: String)
+    /// A Reddit-wide reason from `site_rules_flow`, reviewed by Reddit rather than the community's moderators.
+    case reportSiteRule(fullname: String, community: String, reason: String)
     case vote(fullname: String, direction: Int)
     case save(fullname: String, saved: Bool)
     case hide(fullname: String, hidden: Bool)

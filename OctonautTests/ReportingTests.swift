@@ -21,6 +21,48 @@ final class ReportingTests: XCTestCase {
         XCTAssertEqual(request.fields["api_type"], "json")
     }
 
+    func testSiteReportReasonsFlattenRedditFlow() throws {
+        let data = Data(#"""
+        {"rules": [], "site_rules": ["Spam"], "site_rules_flow": [
+          {"reasonTextToShow": "This is spam", "reasonText": "This is spam"},
+          {"nextStepHeader": "In what way?", "reasonTextToShow": "This is abusive or harassing", "reasonText": "", "nextStepReasons": [
+            {"nextStepHeader": "Who?", "reasonTextToShow": "It's targeted harassment", "reasonText": "", "nextStepReasons": [
+              {"reasonTextToShow": "At me", "reasonText": "It's targeted harassment at me"}]}]},
+          {"nextStepHeader": "What issue?", "reasonTextToShow": "Other issues", "reasonText": "", "nextStepReasons": [
+            {"reasonTextToShow": "It infringes my copyright", "reasonText": "It infringes my copyright", "fileComplaint": true,
+             "complaintUrl": "https://www.reddit.com/api/report_redirect?thing=%25%28thing%29s&amp;reason_code=COPYRIGHT&amp;feature=from_r2"},
+            {"reasonTextToShow": "Phishing", "reasonText": "Phishing", "fileComplaint": true, "complaintUrl": "https://example.com/form"},
+            {"reasonTextToShow": "Someone is considering suicide or serious self-harm.", "reasonText": "Someone is considering suicide or serious self-harm.", "canSpecifyUsernames": true, "requestCrisisSupport": true}]}]}
+        """#.utf8)
+        let reasons = RedditSiteReportReason.decode(data)
+        XCTAssertEqual(reasons.map(\.label), [
+            "This is spam",
+            "This is abusive or harassing › It's targeted harassment › At me",
+            "Other issues › It infringes my copyright",
+            "Other issues › Someone is considering suicide or serious self-harm."
+        ])
+        XCTAssertEqual(reasons[1].reasonText, "It's targeted harassment at me")
+        XCTAssertEqual(reasons[0].handling, .report)
+        XCTAssertEqual(reasons[3].handling, .browser)
+        guard case .complaint(let template) = reasons[2].handling else { return XCTFail("Expected a complaint link") }
+        XCTAssertEqual(
+            RedditSiteReportReason.complaintURL(template, fullname: "t3_abc")?.absoluteString,
+            "https://www.reddit.com/api/report_redirect?thing=t3_abc&reason_code=COPYRIGHT&feature=from_r2"
+        )
+        XCTAssertTrue(RedditSiteReportReason.decode(Data(#"{"rules":[]}"#.utf8)).isEmpty)
+    }
+
+    func testSiteRuleReportUsesSiteReasonField() {
+        let request = URLSessionRedditClient.mutationRequest(
+            for: .reportSiteRule(fullname: "t3_abc", community: "test", reason: "This is spam"))
+        XCTAssertEqual(request.path, "/api/report")
+        XCTAssertEqual(request.fields["thing_id"], "t3_abc")
+        XCTAssertEqual(request.fields["reason"], "This is spam")
+        XCTAssertEqual(request.fields["site_reason"], "This is spam")
+        XCTAssertNil(request.fields["rule_reason"])
+        XCTAssertEqual(request.fields["strict_freeform_reports"], "true")
+    }
+
     func testReportResponseRequiresExplicitJSONEnvelope() throws {
         XCTAssertTrue(try RedditReportRule.decodeSubmission(Data(#"{"json":{"errors":[]}}"#.utf8)).succeeded)
         let rejected = try RedditReportRule.decodeSubmission(Data(#"{"json":{"errors":[["FREE_FORM_REPORTS_NOT_ALLOWED","Choose a community rule","reason"]]}}"#.utf8))
