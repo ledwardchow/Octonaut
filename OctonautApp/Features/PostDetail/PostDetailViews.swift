@@ -427,6 +427,10 @@ struct GalleryView: View {
                     .padding()
                 } else if store.feedState == .loading || store.feedState == .idle {
                     ProgressView("Loading gallery").padding()
+                } else if store.nextPageError != nil, store.galleryPageCursor(for: descriptor) != nil {
+                    Button("Couldn't load more. Retry") { Task { await store.loadMorePosts(for: descriptor) } }
+                        .buttonStyle(.bordered)
+                        .padding()
                 } else if store.galleryPageCursor(for: descriptor) != nil {
                     ProgressView("Loading more")
                         .padding()

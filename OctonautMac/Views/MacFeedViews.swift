@@ -112,7 +112,17 @@ struct MacFeedListView: View {
                             }
                     }
 
-                    if store.feedState == .loaded,
+                    if store.feedState == .loaded, store.nextPageError != nil,
+                       store.galleryPageCursor(for: descriptor) != nil {
+                        VStack(spacing: 6) {
+                            Text("Couldn't load more posts").font(.subheadline.weight(.semibold))
+                            Text(store.nextPageError ?? "").font(.caption).foregroundStyle(.secondary)
+                            Button("Retry") { Task { await store.loadMorePosts(for: descriptor) } }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .listRowSeparator(.hidden)
+                    } else if store.feedState == .loaded,
                        let nextPage = store.galleryPageCursor(for: descriptor) {
                         ProgressView("Loading more posts…")
                             .frame(maxWidth: .infinity)

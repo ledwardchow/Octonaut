@@ -126,7 +126,11 @@ actor SemanticFilterEngine {
         for batch in stride(from: 0, to: inputs.count, by: max(1, batchSize)) {
             let end = min(batch + max(1, batchSize), inputs.count)
             let part = Array(inputs[batch..<end])
-            let uncached = part.filter { cache[cacheKey(for: $0, rule: rule)] == nil }
+            // Reddit can list the same post twice in one page; classify each post once.
+            var uncachedIDs = Set<String>()
+            let uncached = part.filter {
+                cache[cacheKey(for: $0, rule: rule)] == nil && uncachedIDs.insert($0.id).inserted
+            }
             var decisions = part.compactMap { cache[cacheKey(for: $0, rule: rule)] }
             if !uncached.isEmpty {
                 do {
@@ -143,7 +147,7 @@ actor SemanticFilterEngine {
                     continue
                 }
             }
-            let byID = Dictionary(uniqueKeysWithValues: decisions.map { ($0.itemID, $0) })
+            let byID = Dictionary(decisions.map { ($0.itemID, $0) }, uniquingKeysWith: { first, _ in first })
             results.append(contentsOf: part.compactMap { byID[$0.id] })
         }
         return results

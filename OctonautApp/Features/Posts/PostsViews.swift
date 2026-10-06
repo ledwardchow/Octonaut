@@ -9,6 +9,7 @@ struct PostsRootView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var communityQuery = ""
     @State private var editingFeed: CustomFeed?
+    @State private var feedToDelete: CustomFeed?
     @AppStorage("posts.sections.feeds.expanded") private var feedsExpanded = true
     @AppStorage("posts.sections.favorites.expanded") private var favoritesExpanded = true
     @AppStorage("posts.sections.communities.expanded") private var communitiesExpanded = true
@@ -29,10 +30,10 @@ struct PostsRootView: View {
                         feedLink(feed.descriptor, title: feed.name, systemImage: "rectangle.stack")
                             .contextMenu {
                                 Button("Edit Feed", systemImage: "pencil") { editingFeed = feed }
-                                Button("Delete Feed", systemImage: "trash", role: .destructive) { deleteFeed(feed) }
+                                Button("Delete Feed", systemImage: "trash", role: .destructive) { feedToDelete = feed }
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button("Delete", role: .destructive) { deleteFeed(feed) }
+                                Button("Delete", role: .destructive) { feedToDelete = feed }
                                 Button("Edit") { editingFeed = feed }.tint(.orange)
                             }
                     }
@@ -90,6 +91,17 @@ struct PostsRootView: View {
             }
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in editingFeed = nil }
+        .confirmationDialog(
+            "Delete \"\(feedToDelete?.name ?? "")\"?",
+            isPresented: Binding(get: { feedToDelete != nil }, set: { if !$0 { feedToDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: feedToDelete
+        ) { feed in
+            Button("Delete Feed", role: .destructive) { deleteFeed(feed) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This also removes it from your other devices through iCloud.")
+        }
         .sheet(item: $editingFeed) { feed in
             CustomFeedEditorView(feed: feed, communities: store.communities) { saved in
                 if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
@@ -357,6 +369,18 @@ struct FeedView: View {
                             HStack { Spacer(); ProgressView("Loading more…"); Spacer() }.padding()
                                 .listRowSeparator(.hidden)
                         }
+                        if let nextPageError = store.nextPageError {
+                            VStack(spacing: 8) {
+                                Text("Couldn't load more posts").font(.subheadline.weight(.semibold))
+                                Text(nextPageError).font(.caption).foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.center)
+                                Button("Retry") { Task { await store.loadMorePosts(for: descriptor) } }
+                                    .buttonStyle(.bordered)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .listRowSeparator(.hidden)
+                        }
                     }
                     .listStyle(.plain)
                     .safeAreaPadding(.bottom, 24)
@@ -532,8 +556,10 @@ struct FeedView: View {
             } label: {
                 Label("Mark Visible Seen", systemImage: "eye")
             }
-            ShareLink(item: URL(string: "https://www.reddit.com")!) {
-                Label("Share Feed", systemImage: "square.and.arrow.up")
+            if let shareURL = descriptor.shareURL {
+                ShareLink(item: shareURL) {
+                    Label("Share Feed", systemImage: "square.and.arrow.up")
+                }
             }
         } label: {
             Image(systemName: "ellipsis.circle")

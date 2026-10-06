@@ -64,6 +64,17 @@ final class SettingsTests: XCTestCase {
                        "reddit_session=synthetic-session")
     }
 
+    func testSearchQueryEncodesPlusSigns() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
+        let client = makeAnonymousBootstrapClient()
+        _ = try await client.search(RedditSearchRequest(query: "C++ & a=b \(UUID().uuidString)"), account: nil)
+
+        let url = try XCTUnwrap(AnonymousBootstrapProtocol.jsonRequests.first?.url)
+        XCTAssertTrue(url.absoluteString.contains("q=C%2B%2B%20%26%20a%3Db"), url.absoluteString)
+        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        XCTAssertTrue(query?.first { $0.name == "q" }?.value?.hasPrefix("C++ & a=b") == true)
+    }
+
     func testAnonymousCookiesAreNotSentWithAccountRequests() async throws {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200])
         let account = AccountID()

@@ -711,6 +711,23 @@ struct FeedDescriptorModel: Hashable, Sendable {
     static let home = FeedDescriptorModel(kind: .home, name: "Home")
     static let popular = FeedDescriptorModel(kind: .popular, name: "Popular")
     static let all = FeedDescriptorModel(kind: .all, name: "All")
+
+    /// The reddit.com page for this feed, or nil when it has no public URL.
+    var shareURL: URL? {
+        let path: String
+        switch kind {
+        case .home: path = "/"
+        case .popular: path = "/r/popular/"
+        case .all: path = "/r/all/"
+        case .community: path = "/r/\(name)/"
+        case .custom:
+            guard !communities.isEmpty else { return nil }
+            path = "/r/\(communities.joined(separator: "+"))/"
+        case .multireddit: return nil
+        }
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "https://www.reddit.com\(encoded)")
+    }
 }
 
 enum ComposerKind: String, CaseIterable, Identifiable, Hashable, Sendable {
@@ -1041,6 +1058,9 @@ final class OctonautFeatureStore {
     ]
     var comments = CommentCardModel.samples
     var feedState: OctonautLoadState = .loaded
+    /// Set when loading the next page fails after the client's own retries.
+    /// The loaded posts stay on screen and the feed footer offers a retry.
+    private(set) var nextPageError: String?
     var communitiesState: OctonautLoadState = .loaded
     var inboxState: OctonautLoadState = .loaded
     var searchText = ""
@@ -1198,6 +1218,7 @@ final class OctonautFeatureStore {
         if screenshotMode || Task.isCancelled { return }
         let requestID = UUID()
         feedRequestID = requestID
+        nextPageError = nil
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
         let sortSettingsRevision = settings?.feedSortPreferenceRevision
@@ -1763,6 +1784,7 @@ final class OctonautFeatureStore {
         }
 
         guard loadedFeed == descriptor, let nextPage else { return }
+        nextPageError = nil
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
         do {
@@ -1797,7 +1819,11 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            feedState = .failure(error)
+            if posts.isEmpty {
+                feedState = .failure(error)
+            } else {
+                nextPageError = error.localizedDescription
+            }
         }
     }
 

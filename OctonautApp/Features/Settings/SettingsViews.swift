@@ -45,6 +45,7 @@ struct SettingsDetailView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingReset = false
     @State private var showingAppReset = false
+    @State private var showingSettingsReset = false
     @State private var isResettingApp = false
     @State private var appResetNotice: AppResetNotice?
     @State private var imageCacheBytes = 0
@@ -65,6 +66,12 @@ struct SettingsDetailView: View {
                 Task { await resetStatistics() }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Reset settings to defaults?", isPresented: $showingSettingsReset, titleVisibility: .visible) {
+            Button("Reset Settings", role: .destructive) { dependencies.settings.resetToDefaults() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your accounts, drafts and custom feeds are kept.")
         }
         .confirmationDialog("Reset Octonaut?", isPresented: $showingAppReset, titleVisibility: .visible) {
             Button("Reset App", role: .destructive) {
@@ -402,7 +409,7 @@ struct SettingsDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Section("Reset") {
-                Button("Reset Settings to Defaults", role: .destructive) { dependencies.settings.resetToDefaults() }
+                Button("Reset Settings to Defaults", role: .destructive) { showingSettingsReset = true }
                 Button("Reset App", role: .destructive) { showingAppReset = true }
                     .disabled(isResettingApp)
                 Text("Removes accounts, Keychain credentials, drafts, preferences, caches, statistics, and synced custom feeds.")
@@ -428,6 +435,13 @@ struct SettingsDetailView: View {
 
     @State private var intelligenceAvailability: IntelligenceAvailability = .unsupported
 
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "Version \(version) (\(build))"
+    }
+
     private var about: some View {
         Section {
             VStack(spacing: 10) {
@@ -435,7 +449,7 @@ struct SettingsDetailView: View {
                 Text("Octonaut").font(.title2.weight(.bold))
                 Text("A native, local-first Reddit reader for Apple platforms.")
                     .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Text("Version 1.0").font(.caption).foregroundStyle(.tertiary)
+                Text(appVersion).font(.caption).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)

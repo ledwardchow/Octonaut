@@ -1026,6 +1026,7 @@ struct OctonautVideoPlayer: View {
     @State private var positionObserver: Any?
     @State private var failureObservers: [any NSObjectProtocol] = []
     @State private var recoveryAttempts = 0
+    @State private var stallCheck: Task<Void, Never>?
     @State private var recovery = OctonautPlaybackRecovery()
     @State private var muxOutcome: OctonautMuxOutcome = .notApplicable
     @State private var coordinator = OctonautPlaybackCoordinator.shared
@@ -1155,6 +1156,8 @@ struct OctonautVideoPlayer: View {
                 coordinator.record(player.currentTime().seconds, for: url)
             }
             player?.pause()
+            stallCheck?.cancel()
+            stallCheck = nil
             recovery.cancel()
             removePositionObserver()
             removeFailureObservers()
@@ -1195,6 +1198,8 @@ struct OctonautVideoPlayer: View {
     }
 
     private func teardownPlayer() {
+        stallCheck?.cancel()
+        stallCheck = nil
         recovery.cancel()
         removePositionObserver()
         removeFailureObservers()
@@ -1212,7 +1217,8 @@ struct OctonautVideoPlayer: View {
     /// prepared copy is dropped so the next row does not inherit it.
     ///
     /// Capped, because a video Reddit will not serve should settle on a still
-    /// frame rather than retry for as long as the feed is open.
+    /// frame rather than retry for as long as the feed is open. The cap resets
+    /// once playback is moving again, so a later failure can still recover.
     private func rebuildPlayer() {
         guard recoveryAttempts < 2 else { return }
         recoveryAttempts += 1
@@ -1245,24 +1251,39 @@ struct OctonautVideoPlayer: View {
         })
     }
 
-    /// Watches for the two ways an item dies mid-flight. Without this a video
-    /// that stalls stays a still frame until the reader scrolls away, and a
-    /// prepared player that failed is handed to every row that asks for it.
+    /// Watches for the two ways an item dies mid-flight. A failure rebuilds
+    /// at once. A stall is usually ordinary rebuffering that AVPlayer resumes
+    /// by itself, so it only rebuilds if playback is still stuck after a grace
+    /// period; rebuilding straight away would throw the buffer away.
     private func observeFailures(of player: AVPlayer) {
         removeFailureObservers()
         guard let item = player.currentItem else { return }
-        let names: [Notification.Name] = [
-            .AVPlayerItemFailedToPlayToEndTime,
-            .AVPlayerItemPlaybackStalled
-        ]
-        failureObservers = names.map { name in
-            NotificationCenter.default.addObserver(
-                forName: name,
-                object: item,
-                queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { rebuildPlayer() }
-            }
+        let itemID = ObjectIdentifier(item)
+        let failed = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { rebuildPlayer() }
+        }
+        let stalled = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: item,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { scheduleStallCheck(for: itemID) }
+        }
+        failureObservers = [failed, stalled]
+    }
+
+    private func scheduleStallCheck(for itemID: ObjectIdentifier) {
+        stallCheck?.cancel()
+        stallCheck = Task { @MainActor in
+            // ponytail: fixed grace period; tune if slow networks still rebuild too eagerly.
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            guard let player, player.currentItem.map(ObjectIdentifier.init) == itemID, playbackRequested,
+                  player.timeControlStatus != .playing else { return }
+            rebuildPlayer()
         }
     }
 
@@ -1288,8 +1309,11 @@ struct OctonautVideoPlayer: View {
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
-        ) { time in
+        ) { [weak player] time in
             MainActor.assumeIsolated {
+                if recoveryAttempts != 0, player?.timeControlStatus == .playing {
+                    recoveryAttempts = 0
+                }
                 guard !OctonautPlaybackCoordinator.shared.isFullScreenActive else { return }
                 OctonautPlaybackCoordinator.shared.record(time.seconds, for: url)
             }

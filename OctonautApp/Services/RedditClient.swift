@@ -615,6 +615,9 @@ actor URLSessionRedditClient: RedditClient {
               components.port == nil || components.port == 443 else { return nil }
         components.path = path.hasPrefix("/") ? path : "/\(path)"
         components.queryItems = query.isEmpty ? nil : query.filter { $0.value != nil }
+        // URLComponents leaves "+" as-is, and Reddit reads it as a space ("C++" becomes "C  ").
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
         return components.url
     }
 

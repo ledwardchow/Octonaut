@@ -21,6 +21,13 @@ Mac now blurs NSFW thumbnails and post images.
 Block users from posts and comments on Mac.
 Unsent posts, comments and messages reopen as drafts.
 Composer can't be swiped away with unsent text.
+Searches containing "+" now work, like "C++".
+Fixed possible crash with semantic filters.
+Settings now shows the real app version.
+Share Feed now shares the current feed.
+Deleting a feed or resetting settings now asks first.
+A failed page load no longer wipes the feed.
+Videos ride out brief buffering instead of restarting.
 
 Changes in previous builds:
 Fix: Some videos didn't play its audio
