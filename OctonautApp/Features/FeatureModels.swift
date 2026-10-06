@@ -663,6 +663,7 @@ struct InboxCardModel: Identifiable, Hashable, Sendable {
     var score: Int?
     var isUnread: Bool
     var postURL: URL? = nil
+    var conversationID: String? = nil
 }
 
 struct AccountCardModel: Identifiable, Hashable, Sendable {
@@ -710,6 +711,23 @@ struct FeedDescriptorModel: Hashable, Sendable {
     static let home = FeedDescriptorModel(kind: .home, name: "Home")
     static let popular = FeedDescriptorModel(kind: .popular, name: "Popular")
     static let all = FeedDescriptorModel(kind: .all, name: "All")
+
+    /// The reddit.com page for this feed, or nil when it has no public URL.
+    var shareURL: URL? {
+        let path: String
+        switch kind {
+        case .home: path = "/"
+        case .popular: path = "/r/popular/"
+        case .all: path = "/r/all/"
+        case .community: path = "/r/\(name)/"
+        case .custom:
+            guard !communities.isEmpty else { return nil }
+            path = "/r/\(communities.joined(separator: "+"))/"
+        case .multireddit: return nil
+        }
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        return URL(string: "https://www.reddit.com\(encoded)")
+    }
 }
 
 enum ComposerKind: String, CaseIterable, Identifiable, Hashable, Sendable {
@@ -974,12 +992,23 @@ final class OctonautFeatureStore {
     @ObservationIgnored private var loadedFeed: FeedDescriptorModel?
     @ObservationIgnored private var feedCache: [FeedCacheKey: FeedCacheEntry] = [:]
     @ObservationIgnored private let feedCacheFreshness: TimeInterval = 15 * 60
+    /// The feed whose remembered sort has already been resolved, so arriving
+    /// at a feed reads the record once rather than on every appearance -- and
+    /// so a sort chosen while reading is not immediately overwritten by the
+    /// stored one.
+    @ObservationIgnored private var sortResolvedForFeedKey: String?
+    @ObservationIgnored private var sortResolvedSettingsRevision: UInt?
     @ObservationIgnored private var detailCache: [DetailCacheKey: DetailCacheEntry] = [:]
     @ObservationIgnored private let detailCacheFreshness: TimeInterval = 10 * 60
     @ObservationIgnored private let detailCacheCapacity = 20
     @ObservationIgnored private var visibleDetailKey: DetailCacheKey?
     @ObservationIgnored private var communitiesRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var communitiesRefreshID: UUID?
+    private struct SubscriptionKey: Hashable {
+        let accountID: AccountID
+        let communityID: String
+    }
+    private var subscriptionsSaving: Set<SubscriptionKey> = []
     var posts: [PostCardModel] = [
         .sample,
         .mediaSample,
@@ -1029,6 +1058,12 @@ final class OctonautFeatureStore {
     ]
     var comments = CommentCardModel.samples
     var feedState: OctonautLoadState = .loaded
+    /// Set when loading the next page fails after the client's own retries.
+    /// The loaded posts stay on screen and the feed footer offers a retry.
+    private(set) var nextPageError: String?
+    /// The newest vote or save sent for each item. A failure only rolls back
+    /// the UI when no later tap on the same item has superseded it.
+    @ObservationIgnored private var latestMutation: [String: UUID] = [:]
     var communitiesState: OctonautLoadState = .loaded
     var inboxState: OctonautLoadState = .loaded
     var searchText = ""
@@ -1074,9 +1109,7 @@ final class OctonautFeatureStore {
         self.persistence = persistence
         self.semanticFilter = intelligence.map(SemanticFilterEngine.init(service:))
         if let settings {
-            // `default` asks Reddit for its own order, which the sort control
-            // has no row for. Best is the row it lands on.
-            selectedSort = settings.defaultPostSort == .default ? .best : settings.defaultPostSort
+            selectedSort = defaultSort
             selectedTopTime = settings.defaultTopTime
         }
         if reddit != nil {
@@ -1185,9 +1218,18 @@ final class OctonautFeatureStore {
     }
 
     func refreshPosts(for descriptor: FeedDescriptorModel = .popular, forceRefresh: Bool = false) async {
-        if screenshotMode { return }
+        if screenshotMode || Task.isCancelled { return }
         let requestID = UUID()
         feedRequestID = requestID
+        nextPageError = nil
+        let selectedAccountID = accountID
+        let selectedGeneration = accountGeneration
+        let sortSettingsRevision = settings?.feedSortPreferenceRevision
+        // Resolve before computing the cache key, but keep the lookup tied to this load.
+        await resolveStoredSort(for: descriptor, requestID: requestID)
+        guard feedRequestID == requestID, !Task.isCancelled,
+              isCurrentAccount(selectedAccountID, generation: selectedGeneration),
+              settings?.feedSortPreferenceRevision == sortSettingsRevision else { return }
         let filterRevision = Int(settings?.filterRevision ?? 0)
         let cacheKey = feedCacheKey(for: descriptor)
         var hasWarmContent = loadedFeed == descriptor && !posts.isEmpty
@@ -1219,8 +1261,6 @@ final class OctonautFeatureStore {
             return
         }
 
-        let selectedAccountID = accountID
-        let selectedGeneration = accountGeneration
         do {
             let listing = try await reddit.listing(
                 ListingRequest(
@@ -1252,9 +1292,11 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            nextPage = nil
             let failure = OctonautLoadState.failure(error)
-            feedState = hasWarmContent && failure != .loginRequired ? .loaded : failure
+            let keepsWarmContent = hasWarmContent && failure != .loginRequired
+            // Warm posts keep their own cursor, so scrolling can still load the next page.
+            if !keepsWarmContent { nextPage = nil }
+            feedState = keepsWarmContent ? .loaded : failure
         }
     }
 
@@ -1573,7 +1615,15 @@ final class OctonautFeatureStore {
             )
             guard detailRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return false }
-            detailPost = PostCardModel(post: thread.post)
+            let freshPost = PostCardModel(post: thread.post)
+            detailPost = freshPost
+            // Bring the feed row in line with what Reddit just reported.
+            if let index = posts.firstIndex(where: { $0.id == freshPost.id }) {
+                posts[index].vote = freshPost.vote
+                posts[index].score = freshPost.score
+                posts[index].isSaved = freshPost.isSaved
+                updateLoadedFeedCache()
+            }
             comments = thread.comments.map { node in
                 switch node {
                 case .comment(let comment): return CommentCardModel(comment: comment)
@@ -1747,6 +1797,7 @@ final class OctonautFeatureStore {
         }
 
         guard loadedFeed == descriptor, let nextPage else { return }
+        nextPageError = nil
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
         do {
@@ -1781,7 +1832,11 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            feedState = .failure(error)
+            if posts.isEmpty {
+                feedState = .failure(error)
+            } else {
+                nextPageError = error.localizedDescription
+            }
         }
     }
 
@@ -1813,7 +1868,8 @@ final class OctonautFeatureStore {
 
         guard UserDefaults.standard.bool(forKey: "filters.semantic.enabled"),
             let semanticFilter,
-            let instruction = UserDefaults.standard.string(forKey: "filters.semantic.instruction"),
+            case let instruction = UserDefaults.standard.string(forKey: "filters.semantic.instruction")
+                ?? SemanticFilterEngine.defaultInstruction,
             !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return (deterministic.visible, deterministic.removedCount)
@@ -1882,6 +1938,127 @@ final class OctonautFeatureStore {
         selectedSort.acceptsTopTime ? selectedTopTime : nil
     }
 
+    /// The account a preference belongs to. Deliberately not
+    /// `accountContextKey`, which carries a session generation: that changes
+    /// within a run and would orphan every record written before it.
+    private var feedPreferenceAccountScope: String {
+        accountID?.description ?? "anonymous"
+    }
+
+    /// The key a feed's sort is remembered under, or nil when it is not
+    /// remembered at all.
+    ///
+    /// The two settings decide which feeds take part: communities under
+    /// "Remember sort per community", multireddits and custom feeds under
+    /// "Remember sort per multireddit". Home, Popular and All are shared
+    /// listings rather than somewhere the reader keeps a standing
+    /// preference, so they are not covered by either.
+    private func feedPreferenceKey(for descriptor: FeedDescriptorModel) -> String? {
+        guard let settings else { return nil }
+        switch descriptor.kind {
+        case .community:
+            guard settings.rememberSortPerCommunity else { return nil }
+            return "community:\(IDNormalization.community(descriptor.name))"
+        case .multireddit:
+            guard settings.rememberSortPerMultireddit else { return nil }
+            return "multireddit:\(IDNormalization.community(descriptor.name))"
+        case .custom:
+            guard settings.rememberSortPerMultireddit else { return nil }
+            return "custom:\(descriptor.customFeedID?.uuidString ?? descriptor.name)"
+        case .home, .popular, .all:
+            return nil
+        }
+    }
+
+    /// Whether the reader has asked for sort to be remembered anywhere.
+    ///
+    /// With both settings off, sort stays what it has always been: one value
+    /// that follows the reader between feeds for the session. Turning either
+    /// on makes sort a property of the feed, which means a feed with no
+    /// record of its own opens at the default rather than inheriting
+    /// whatever the last feed was sorted by.
+    private var remembersSortAnywhere: Bool {
+        (settings?.rememberSortPerCommunity ?? false) || (settings?.rememberSortPerMultireddit ?? false)
+    }
+
+    /// `default` asks Reddit for its own order, which the sort control has no
+    /// row for. Best is the row it lands on.
+    private var defaultSort: PostSort {
+        let configured = settings?.defaultPostSort ?? .best
+        return configured == .default ? .best : configured
+    }
+
+    private func invalidateSortResolutionIfSettingsChanged() {
+        let revision = settings?.feedSortPreferenceRevision
+        guard sortResolvedSettingsRevision != revision else { return }
+        sortResolvedSettingsRevision = revision
+        sortResolvedForFeedKey = nil
+    }
+
+    /// Applies the sort this feed was last read with, on arrival.
+    private func resolveStoredSort(for descriptor: FeedDescriptorModel, requestID: UUID) async {
+        invalidateSortResolutionIfSettingsChanged()
+        guard remembersSortAnywhere else { return }
+        let scope = feedPreferenceAccountScope
+        let generation = accountGeneration
+        let settingsRevision = settings?.feedSortPreferenceRevision
+        let storedKey = feedPreferenceKey(for: descriptor)
+        // The latch carries the account, so switching account resolves again
+        // instead of leaving the previous reader's sort in place.
+        let latchKey = "\(scope)|\(storedKey ?? "shared:\(descriptor.kind.rawValue)")"
+        guard sortResolvedForFeedKey != latchKey else { return }
+
+        guard let storedKey else {
+            // A feed with no record of its own opens at the default rather
+            // than inheriting the last feed's sort.
+            sortResolvedForFeedKey = latchKey
+            applyDefaultSort()
+            return
+        }
+
+        let stored: FeedSortPreference?
+        do {
+            stored = try await persistence?.loadFeedPreference(feedKey: storedKey, accountScope: scope)
+        } catch {
+            // A read that failed is not the same as a feed with no record, so
+            // leave the sort alone and let the next arrival try again.
+            return
+        }
+
+        // The latch is claimed after the read, not before it: this suspends,
+        // and in the meantime the reader can pick a sort or change account.
+        guard feedRequestID == requestID, !Task.isCancelled,
+              feedPreferenceAccountScope == scope, accountGeneration == generation,
+              settings?.feedSortPreferenceRevision == settingsRevision,
+              sortResolvedForFeedKey != latchKey else { return }
+        sortResolvedForFeedKey = latchKey
+        guard let stored else {
+            applyDefaultSort()
+            return
+        }
+        selectedSort = stored.sort
+        selectedTopTime = stored.topTime ?? selectedTopTime
+    }
+
+    private func applyDefaultSort() {
+        selectedSort = defaultSort
+        selectedTopTime = settings?.defaultTopTime ?? selectedTopTime
+    }
+
+    private func rememberSort(for descriptor: FeedDescriptorModel) {
+        invalidateSortResolutionIfSettingsChanged()
+        guard let key = feedPreferenceKey(for: descriptor), let persistence else { return }
+        let scope = feedPreferenceAccountScope
+        sortResolvedForFeedKey = "\(scope)|\(key)"
+        let preference = FeedSortPreference(
+            sort: selectedSort,
+            topTime: selectedSort.acceptsTopTime ? selectedTopTime : nil
+        )
+        Task {
+            try? await persistence.saveFeedPreference(preference, feedKey: key, accountScope: scope)
+        }
+    }
+
     private func feedCacheKey(for descriptor: FeedDescriptorModel) -> FeedCacheKey {
         let sort = effectiveSort(for: descriptor)
         return FeedCacheKey(
@@ -1900,6 +2077,7 @@ final class OctonautFeatureStore {
         guard selectedSort != sort || (sort.acceptsTopTime && selectedTopTime != resolvedTopTime) else { return }
         selectedSort = sort
         selectedTopTime = resolvedTopTime
+        rememberSort(for: descriptor)
         posts = []
         nextPage = nil
         filteredPostCount = 0
@@ -1935,6 +2113,7 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
+        let token = beginMutation("vote:\(postID)")
         vote(postID: postID, value: value)
         do {
             let action = RedditAction.vote(
@@ -1945,19 +2124,11 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("vote:\(postID)", token) {
                 vote(postID: postID, value: oldVote)
             }
             throw error
         }
-    }
-
-    func save(postID: String) {
-        if let index = posts.firstIndex(where: { $0.id == postID }) {
-            posts[index].isSaved.toggle()
-        }
-        if detailPost?.id == postID { detailPost?.isSaved.toggle() }
-        updateLoadedFeedCache()
     }
 
     /// Applies a save change immediately, then sends it for the selected
@@ -1973,7 +2144,9 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
-        save(postID: postID)
+        let token = beginMutation("save:\(postID)")
+        // Set both copies explicitly; toggling each one let them drift apart.
+        applySavedFlag(!oldSaved, postID: postID)
         do {
             let action = RedditAction.save(
                 fullname: IDNormalization.fullname(postID, kind: "t3"), saved: !oldSaved)
@@ -1983,8 +2156,8 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
-                save(postID: postID)
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("save:\(postID)", token) {
+                applySavedFlag(oldSaved, postID: postID)
             }
             throw error
         }
@@ -2029,6 +2202,7 @@ final class OctonautFeatureStore {
     func setSaved(_ saved: Bool, postID: String, accountID: AccountID) async throws {
         guard self.accountID == accountID else { return }
         let generation = accountGeneration
+        let token = beginMutation("save:\(postID)")
         applySavedFlag(saved, postID: postID)
         do {
             let action = RedditAction.save(
@@ -2039,7 +2213,7 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("save:\(postID)", token) {
                 applySavedFlag(!saved, postID: postID)
             }
             throw error
@@ -2054,13 +2228,18 @@ final class OctonautFeatureStore {
         updateLoadedFeedCache()
     }
 
-    func markSeen(postID: String) {
-        guard let index = posts.firstIndex(where: { $0.id == postID }) else { return }
-        posts[index].isSeen.toggle()
-        if detailPost?.id == postID { detailPost?.isSeen.toggle() }
+    /// Toggles the seen state, or sets it when `seen` is given. Also works for
+    /// a detail post opened from outside the loaded feed.
+    func markSeen(postID: String, seen: Bool? = nil) {
+        let index = posts.firstIndex(where: { $0.id == postID })
+        let detailSeen = detailPost?.id == postID ? detailPost?.isSeen : nil
+        guard let current = index.map({ posts[$0].isSeen }) ?? detailSeen else { return }
+        let isSeen = seen ?? !current
+        guard isSeen != current else { return }
+        if let index { posts[index].isSeen = isSeen }
+        if detailPost?.id == postID { detailPost?.isSeen = isSeen }
         updateLoadedFeedCache()
         guard let persistence else { return }
-        let isSeen = posts[index].isSeen
         Task {
             if isSeen {
                 try? await persistence.markPostSeen(postID, seenAt: .now)
@@ -2093,9 +2272,45 @@ final class OctonautFeatureStore {
         UserDefaults.standard.set(favorites, forKey: favoriteCommunitiesKey(accountID: accountID))
     }
 
+    func isSubscriptionSaving(communityID: String) -> Bool {
+        guard let accountID else { return false }
+        return subscriptionsSaving.contains(SubscriptionKey(accountID: accountID, communityID: communityID))
+    }
+
+    /// Only one change per account and community can be saved at a time.
     func toggleSubscribe(communityID: String) {
-        guard let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
-        communities[index].isSubscribed.toggle()
+        guard let index = communities.firstIndex(where: { $0.id == communityID }),
+              let accountID else { return }
+        let key = SubscriptionKey(accountID: accountID, communityID: communityID)
+        guard subscriptionsSaving.insert(key).inserted else { return }
+        let name = communities[index].name
+        let subscribed = !communities[index].isSubscribed
+        let generation = accountGeneration
+        communities[index].isSubscribed = subscribed
+        Task {
+            defer { subscriptionsSaving.remove(key) }
+            do {
+                let action = RedditAction.subscribe(community: name, subscribed: subscribed)
+                let result: ActionResult
+                if let authenticated {
+                    result = try await authenticated.perform(action, accountID: accountID)
+                } else if let reddit {
+                    result = try await reddit.perform(action, account: accountID)
+                } else {
+                    throw RedditClientError.authenticationRequired
+                }
+                guard result.succeeded else {
+                    throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not save this change."])
+                }
+                // Invalidate the account that sent the request, even if the
+                // user switched accounts while it was saving.
+                await SubscribedCommunitiesCache.shared.remove(for: accountID)
+            } catch {
+                guard isCurrentAccount(accountID, generation: generation),
+                      let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
+                communities[index].isSubscribed = !subscribed
+            }
+        }
     }
 
     private func updateLoadedFeedCache() {
@@ -2154,6 +2369,7 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
+        let token = beginMutation("vote:\(id)")
         voteComment(id: id, value: value)
         do {
             let action = RedditAction.vote(
@@ -2164,11 +2380,21 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("vote:\(id)", token) {
                 voteComment(id: id, value: oldVote)
             }
             throw error
         }
+    }
+
+    private func beginMutation(_ key: String) -> UUID {
+        let token = UUID()
+        latestMutation[key] = token
+        return token
+    }
+
+    private func isLatestMutation(_ key: String, _ token: UUID) -> Bool {
+        latestMutation[key] == token
     }
 
     private func commentVote(id: String, in values: [CommentCardModel]) -> Int? {

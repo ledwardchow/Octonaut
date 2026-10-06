@@ -183,6 +183,9 @@ final class OctonautAudioSession: @unchecked Sendable {
 
             activations += 1
             guard activations == 1 else { return }
+            // Audible playback interrupts other apps' audio like any video app;
+            // their audio resumes when this session deactivates.
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
             try? AVAudioSession.sharedInstance().setActive(true)
         }
     }
@@ -197,6 +200,9 @@ final class OctonautAudioSession: @unchecked Sendable {
                 guard activations == 0 else { return }
                 try? AVAudioSession.sharedInstance()
                     .setActive(false, options: [.notifyOthersOnDeactivation])
+                // Back to mixing so muted feed videos leave other apps' audio alone.
+                isCategoryConfigured = false
+                configureCategoryIfNeeded()
                 pendingDeactivation = nil
             }
             pendingDeactivation = work
@@ -498,11 +504,18 @@ final class OctonautFeedMediaPreloader {
     }
 
     private let maximumMedia = 120
+    /// A paused player keeps buffering and holds decoded frames, so only a few
+    /// videos are held ahead. Unmetered networks get more, bounded by memory.
+    private var maximumVideos: Int { OctonautNetworkStatus.shared.isUnmetered ? 8 : 4 }
     private var imageTasks: [URL: Task<Void, Never>] = [:]
     private var videoTasks: [VideoKey: Task<OctonautAVPlayerFactory.Playback, Never>] = [:]
     private var mediaOrder: [MediaKey] = []
 
-    func preload(posts: some Sequence<PostCardModel>, compact: Bool) {
+    func preload(posts: some Sequence<PostCardModel>, compact: Bool, autoplay: AutoplayVideo) {
+        // Warming a video downloads it, so only do it when the row would autoplay.
+        let videosAllowed = autoplay.shouldAutoplay(
+            isConnectedViaWiFi: OctonautNetworkStatus.shared.isConnectedViaWiFi
+        )
         for post in posts {
             for url in imageURLs(for: post, compact: compact) {
                 prepareImage(at: url)
@@ -511,7 +524,7 @@ final class OctonautFeedMediaPreloader {
             // Anything else is built synchronously at the row, so warming it
             // here would construct players -- and their decode sessions and
             // connections -- for a whole window of posts nobody is looking at.
-            if !compact,
+            if !compact, videosAllowed,
                post.mediaKind == "video" || post.mediaKind == "gif",
                let url = post.mediaURL,
                let audioURL = post.audioURL {
@@ -573,6 +586,12 @@ final class OctonautFeedMediaPreloader {
     }
 
     private func trimPreparedMedia() {
+        while videoTasks.count > maximumVideos,
+              let index = mediaOrder.firstIndex(where: { if case .video = $0 { true } else { false } }),
+              case .video(let expiredKey) = mediaOrder.remove(at: index) {
+            // A visible row may still own this player; it keeps its own reference.
+            videoTasks.removeValue(forKey: expiredKey)
+        }
         while mediaOrder.count > maximumMedia {
             switch mediaOrder.removeFirst() {
             case .image(let expiredURL):
@@ -1013,6 +1032,7 @@ struct OctonautVideoPlayer: View {
     @State private var positionObserver: Any?
     @State private var failureObservers: [any NSObjectProtocol] = []
     @State private var recoveryAttempts = 0
+    @State private var stallCheck: Task<Void, Never>?
     @State private var recovery = OctonautPlaybackRecovery()
     @State private var muxOutcome: OctonautMuxOutcome = .notApplicable
     @State private var coordinator = OctonautPlaybackCoordinator.shared
@@ -1142,6 +1162,8 @@ struct OctonautVideoPlayer: View {
                 coordinator.record(player.currentTime().seconds, for: url)
             }
             player?.pause()
+            stallCheck?.cancel()
+            stallCheck = nil
             recovery.cancel()
             removePositionObserver()
             removeFailureObservers()
@@ -1182,6 +1204,8 @@ struct OctonautVideoPlayer: View {
     }
 
     private func teardownPlayer() {
+        stallCheck?.cancel()
+        stallCheck = nil
         recovery.cancel()
         removePositionObserver()
         removeFailureObservers()
@@ -1199,7 +1223,8 @@ struct OctonautVideoPlayer: View {
     /// prepared copy is dropped so the next row does not inherit it.
     ///
     /// Capped, because a video Reddit will not serve should settle on a still
-    /// frame rather than retry for as long as the feed is open.
+    /// frame rather than retry for as long as the feed is open. The cap resets
+    /// once playback is moving again, so a later failure can still recover.
     private func rebuildPlayer() {
         guard recoveryAttempts < 2 else { return }
         recoveryAttempts += 1
@@ -1232,24 +1257,39 @@ struct OctonautVideoPlayer: View {
         })
     }
 
-    /// Watches for the two ways an item dies mid-flight. Without this a video
-    /// that stalls stays a still frame until the reader scrolls away, and a
-    /// prepared player that failed is handed to every row that asks for it.
+    /// Watches for the two ways an item dies mid-flight. A failure rebuilds
+    /// at once. A stall is usually ordinary rebuffering that AVPlayer resumes
+    /// by itself, so it only rebuilds if playback is still stuck after a grace
+    /// period; rebuilding straight away would throw the buffer away.
     private func observeFailures(of player: AVPlayer) {
         removeFailureObservers()
         guard let item = player.currentItem else { return }
-        let names: [Notification.Name] = [
-            .AVPlayerItemFailedToPlayToEndTime,
-            .AVPlayerItemPlaybackStalled
-        ]
-        failureObservers = names.map { name in
-            NotificationCenter.default.addObserver(
-                forName: name,
-                object: item,
-                queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { rebuildPlayer() }
-            }
+        let itemID = ObjectIdentifier(item)
+        let failed = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { rebuildPlayer() }
+        }
+        let stalled = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled,
+            object: item,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { scheduleStallCheck(for: itemID) }
+        }
+        failureObservers = [failed, stalled]
+    }
+
+    private func scheduleStallCheck(for itemID: ObjectIdentifier) {
+        stallCheck?.cancel()
+        stallCheck = Task { @MainActor in
+            // ponytail: fixed grace period; tune if slow networks still rebuild too eagerly.
+            do { try await Task.sleep(for: .seconds(10)) } catch { return }
+            guard let player, player.currentItem.map(ObjectIdentifier.init) == itemID, playbackRequested,
+                  player.timeControlStatus != .playing else { return }
+            rebuildPlayer()
         }
     }
 
@@ -1275,8 +1315,11 @@ struct OctonautVideoPlayer: View {
         positionObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
             queue: .main
-        ) { time in
+        ) { [weak player] time in
             MainActor.assumeIsolated {
+                if recoveryAttempts != 0, player?.timeControlStatus == .playing {
+                    recoveryAttempts = 0
+                }
                 guard !OctonautPlaybackCoordinator.shared.isFullScreenActive else { return }
                 OctonautPlaybackCoordinator.shared.record(time.seconds, for: url)
             }
@@ -1334,14 +1377,18 @@ private final class OctonautNetworkStatus {
     static let shared = OctonautNetworkStatus()
 
     private(set) var isConnectedViaWiFi = false
+    /// Not cellular/hotspot (expensive) and not Low Data Mode (constrained).
+    private(set) var isUnmetered = false
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private let queue = DispatchQueue(label: "com.octonaut.network-status")
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let isConnectedViaWiFi = path.status == .satisfied && path.usesInterfaceType(.wifi)
+            let isUnmetered = path.status == .satisfied && !path.isExpensive && !path.isConstrained
             Task { @MainActor [weak self] in
                 self?.isConnectedViaWiFi = isConnectedViaWiFi
+                self?.isUnmetered = isUnmetered
             }
         }
         monitor.start(queue: queue)
@@ -2058,6 +2105,8 @@ struct OctonautVideoDetailView: View {
     @State private var positionObserver: Any?
     @State private var muxOutcome: OctonautMuxOutcome = .notApplicable
     @State private var audioSessionActivated = false
+    @State private var failureMessage: String?
+    @State private var loadAttempt = 0
 
     private var coordinator: OctonautPlaybackCoordinator { .shared }
 
@@ -2073,13 +2122,39 @@ struct OctonautVideoDetailView: View {
                 .overlay(alignment: .topLeading) {
                     OctonautMuxWarningBadge(outcome: muxOutcome)
                 }
-            } else {
+                .onReceive(
+                    player.publisher(for: \.currentItem)
+                        .map { item -> AnyPublisher<AVPlayerItem.Status, Never> in
+                            item?.publisher(for: \.status).eraseToAnyPublisher()
+                                ?? Just(.unknown).eraseToAnyPublisher()
+                        }
+                        .switchToLatest()
+                ) { status in
+                    if status == .failed { showFailure(player.currentItem?.error) }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { note in
+                    guard (note.object as? AVPlayerItem) === player.currentItem else { return }
+                    showFailure(note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)
+                }
+            } else if failureMessage == nil {
                 ProgressView()
                     .tint(.white)
             }
+            if let failureMessage {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                    Text(failureMessage).multilineTextAlignment(.center)
+                    Button("Try Again") { retry() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .foregroundStyle(.white)
+                .padding(24)
+                .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
+                .padding()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) {
+        .task(id: "\(url.absoluteString)#\(loadAttempt)") {
             coordinator.beginFullScreen()
             let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
             guard !Task.isCancelled else { return }
@@ -2140,6 +2215,25 @@ struct OctonautVideoDetailView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Video player")
+    }
+
+    private func showFailure(_ error: Error?) {
+        player?.pause()
+        failureMessage = RedditVideoPlayback.failureMessage(for: error as NSError?)
+    }
+
+    /// Builds a fresh player, keeping the position the viewer had reached.
+    private func retry() {
+        if let player {
+            coordinator.record(player.currentTime().seconds, for: url)
+            player.pause()
+        }
+        removePositionObserver()
+        looper.detach()
+        player = nil
+        onPlayerChange?(nil)
+        failureMessage = nil
+        loadAttempt += 1
     }
 
     /// Keeps the shared playhead current so dismissing the viewer hands the

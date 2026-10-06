@@ -22,12 +22,29 @@ protocol PersistenceStore: Sendable {
     func saveDraft(_ draft: Draft) async throws
     func deleteDraft(_ id: UUID) async throws
     func clearDrafts(accountID: AccountID?) async throws
+    func loadFeedPreference(feedKey: String, accountScope: String) async throws -> FeedSortPreference?
+    func saveFeedPreference(_ preference: FeedSortPreference, feedKey: String, accountScope: String) async throws
     func loadUsageStatistics() async throws -> UsageStatistics
     func incrementStatistic(_ counter: UsageStatistic, by amount: Int) async throws
     func beginUsageSession() async
     func recordCommunityVisit(_ community: String) async throws
     func resetUsageStatistics() async throws
     func removeAllData() async throws
+}
+
+/// A sort remembered for one feed, under one account.
+///
+/// Kept separate from `FeedDescriptorModel` so the record does not depend on
+/// how a feed happens to be addressed in the UI: the key is a string the
+/// feature layer derives, and this is only what was chosen.
+struct FeedSortPreference: Codable, Hashable, Sendable {
+    var sort: PostSort
+    var topTime: TopTime?
+
+    init(sort: PostSort, topTime: TopTime? = nil) {
+        self.sort = sort
+        self.topTime = topTime
+    }
 }
 
 enum UsageStatistic: String, Codable, Hashable, Sendable {

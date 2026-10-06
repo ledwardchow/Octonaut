@@ -266,12 +266,21 @@ struct PostDetailView: View {
     }
 
     @ViewBuilder
+    /// Reddit marks a reply chain too deep to inline with a "more" stub that
+    /// has no child IDs. It can only be read from the parent comment's page.
+    private func continueThreadURL(_ comment: CommentCardModel) -> URL? {
+        guard comment.moreChildIDs.isEmpty,
+              let parent = comment.moreParentFullname, parent.hasPrefix("t1_") else { return nil }
+        return RedditReportTarget(commentID: parent, post: currentPost).permalink
+    }
+
     private func moreCommentsRow(_ comment: CommentCardModel) -> some View {
-        HStack(spacing: 10) {
+        let continueURL = continueThreadURL(comment)
+        return HStack(spacing: 10) {
             Image(systemName: "ellipsis.bubble")
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Load \(comment.moreCount ?? 0) more comments")
+                Text(continueURL == nil ? "Load \(comment.moreCount ?? 0) more comments" : "Continue this thread")
                     .font(.subheadline.weight(.semibold))
                 if store.moreFailedIDs.contains(comment.id) {
                     Text("The child comments could not be loaded. Try again.")
@@ -293,10 +302,14 @@ struct PostDetailView: View {
         .padding(.vertical, 13)
         .contentShape(Rectangle())
         .onTapGesture {
-            Task { await store.loadMoreComments(comment.id, for: currentPost, sort: commentSort) }
+            if let continueURL {
+                router.push(.postURL(continueURL))
+            } else {
+                Task { await store.loadMoreComments(comment.id, for: currentPost, sort: commentSort) }
+            }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Load \(comment.moreCount ?? 0) more comments")
+        .accessibilityLabel(continueURL == nil ? "Load \(comment.moreCount ?? 0) more comments" : "Continue this thread")
     }
 
     private func dismissMediaViewerAndStay() {
@@ -427,6 +440,10 @@ struct GalleryView: View {
                     .padding()
                 } else if store.feedState == .loading || store.feedState == .idle {
                     ProgressView("Loading gallery").padding()
+                } else if store.nextPageError != nil, store.galleryPageCursor(for: descriptor) != nil {
+                    Button("Couldn't load more. Retry") { Task { await store.loadMorePosts(for: descriptor) } }
+                        .buttonStyle(.bordered)
+                        .padding()
                 } else if store.galleryPageCursor(for: descriptor) != nil {
                     ProgressView("Loading more")
                         .padding()

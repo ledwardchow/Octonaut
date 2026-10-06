@@ -1,5 +1,16 @@
 # Octonaut agent instructions
 
+## TestFlight change notes
+
+For every user-visible feature or bug fix, update `TestFlight/WhatToTest.en-AU.txt` in the same task, without waiting for a reminder.
+
+- Write one very short line per change, ideally under 10 words.
+- Describe only what changed, using plain English. Example: `Fixed missing audio in videos.`
+- Do not add headings, explanations, testing instructions, or implementation details.
+- Add to the current build's changes. Combine duplicate entries and update entries when the same feature changes again.
+- Only list changes implemented in the task. Skip documentation, tests, and internal refactors that do not change app behaviour.
+- Preserve existing notes unless asked to start a new build or rewrite them.
+
 ## Non-negotiable product invariant: no Reddit Data API registration
 
 Octonaut must not use Reddit's OAuth Data API or require a Reddit developer application, client ID, or client secret. Treat avoiding Reddit developer registration as an architectural and product requirement.

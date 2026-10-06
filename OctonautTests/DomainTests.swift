@@ -4,7 +4,136 @@ import XCTest
 
 @testable import Octonaut
 
+private actor ControlledSubscriptionService: AuthenticatedRedditService {
+    private(set) var requests: [(action: RedditAction, account: AccountID)] = []
+    private var pending: CheckedContinuation<ActionResult, Never>?
+    private var requestWaiter: CheckedContinuation<Void, Never>?
+
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem> {
+        Listing(items: [])
+    }
+
+    func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message] { [] }
+
+    func perform(_ action: RedditAction, accountID: AccountID) async throws -> ActionResult {
+        requests.append((action, accountID))
+        return await withCheckedContinuation { continuation in
+            pending = continuation
+            requestWaiter?.resume()
+            requestWaiter = nil
+        }
+    }
+
+    func waitForRequest() async {
+        if pending != nil { return }
+        await withCheckedContinuation { requestWaiter = $0 }
+    }
+
+    func complete(_ result: ActionResult) {
+        let continuation = pending
+        pending = nil
+        continuation?.resume(returning: result)
+    }
+}
+
 final class DomainTests: XCTestCase {
+    @MainActor
+    func testSubscriptionSuccessInvalidatesCacheAndReloadsCommunities() async throws {
+        let account = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: account)
+        await store.refreshCommunities()
+        let cachedBefore = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNotNil(cachedBefore)
+
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        await service.complete(ActionResult(succeeded: true))
+        await waitForSubscription(store)
+
+        let cachedAfter = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNil(cachedAfter)
+        await store.refreshCommunities()
+        let reads = await client.subscribedCommunitiesRequests()
+        XCTAssertEqual(reads, 2, "Returning to Communities must fetch the updated subscriptions")
+        await SubscribedCommunitiesCache.shared.remove(for: account)
+    }
+
+    @MainActor
+    func testSubscriptionIgnoresRepeatedTapsAndAllowsRetryAfterFailure() async throws {
+        let account = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: account)
+        await store.refreshCommunities()
+
+        store.toggleSubscribe(communityID: "swift")
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        store.toggleSubscribe(communityID: "swift")
+        let firstRequests = await service.requests
+        XCTAssertEqual(firstRequests.count, 1)
+        XCTAssertEqual(firstRequests.first?.account, account)
+        if case .subscribe(let community, let subscribed) = firstRequests.first?.action {
+            XCTAssertEqual(community, "swift")
+            XCTAssertFalse(subscribed)
+        } else { XCTFail("Expected a website subscription action") }
+        XCTAssertEqual(store.communities.first?.isSubscribed, false)
+
+        await service.complete(ActionResult(succeeded: false, message: "Denied"))
+        await waitForSubscription(store)
+        XCTAssertEqual(store.communities.first?.isSubscribed, true)
+        let cached = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNotNil(cached, "A rejected change must preserve the cache")
+
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        await service.complete(ActionResult(succeeded: true))
+        await waitForSubscription(store)
+        let retryRequests = await service.requests
+        XCTAssertEqual(retryRequests.count, 2)
+        XCTAssertEqual(store.communities.first?.isSubscribed, false)
+        await SubscribedCommunitiesCache.shared.remove(for: account)
+    }
+
+    @MainActor
+    func testSubscriptionCompletionInvalidatesOriginalAccountAfterSwitch() async throws {
+        let first = AccountID()
+        let second = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: first)
+        await store.refreshCommunities()
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        store.synchronizeAccount(id: second, generation: 1, accounts: [])
+        await store.refreshCommunities()
+
+        await service.complete(ActionResult(succeeded: true))
+        // Return to the original account so the pending-state check observes its request.
+        store.synchronizeAccount(id: first, generation: 2, accounts: [])
+        await waitForSubscription(store)
+        let firstCache = await SubscribedCommunitiesCache.shared.value(for: first)
+        let secondCache = await SubscribedCommunitiesCache.shared.value(for: second)
+        XCTAssertNil(firstCache)
+        XCTAssertNotNil(secondCache)
+        await SubscribedCommunitiesCache.shared.remove(for: first)
+        await SubscribedCommunitiesCache.shared.remove(for: second)
+    }
+
+    private var subscriptionFixture: Data {
+        Data(#"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","user_is_subscriber":true}}]}}"#.utf8)
+    }
+
+    @MainActor
+    private func waitForSubscription(_ store: OctonautFeatureStore) async {
+        for _ in 0..<1000 {
+            if !store.isSubscriptionSaving(communityID: "swift") { return }
+            await Task.yield()
+        }
+        XCTFail("Subscription request did not finish")
+    }
     @MainActor
     func testSearchUsesSelectedAccountAndReturnsToAnonymous() async {
         let client = FixtureRedditClient()
@@ -17,6 +146,22 @@ final class DomainTests: XCTestCase {
         await model.submit(query: "swift", scope: .posts, account: nil)
         let accounts = await client.searchAccounts
         XCTAssertEqual(accounts, [account, account, account, account, nil])
+    }
+
+    func testCommunityRefusalsAreNotReportedAsLoggedOutBlocks() throws {
+        for (status, reason, expected) in [
+            (403, "private", "This community is private."),
+            (404, "banned", "This community has been banned."),
+            (403, "quarantined", "This community is quarantined. Open it on reddit.com to opt in.")
+        ] {
+            let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/r/example.json")!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            let data = Data(#"{"reason": "\#(reason)", "message": "Forbidden", "error": \#(status)}"#.utf8)
+            for isAnonymous in [true, false] {
+                XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(data, response: response, isAnonymous: isAnonymous)) { error in
+                    XCTAssertEqual(error as? RedditClientError, .http(statusCode: status, message: expected))
+                }
+            }
+        }
     }
 
     func testBlockedAnonymousResponsesOfferLogin() throws {
@@ -170,6 +315,23 @@ final class DomainTests: XCTestCase {
                 "https://v.redd.it/clip/HLSPlaylist.m3u8"
             )
             XCTAssertEqual(RedditVideoPlayback.url(for: source, isGIF: true), source)
+        }
+    }
+
+    func testSharedRedditVideoLinkPlaysPlaylist() throws {
+        let shared = try XCTUnwrap(URL(string: "https://v.redd.it/abc123xyz"))
+        XCTAssertEqual(
+            RedditVideoPlayback.playableURL(forSharedLink: shared).absoluteString,
+            "https://v.redd.it/abc123xyz/HLSPlaylist.m3u8"
+        )
+        let file = try XCTUnwrap(URL(string: "https://v.redd.it/clip/DASH_720.mp4"))
+        XCTAssertEqual(
+            RedditVideoPlayback.playableURL(forSharedLink: file).absoluteString,
+            "https://v.redd.it/clip/HLSPlaylist.m3u8"
+        )
+        for value in ["http://v.redd.it/abc123", "https://v.redd.it.example.com/abc123", "https://example.com/abc123"] {
+            let source = try XCTUnwrap(URL(string: value))
+            XCTAssertEqual(RedditVideoPlayback.playableURL(forSharedLink: source), source)
         }
     }
 
@@ -1598,6 +1760,349 @@ extension DomainTests {
         XCTAssertEqual(try host("https://wwwtheverge.com"), "wwwtheverge.com")
         // Nothing to take a host from falls back to the whole thing.
         XCTAssertEqual(try host("mailto:someone@example.com"), "mailto:someone@example.com")
+    }
+
+    private static func listingJSON(ids: [String], after: String?) -> Data {
+        let children = ids.map { id in
+            #"{"kind":"t3","data":{"id":"\#(id)","name":"t3_\#(id)","title":"Post \#(id)","subreddit":"swift","permalink":"/r/swift/comments/\#(id)/title/","author":"reader"}}"#
+        }
+        let afterValue = after.map { "\"\($0)\"" } ?? "null"
+        return Data(#"{"data":{"children":[\#(children.joined(separator: ","))],"after":\#(afterValue)}}"#.utf8)
+    }
+
+    @MainActor
+    private static func sortSettings(
+        rememberCommunity: Bool = false,
+        rememberMultireddit: Bool = false
+    ) -> SettingsStore {
+        let settings = SettingsStore(defaults: UserDefaults(suiteName: "OctonautTests.\(UUID())")!)
+        settings.rememberSortPerCommunity = rememberCommunity
+        settings.rememberSortPerMultireddit = rememberMultireddit
+        return settings
+    }
+
+    /// The sort a community was last read with comes back when the reader
+    /// returns to it, and does not follow them to another community.
+    @MainActor
+    func testSortIsRememberedPerCommunity() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let apple = FeedDescriptorModel(kind: .community, name: "apple")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, topTime: .week, for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+
+        // A different community does not inherit it.
+        await store.refreshPosts(for: apple)
+        XCTAssertEqual(store.selectedSort, .best)
+
+        // Returning does.
+        await store.refreshPosts(for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+        XCTAssertEqual(store.selectedTopTime, .week)
+    }
+
+    /// The record survives the store, which is the point of writing it.
+    @MainActor
+    func testARememberedSortOutlivesTheStore() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+
+        let first = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+        await first.refreshPosts(for: swift)
+        await first.applySort(.new, for: swift)
+
+        let second = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+        await second.refreshPosts(for: swift)
+
+        XCTAssertEqual(second.selectedSort, .new)
+    }
+
+    /// With the setting off, sort behaves as it always has: one value that
+    /// follows the reader between feeds for the session, and nothing stored.
+    @MainActor
+    func testSortIsNotRememberedWhenTheSettingIsOff() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let apple = FeedDescriptorModel(kind: .community, name: "apple")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(), persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, for: swift)
+        await store.refreshPosts(for: apple)
+
+        XCTAssertEqual(store.selectedSort, .top, "Sort still carries across feeds when nothing is remembered")
+        let stored = try await persistence.loadFeedPreference(
+            feedKey: "community:swift", accountScope: "anonymous")
+        XCTAssertNil(stored)
+    }
+
+    /// Switching account resolves again, so the sort one reader left on a
+    /// community does not carry into another reader's session.
+    @MainActor
+    func testARememberedSortDoesNotCarryAcrossAnAccountSwitch() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let store = OctonautFeatureStore(
+            reddit: client, accountID: AccountID(),
+            settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: swift)
+        await store.applySort(.top, topTime: .week, for: swift)
+        XCTAssertEqual(store.selectedSort, .top)
+
+        store.synchronizeAccount(id: AccountID(), generation: 1, accounts: [])
+        await store.refreshPosts(for: swift)
+
+        // The second reader has no record for this community, so it opens at
+        // the configured default and not on the first reader's Top.
+        XCTAssertEqual(store.selectedSort, .best)
+    }
+
+    /// Communities and multireddits are governed by their own settings.
+    @MainActor
+    func testMultiredditSortIsGovernedByItsOwnSetting() async throws {
+        let persistence = InMemoryPersistenceStore()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let multi = FeedDescriptorModel(kind: .multireddit, name: "devtools")
+        let store = OctonautFeatureStore(
+            reddit: client, settings: Self.sortSettings(rememberCommunity: true),
+            persistence: persistence)
+
+        await store.refreshPosts(for: multi)
+        await store.applySort(.rising, for: multi)
+
+        let stored = try await persistence.loadFeedPreference(
+            feedKey: "multireddit:devtools", accountScope: "anonymous")
+        XCTAssertNil(stored)
+    }
+}
+
+
+extension DomainTests {
+    @MainActor
+    func testReenablingRememberSortReloadsCommunityPreference() async throws {
+        try await checkReenabledSort(kind: .community)
+    }
+
+    @MainActor
+    func testReenablingRememberSortReloadsMultiredditPreference() async throws {
+        try await checkReenabledSort(kind: .multireddit)
+    }
+
+    @MainActor
+    private func checkReenabledSort(kind: FeedDescriptorModel.Kind) async throws {
+        let persistence = InMemoryPersistenceStore()
+        let settings = Self.sortSettings(
+            rememberCommunity: kind == .community, rememberMultireddit: kind == .multireddit)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let feed = FeedDescriptorModel(kind: kind, name: "swift")
+        try await persistence.saveFeedPreference(
+            FeedSortPreference(sort: .top, topTime: .week),
+            feedKey: "\(kind.rawValue):swift", accountScope: "anonymous")
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+        await store.refreshPosts(for: feed)
+        XCTAssertEqual(store.selectedSort, .top)
+        if kind == .community {
+            settings.rememberSortPerCommunity = false
+        } else {
+            settings.rememberSortPerMultireddit = false
+        }
+        await store.applySort(.new, for: feed)
+        if kind == .community {
+            settings.rememberSortPerCommunity = true
+        } else {
+            settings.rememberSortPerMultireddit = true
+        }
+        await store.refreshPosts(for: feed)
+        XCTAssertEqual(store.selectedSort, .top)
+        XCTAssertEqual(store.selectedTopTime, .week)
+
+        // Keep the other setting on, then toggle without loading a feed in between.
+        if kind == .community {
+            settings.rememberSortPerMultireddit = true
+        } else {
+            settings.rememberSortPerCommunity = true
+        }
+        await store.refreshPosts(for: feed)
+        try await persistence.saveFeedPreference(
+            FeedSortPreference(sort: .rising),
+            feedKey: "\(kind.rawValue):swift", accountScope: "anonymous")
+        if kind == .community {
+            settings.rememberSortPerCommunity = false
+            settings.rememberSortPerCommunity = true
+        } else {
+            settings.rememberSortPerMultireddit = false
+            settings.rememberSortPerMultireddit = true
+        }
+        await store.refreshPosts(for: feed)
+        XCTAssertEqual(store.selectedSort, .rising)
+    }
+
+    @MainActor
+    func testCancelledPreferenceReadLeavesCurrentFeedAlone() async throws {
+        try await checkStalePreferenceRead(cancelOldLoad: true)
+    }
+
+    @MainActor
+    func testSupersededPreferenceReadLeavesCurrentFeedAlone() async throws {
+        try await checkStalePreferenceRead(cancelOldLoad: false)
+    }
+
+    @MainActor
+    private func checkStalePreferenceRead(cancelOldLoad: Bool) async throws {
+        let backing = InMemoryPersistenceStore()
+        let persistence = PausedFeedPreferenceStore(backing: backing, feedKey: "community:swift")
+        let settings = Self.sortSettings(rememberCommunity: true)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
+        let swift = FeedDescriptorModel(kind: .community, name: "swift")
+        let apple = FeedDescriptorModel(kind: .community, name: "apple")
+        try await backing.saveFeedPreference(
+            FeedSortPreference(sort: .top, topTime: .week),
+            feedKey: "community:swift", accountScope: "anonymous")
+        try await backing.saveFeedPreference(
+            FeedSortPreference(sort: .new), feedKey: "community:apple", accountScope: "anonymous")
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+        await store.refreshPosts(for: apple)
+        let oldLoad = Task { await store.refreshPosts(for: swift) }
+        await persistence.waitForRead()
+        if cancelOldLoad {
+            // No replacement request: cancellation alone must reject the result.
+            oldLoad.cancel()
+        } else {
+            store.clearVisibleFeed()
+            await store.refreshPosts(for: apple)
+        }
+        XCTAssertEqual(store.selectedSort, .new)
+        XCTAssertEqual(store.feedState, .loaded)
+        let currentPosts = store.posts.map(\.id)
+        await persistence.resumeRead()
+        await oldLoad.value
+        XCTAssertEqual(store.selectedSort, .new)
+        XCTAssertEqual(store.feedState, .loaded)
+        XCTAssertEqual(store.posts.map(\.id), currentPosts)
+    }
+}
+
+/// Holds one preference read until the test has switched feeds.
+private actor PausedFeedPreferenceStore: PersistenceStore {
+    let backing: InMemoryPersistenceStore
+    private var pausedFeedKey: String?
+    private var readStarted = false
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var readContinuation: CheckedContinuation<Void, Never>?
+
+    init(backing: InMemoryPersistenceStore, feedKey: String) {
+        self.backing = backing
+        pausedFeedKey = feedKey
+    }
+
+    func waitForRead() async {
+        if readStarted { return }
+        await withCheckedContinuation { startContinuation = $0 }
+    }
+
+    func resumeRead() {
+        readContinuation?.resume()
+        readContinuation = nil
+    }
+
+    func loadFeedPreference(feedKey: String, accountScope: String) async throws -> FeedSortPreference? {
+        if feedKey == pausedFeedKey {
+            pausedFeedKey = nil
+            readStarted = true
+            startContinuation?.resume()
+            startContinuation = nil
+            // Ignore cancellation so the caller must reject the stale result itself.
+            await withCheckedContinuation { readContinuation = $0 }
+        }
+        return try await backing.loadFeedPreference(feedKey: feedKey, accountScope: accountScope)
+    }
+
+    func loadAccounts() async throws -> [Account] {
+        return try await backing.loadAccounts()
+    }
+
+    func saveAccount(_ account: Account) async throws {
+        try await backing.saveAccount(account)
+    }
+
+    func deleteAccount(_ id: AccountID) async throws {
+        try await backing.deleteAccount(id)
+    }
+
+    func loadSeenPostIDs() async throws -> [String] {
+        return try await backing.loadSeenPostIDs()
+    }
+
+    func markPostSeen(_ id: String, seenAt: Date) async throws {
+        try await backing.markPostSeen(id, seenAt: seenAt)
+    }
+
+    func removePostSeen(_ id: String) async throws {
+        try await backing.removePostSeen(id)
+    }
+
+    func clearSeenPosts() async throws {
+        try await backing.clearSeenPosts()
+    }
+
+    func loadDrafts(accountID: AccountID?) async throws -> [Draft] {
+        return try await backing.loadDrafts(accountID: accountID)
+    }
+
+    func saveDraft(_ draft: Draft) async throws {
+        try await backing.saveDraft(draft)
+    }
+
+    func deleteDraft(_ id: UUID) async throws {
+        try await backing.deleteDraft(id)
+    }
+
+    func clearDrafts(accountID: AccountID?) async throws {
+        try await backing.clearDrafts(accountID: accountID)
+    }
+
+    func saveFeedPreference(_ preference: FeedSortPreference, feedKey: String, accountScope: String) async throws {
+        try await backing.saveFeedPreference(preference, feedKey: feedKey, accountScope: accountScope)
+    }
+
+    func loadUsageStatistics() async throws -> UsageStatistics {
+        return try await backing.loadUsageStatistics()
+    }
+
+    func incrementStatistic(_ counter: UsageStatistic, by amount: Int) async throws {
+        try await backing.incrementStatistic(counter, by: amount)
+    }
+
+    func beginUsageSession() async {
+        await backing.beginUsageSession()
+    }
+
+    func recordCommunityVisit(_ community: String) async throws {
+        try await backing.recordCommunityVisit(community)
+    }
+
+    func resetUsageStatistics() async throws {
+        try await backing.resetUsageStatistics()
+    }
+
+    func removeAllData() async throws {
+        try await backing.removeAllData()
     }
 }
 

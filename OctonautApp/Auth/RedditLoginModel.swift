@@ -77,6 +77,9 @@ final class RedditLoginModel {
     }
 
     private func checkForSession(in webView: WKWebView) {
+        // After a failure, wait for the user to choose Try Again instead of
+        // re-validating the same cookie on every 0.5 s poll.
+        if case .failed = state { return }
         guard !isFinishing, !isCheckingSession else { return }
         isCheckingSession = true
         let attempt = attemptID
@@ -126,6 +129,9 @@ final class RedditLoginModel {
                 } catch is CancellationError {
                     return
                 } catch {
+                    guard self.attemptID == attempt else { return }
+                    // Saving can fail (for example a Keychain error); let Try Again run again.
+                    self.isFinishing = false
                     self.state = .failed(
                         (error as? LocalizedError)?.errorDescription
                             ?? "Reddit login could not be completed."

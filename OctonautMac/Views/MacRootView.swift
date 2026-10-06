@@ -11,6 +11,7 @@ struct MacRootView: View {
     @State private var selectedPost: PostCardModel?
     @State private var composer: MacComposerContext?
     @State private var editingFeed: CustomFeed?
+    @State private var feedToDelete: CustomFeed?
     @State private var submissionMessage: String?
     @AppStorage("layout.mainSidebarWidth") private var sidebarWidth = 220.0
     @AppStorage("layout.mainContentWidth") private var contentWidth = 520.0
@@ -105,6 +106,22 @@ struct MacRootView: View {
         .onOpenURL { url in
             handle(url)
         }
+        .confirmationDialog(
+            "Delete \"\(feedToDelete?.name ?? "")\"?",
+            isPresented: Binding(get: { feedToDelete != nil }, set: { if !$0 { feedToDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: feedToDelete
+        ) { feed in
+            Button("Delete Feed", role: .destructive) {
+                dependencies.settings.customFeeds.removeAll { $0.id == feed.id }
+                if case .feed(let selected) = sidebarSelection, selected.customFeedID == feed.id {
+                    sidebarSelection = .feed(.home)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This also removes it from your other devices through iCloud.")
+        }
         .sheet(item: $editingFeed) { feed in
             MacCustomFeedEditor(feed: feed, communities: store.communities) { saved in
                 if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
@@ -179,12 +196,7 @@ struct MacRootView: View {
             customFeeds: dependencies.settings.customFeeds,
             onCreate: { editingFeed = CustomFeed(name: "", communities: []) },
             onEdit: { editingFeed = $0 },
-            onDelete: { feed in
-                dependencies.settings.customFeeds.removeAll { $0.id == feed.id }
-                if case .feed(let selected) = sidebarSelection, selected.customFeedID == feed.id {
-                    sidebarSelection = .feed(.home)
-                }
-            }
+            onDelete: { feedToDelete = $0 }
         )
         .navigationSplitViewColumnWidth(
             min: 190,
@@ -214,7 +226,8 @@ struct MacRootView: View {
         case .inbox:
             MacInboxView(
                 service: dependencies.authenticated,
-                accounts: dependencies.accounts
+                accounts: dependencies.accounts,
+                openDiscussion: { selectedPost = PostCardModel(deepLinkURL: $0) }
             )
         case .accounts:
             MacAccountsView(accounts: dependencies.accounts)

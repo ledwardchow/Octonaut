@@ -18,6 +18,7 @@ struct ComposerView: View {
     @State private var sendReplies = true
     @State private var showingDiscard = false
     @State private var showingError = false
+    @State private var sendError: String?
     @State private var sending = false
     @State private var draftID = UUID()
     @State private var draftAccountID: AccountID?
@@ -40,6 +41,9 @@ struct ComposerView: View {
     }
 
     private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }
+    /// Text the user typed, as opposed to a prefilled community or recipient.
+    private var hasContent: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty }
+    private var draftFields: [String] { [title, bodyText, link, community, recipient, postType] }
     private var isPostComment: Bool { kind == .comment && targetID?.hasPrefix("t3_") == true }
     private var canSubmit: Bool {
         switch kind {
@@ -47,7 +51,7 @@ struct ComposerView: View {
         case .comment, .edit:
             return targetID?.isEmpty == false
                 && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .message: return !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .message: return !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -95,7 +99,7 @@ struct ComposerView: View {
                                 Picker("Post type", selection: $postType) {
                                     Text("Text").tag("Text")
                                     Text("Link").tag("Link")
-                                    Text("Image").tag("Image")
+                                    // ponytail: no Image type until media upload exists; share an image link instead.
                                 }
                             }
                         }
@@ -104,6 +108,9 @@ struct ComposerView: View {
                         }
                         if kind == .post {
                             Section("Title") { TextField("A clear title", text: $title) }
+                        }
+                        if kind == .message {
+                            Section("Subject") { TextField("Subject", text: $title) }
                         }
                         if kind == .post, postType == "Link" {
                             Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
@@ -145,27 +152,37 @@ struct ComposerView: View {
                 }
             }
             .confirmationDialog("Discard this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
-                Button("Discard", role: .destructive) { dismiss() }
+                Button("Discard", role: .destructive) {
+                    let id = draftID
+                    Task { try? await dependencies.persistence.deleteDraft(id) }
+                    dismiss()
+                }
                 Button("Keep Editing", role: .cancel) {}
             }
-            .alert("Complete the required fields", isPresented: $showingError) {
+            .alert(sendError == nil ? "Complete the required fields" : "Couldn't send", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
             } message: {
-                if dependencies.accounts.selectedAccount == nil {
+                if let sendError {
+                    Text(sendError)
+                } else if dependencies.accounts.selectedAccount == nil {
                     Text("Add or select a Reddit account before sending.")
                 } else if dependencies.accounts.selectedAccount?.health == .needsLogin {
                     Text("Sign in again from the Account tab before sending.")
                 } else {
-                    Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : "Add some text before sending.")
+                    Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : kind == .message ? "Add a recipient, subject and message." : "Add some text before sending.")
                 }
             }
-            .task(id: bodyText) {
-                try? await Task.sleep(for: .milliseconds(500))
+            .task(id: draftFields) {
+                // A cancelled wait means the view closed or the text changed again.
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 await saveDraft()
             }
             .task {
                 if draftAccountID == nil { draftAccountID = dependencies.accounts.selectedAccountID }
+                await restoreDraft()
             }
+            // Swiping away would skip the discard prompt and lose the text.
+            .interactiveDismissDisabled(hasContent)
         }
     }
 
@@ -197,6 +214,7 @@ struct ComposerView: View {
     }
 
     private func submit() {
+        sendError = nil
         guard canSubmit else { showingError = true; return }
         guard let selectedAccount = dependencies.accounts.selectedAccount,
               selectedAccount.health != .needsLogin,
@@ -213,14 +231,15 @@ struct ComposerView: View {
                 community: community.trimmingCharacters(in: .whitespacesAndNewlines),
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 text: bodyText.isEmpty ? nil : bodyText,
-                link: URL(string: link),
+                // A link typed before switching back to Text must not turn this into a link post.
+                link: postType == "Link" ? URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)) : nil,
                 sendReplies: sendReplies
             )
         case .comment, .edit:
             let target = targetID ?? ""
             action = kind == .edit ? .edit(thingID: target, text: bodyText) : .comment(thingID: target, text: bodyText)
         case .message:
-            action = .composeMessage(to: recipient.trimmingCharacters(in: .whitespacesAndNewlines), subject: title, text: bodyText)
+            action = .composeMessage(to: recipient.trimmingCharacters(in: .whitespacesAndNewlines), subject: title.trimmingCharacters(in: .whitespacesAndNewlines), text: bodyText)
         }
         Task {
             do {
@@ -235,26 +254,57 @@ struct ComposerView: View {
                 showingError = true
             } catch {
                 sending = false
+                sendError = error.localizedDescription
                 showingError = true
             }
         }
     }
 
-    private func saveDraft() async {
-        guard isDirty, let accountID = draftAccountID else { return }
-        let draftKind: DraftKind = switch kind {
+    private var draftKind: DraftKind? {
+        switch kind {
         case .post: .post
-        case .comment, .edit: .comment
+        case .comment: .comment
         case .message: .message
+        case .edit: nil
+        }
+    }
+
+    private var draftTarget: String { kind == .post ? community : (targetID ?? recipient) }
+
+    /// Reopens the newest saved draft for the same account, kind and target.
+    private func restoreDraft() async {
+        guard !hasContent, kind != .edit, let accountID = draftAccountID, let draftKind,
+              let drafts = try? await dependencies.persistence.loadDrafts(accountID: accountID) else { return }
+        let target = draftTarget
+        let match = drafts
+            .filter { $0.kind == draftKind && (kind == .post && community.isEmpty || ($0.target ?? "") == target) }
+            .max { $0.modifiedAt < $1.modifiedAt }
+        guard let match, !hasContent else { return }
+        draftID = match.id
+        title = match.title
+        bodyText = match.body
+        if let restoredLink = match.link {
+            link = restoredLink.absoluteString
+            postType = "Link"
+        }
+        if kind == .post, community.isEmpty { community = match.target ?? "" }
+    }
+
+    private func saveDraft() async {
+        // Edits start from the existing text and share a target with replies, so they aren't drafted.
+        guard !sending, kind != .edit, let accountID = draftAccountID, let draftKind else { return }
+        guard hasContent else {
+            try? await dependencies.persistence.deleteDraft(draftID)
+            return
         }
         let draft = Draft(
             id: draftID,
             kind: draftKind,
             accountID: accountID,
-            target: kind == .post ? community : (targetID ?? recipient),
+            target: draftTarget,
             title: title,
             body: bodyText,
-            link: URL(string: link),
+            link: postType == "Link" ? URL(string: link) : nil,
             modifiedAt: .now
         )
         try? await dependencies.persistence.saveDraft(draft)

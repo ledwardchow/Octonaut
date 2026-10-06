@@ -11,7 +11,7 @@ struct SettingsRootView: View {
         Form {
             Section {
                 NavigationLink(value: FeatureRoute.settings(.general)) { Label("General", systemImage: "slider.horizontal.3") }
-                NavigationLink(value: FeatureRoute.settings(.theme)) { Label("Theme", systemImage: "paintpalette") }
+                // ponytail: Theme is hidden until the app applies it.
                 NavigationLink(value: FeatureRoute.settings(.appearance)) { Label("Appearance", systemImage: "rectangle.3.group") }
                 NavigationLink(value: FeatureRoute.settings(.intelligence)) { Label("Intelligence", systemImage: "sparkles") }
             }
@@ -45,6 +45,7 @@ struct SettingsDetailView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var showingReset = false
     @State private var showingAppReset = false
+    @State private var showingSettingsReset = false
     @State private var isResettingApp = false
     @State private var appResetNotice: AppResetNotice?
     @State private var imageCacheBytes = 0
@@ -65,6 +66,12 @@ struct SettingsDetailView: View {
                 Task { await resetStatistics() }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog("Reset settings to defaults?", isPresented: $showingSettingsReset, titleVisibility: .visible) {
+            Button("Reset Settings", role: .destructive) { dependencies.settings.resetToDefaults() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your accounts, drafts and custom feeds are kept.")
         }
         .confirmationDialog("Reset Octonaut?", isPresented: $showingAppReset, titleVisibility: .visible) {
             Button("Reset App", role: .destructive) {
@@ -134,15 +141,7 @@ struct SettingsDetailView: View {
 
     private var general: some View {
         Group {
-            Section("Startup") {
-                Picker("Startup tab", selection: Binding(get: { dependencies.settings.startupTab }, set: { dependencies.settings.startupTab = $0 })) {
-                    Text("Posts").tag(AppTab.posts); Text("Inbox").tag(AppTab.inbox); Text("Accounts").tag(AppTab.account)
-                }
-                Picker("Startup destination", selection: startupDestination) {
-                    Text("Home").tag("home"); Text("Popular").tag("popular"); Text("All").tag("all")
-                }
-                Toggle("Restore last screen", isOn: Binding(get: { dependencies.settings.restoreLastScreen }, set: { dependencies.settings.restoreLastScreen = $0 }))
-            }
+            // ponytail: startup and comment-sort settings are hidden until the app applies them.
             Section("Sorting") {
                 Picker("Default post sort", selection: Binding(get: { dependencies.settings.defaultPostSort }, set: { dependencies.settings.defaultPostSort = $0 })) {
                     ForEach(["default", "best", "hot", "new", "top", "rising", "controversial"], id: \.self) { value in Text(value.capitalized).tag(PostSort(rawValue: value)) }
@@ -150,10 +149,11 @@ struct SettingsDetailView: View {
                 Picker("Default top time", selection: Binding(get: { dependencies.settings.defaultTopTime }, set: { dependencies.settings.defaultTopTime = $0 })) {
                     ForEach(TopTime.allCases, id: \.self) { value in Text(value.title).tag(value) }
                 }
-                Picker("Default comment sort", selection: Binding(get: { dependencies.settings.defaultCommentSort }, set: { dependencies.settings.defaultCommentSort = $0 })) {
-                    ForEach(["best", "new", "top", "controversial", "old", "qa"], id: \.self) { value in Text(value == "qa" ? "Q&A" : value.capitalized).tag(CommentSort(rawValue: value)) }
-                }
                 Toggle("Remember sort per community", isOn: Binding(get: { dependencies.settings.rememberSortPerCommunity }, set: { dependencies.settings.rememberSortPerCommunity = $0 }))
+                // `spec/07-settings-reference.md` asks for this one too. The
+                // property was persisted from the first commit but never had a
+                // control, so nothing could turn it on.
+                Toggle("Remember sort per multireddit", isOn: Binding(get: { dependencies.settings.rememberSortPerMultireddit }, set: { dependencies.settings.rememberSortPerMultireddit = $0 }))
             }
         }
     }
@@ -176,7 +176,6 @@ struct SettingsDetailView: View {
             Section("Reading") {
                 Picker("Feed layout", selection: Binding(get: { dependencies.settings.feedLayout }, set: { dependencies.settings.feedLayout = $0 })) { Text("Media cards").tag(FeedLayout.full); Text("Compact rows").tag(FeedLayout.compact) }
                 Picker("Thumbnail side", selection: Binding(get: { dependencies.settings.compactThumbnailSide }, set: { dependencies.settings.compactThumbnailSide = $0 })) { Text("Left").tag(CompactThumbnailSide.left); Text("Right").tag(CompactThumbnailSide.right) }
-                Toggle("Show community icons", isOn: Binding(get: { dependencies.settings.showCommunityIcons }, set: { dependencies.settings.showCommunityIcons = $0 }))
                 Toggle("Show post flair", isOn: Binding(get: { dependencies.settings.showPostFlair }, set: { dependencies.settings.showPostFlair = $0 }))
                 Toggle("Blur spoilers", isOn: Binding(get: { dependencies.settings.blurSpoilers }, set: { dependencies.settings.blurSpoilers = $0 }))
                 Toggle("Blur NSFW media", isOn: Binding(get: { dependencies.settings.blurNSFWMedia }, set: { dependencies.settings.blurNSFWMedia = $0 }))
@@ -321,7 +320,6 @@ struct SettingsDetailView: View {
         Section {
             NavigationLink(value: FeatureRoute.account(store.accounts.first?.username ?? "Accounts")) { Label("Manage Accounts", systemImage: "person.2") }
             Toggle("Show username in Account tab", isOn: Binding(get: { dependencies.settings.showUsernameInAccountTab }, set: { dependencies.settings.showUsernameInAccountTab = $0 }))
-            Toggle("Confirm account switch while composing", isOn: Binding(get: { dependencies.settings.confirmAccountSwitchWhileComposing }, set: { dependencies.settings.confirmAccountSwitchWhileComposing = $0 }))
             Text("Account sessions are isolated. Removing an account also removes its Keychain credential and private cached data.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
@@ -329,12 +327,7 @@ struct SettingsDetailView: View {
 
     private var dataUse: some View {
         Group {
-            Section("Connection") {
-                Picker("Wi-Fi", selection: Binding(get: { dependencies.settings.wifiDataMode }, set: { dependencies.settings.wifiDataMode = $0 })) { Text("Normal").tag(DataMode.normal); Text("Low Data").tag(DataMode.lowData) }
-                Picker("Cellular", selection: Binding(get: { dependencies.settings.cellularDataMode }, set: { dependencies.settings.cellularDataMode = $0 })) { Text("Normal").tag(DataMode.normal); Text("Low Data").tag(DataMode.lowData) }
-                Toggle("Respect system Low Data Mode", isOn: Binding(get: { dependencies.settings.respectSystemLowDataMode }, set: { dependencies.settings.respectSystemLowDataMode = $0 }))
-                Toggle("Respect Low Power Mode", isOn: Binding(get: { dependencies.settings.respectLowPowerMode }, set: { dependencies.settings.respectLowPowerMode = $0 }))
-            }
+            // ponytail: data-mode settings are hidden until media loading applies them.
             Section("Storage") {
                 Picker("Image cache limit", selection: Binding(
                     get: { dependencies.settings.imageCacheLimitMB },
@@ -414,10 +407,9 @@ struct SettingsDetailView: View {
                 Text(intelligenceAvailability.userMessage)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                LabeledContent("Summary cache", value: "0 MB")
             }
             Section("Reset") {
-                Button("Reset Settings to Defaults", role: .destructive) { dependencies.settings.resetToDefaults() }
+                Button("Reset Settings to Defaults", role: .destructive) { showingSettingsReset = true }
                 Button("Reset App", role: .destructive) { showingAppReset = true }
                     .disabled(isResettingApp)
                 Text("Removes accounts, Keychain credentials, drafts, preferences, caches, statistics, and synced custom feeds.")
@@ -443,23 +435,11 @@ struct SettingsDetailView: View {
 
     @State private var intelligenceAvailability: IntelligenceAvailability = .unsupported
 
-    private var startupDestination: Binding<String> {
-        Binding(
-            get: {
-                switch dependencies.settings.startupPostsDestination {
-                case .popular: "popular"
-                case .all: "all"
-                default: "home"
-                }
-            },
-            set: { value in
-                switch value {
-                case "popular": dependencies.settings.startupPostsDestination = .popular
-                case "all": dependencies.settings.startupPostsDestination = .all
-                default: dependencies.settings.startupPostsDestination = .home
-                }
-            }
-        )
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "Version \(version) (\(build))"
     }
 
     private var about: some View {
@@ -469,7 +449,7 @@ struct SettingsDetailView: View {
                 Text("Octonaut").font(.title2.weight(.bold))
                 Text("A native, local-first Reddit reader for Apple platforms.")
                     .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Text("Version 1.0").font(.caption).foregroundStyle(.tertiary)
+                Text(appVersion).font(.caption).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)

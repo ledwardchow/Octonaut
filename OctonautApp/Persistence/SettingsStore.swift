@@ -213,8 +213,19 @@ final class SettingsStore {
     var defaultPostSort: PostSort { didSet { persist(defaultPostSort.rawValue, key: Keys.defaultPostSort) } }
     var defaultTopTime: TopTime { didSet { persist(defaultTopTime.rawValue, key: Keys.defaultTopTime) } }
     var defaultCommentSort: CommentSort { didSet { persist(defaultCommentSort.rawValue, key: Keys.defaultCommentSort) } }
-    var rememberSortPerCommunity: Bool { didSet { persist(rememberSortPerCommunity, key: Keys.rememberSortPerCommunity) } }
-    var rememberSortPerMultireddit: Bool { didSet { persist(rememberSortPerMultireddit, key: Keys.rememberSortPerMultireddit) } }
+    private(set) var feedSortPreferenceRevision: UInt = 0
+    var rememberSortPerCommunity: Bool {
+        didSet {
+            persist(rememberSortPerCommunity, key: Keys.rememberSortPerCommunity)
+            if oldValue != rememberSortPerCommunity { feedSortPreferenceRevision &+= 1 }
+        }
+    }
+    var rememberSortPerMultireddit: Bool {
+        didSet {
+            persist(rememberSortPerMultireddit, key: Keys.rememberSortPerMultireddit)
+            if oldValue != rememberSortPerMultireddit { feedSortPreferenceRevision &+= 1 }
+        }
+    }
     var rememberCommentSortPerCommunity: Bool { didSet { persist(rememberCommentSortPerCommunity, key: Keys.rememberCommentSortPerCommunity) } }
 
     var openExternalLinks: OpenExternalLinks { didSet { persist(openExternalLinks.rawValue, key: Keys.openExternalLinks) } }
@@ -401,7 +412,7 @@ final class SettingsStore {
         automaticCommentSummaries = defaults.object(forKey: Keys.automaticCommentSummaries) as? Bool ?? false
         keyExcerptsFallback = defaults.object(forKey: Keys.keyExcerptsFallback) as? Bool ?? false
         cacheSummaries = defaults.object(forKey: Keys.cacheSummaries) as? Bool ?? true
-        summaryProvider = SummaryProvider(rawValue: defaults.string(forKey: Keys.summaryProvider) ?? "openAICompatible") ?? .openAICompatible
+        summaryProvider = SummaryProvider(rawValue: defaults.string(forKey: Keys.summaryProvider) ?? "onDevice") ?? .onDevice
         summaryEndpoint = defaults.string(forKey: Keys.summaryEndpoint) ?? "https://openrouter.ai/api/v1"
         summaryModel = defaults.string(forKey: Keys.summaryModel) ?? "openai/gpt-5.6-luna"
         autoplayVideo = AutoplayVideo(rawValue: defaults.string(forKey: Keys.autoplayVideo) ?? "wifi") ?? .wifi

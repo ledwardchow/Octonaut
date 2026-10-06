@@ -21,6 +21,48 @@ final class ReportingTests: XCTestCase {
         XCTAssertEqual(request.fields["api_type"], "json")
     }
 
+    func testSiteReportReasonsFlattenRedditFlow() throws {
+        let data = Data(#"""
+        {"rules": [], "site_rules": ["Spam"], "site_rules_flow": [
+          {"reasonTextToShow": "This is spam", "reasonText": "This is spam"},
+          {"nextStepHeader": "In what way?", "reasonTextToShow": "This is abusive or harassing", "reasonText": "", "nextStepReasons": [
+            {"nextStepHeader": "Who?", "reasonTextToShow": "It's targeted harassment", "reasonText": "", "nextStepReasons": [
+              {"reasonTextToShow": "At me", "reasonText": "It's targeted harassment at me"}]}]},
+          {"nextStepHeader": "What issue?", "reasonTextToShow": "Other issues", "reasonText": "", "nextStepReasons": [
+            {"reasonTextToShow": "It infringes my copyright", "reasonText": "It infringes my copyright", "fileComplaint": true,
+             "complaintUrl": "https://www.reddit.com/api/report_redirect?thing=%25%28thing%29s&amp;reason_code=COPYRIGHT&amp;feature=from_r2"},
+            {"reasonTextToShow": "Phishing", "reasonText": "Phishing", "fileComplaint": true, "complaintUrl": "https://example.com/form"},
+            {"reasonTextToShow": "Someone is considering suicide or serious self-harm.", "reasonText": "Someone is considering suicide or serious self-harm.", "canSpecifyUsernames": true, "requestCrisisSupport": true}]}]}
+        """#.utf8)
+        let reasons = RedditSiteReportReason.decode(data)
+        XCTAssertEqual(reasons.map(\.label), [
+            "This is spam",
+            "This is abusive or harassing › It's targeted harassment › At me",
+            "Other issues › It infringes my copyright",
+            "Other issues › Someone is considering suicide or serious self-harm."
+        ])
+        XCTAssertEqual(reasons[1].reasonText, "It's targeted harassment at me")
+        XCTAssertEqual(reasons[0].handling, .report)
+        XCTAssertEqual(reasons[3].handling, .browser)
+        guard case .complaint(let template) = reasons[2].handling else { return XCTFail("Expected a complaint link") }
+        XCTAssertEqual(
+            RedditSiteReportReason.complaintURL(template, fullname: "t3_abc")?.absoluteString,
+            "https://www.reddit.com/api/report_redirect?thing=t3_abc&reason_code=COPYRIGHT&feature=from_r2"
+        )
+        XCTAssertTrue(RedditSiteReportReason.decode(Data(#"{"rules":[]}"#.utf8)).isEmpty)
+    }
+
+    func testSiteRuleReportUsesSiteReasonField() {
+        let request = URLSessionRedditClient.mutationRequest(
+            for: .reportSiteRule(fullname: "t3_abc", community: "test", reason: "This is spam"))
+        XCTAssertEqual(request.path, "/api/report")
+        XCTAssertEqual(request.fields["thing_id"], "t3_abc")
+        XCTAssertEqual(request.fields["reason"], "This is spam")
+        XCTAssertEqual(request.fields["site_reason"], "This is spam")
+        XCTAssertNil(request.fields["rule_reason"])
+        XCTAssertEqual(request.fields["strict_freeform_reports"], "true")
+    }
+
     func testReportResponseRequiresExplicitJSONEnvelope() throws {
         XCTAssertTrue(try RedditReportRule.decodeSubmission(Data(#"{"json":{"errors":[]}}"#.utf8)).succeeded)
         let rejected = try RedditReportRule.decodeSubmission(Data(#"{"json":{"errors":[["FREE_FORM_REPORTS_NOT_ALLOWED","Choose a community rule","reason"]]}}"#.utf8))
@@ -115,6 +157,84 @@ private final class ReportRequestProtocol: URLProtocol, @unchecked Sendable {
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(#"{"json":{"errors":[]}}"#.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+final class InboxTests: XCTestCase {
+    func testRepliesUseCommentContextAndPreserveMarkdown() throws {
+        let data = Data(#"{"data":{"children":[{"kind":"t1","data":{"id":"abc","name":"t1_abc","subject":"comment reply","body":"Use <tag> and **bold**","context":"/r/test/comments/post/title/abc/?context=3","link_permalink":"/r/test/comments/post/title/","new":true}}]}}"#.utf8)
+        let item = try XCTUnwrap(LiveAuthenticatedRedditService.decodeInbox(data).items.first)
+        XCTAssertEqual(item.kind, "reply")
+        XCTAssertEqual(item.body?.plainText, "Use <tag> and **bold**")
+        XCTAssertEqual(item.postPermalink?.absoluteString, "https://www.reddit.com/r/test/comments/post/title/abc/?context=3")
+        XCTAssertFalse(item.isRead)
+    }
+
+    func testCommentNotificationsAreNotPrivateMessages() throws {
+        let data = Data(#"{"data":{"children":[{"kind":"t4","data":{"id":"abc","name":"t4_abc","was_comment":true,"subject":"username mention","body":"Mention","context":"https://example.com/","permalink":"http://www.reddit.com/","link_permalink":"/r/test/comments/post/title/"}}]}}"#.utf8)
+        let item = try XCTUnwrap(LiveAuthenticatedRedditService.decodeInbox(data).items.first)
+        XCTAssertEqual(item.kind, "mention")
+        XCTAssertEqual(item.postPermalink?.host, "www.reddit.com")
+        XCTAssertEqual(item.postPermalink?.scheme, "https")
+    }
+
+    func testConversationIncludesDeepRepliesAndRootID() throws {
+        let data = Data(#"{"data":{"children":[{"kind":"t4","data":{"id":"root","name":"t4_root","body":"First","replies":{"data":{"children":[{"kind":"t4","data":{"id":"reply","body":"Second","first_message_name":"t4_root","replies":{"data":{"children":[{"kind":"t4","data":{"id":"last","body":"Third","first_message":"root"}}]}}}}]}}}}]}}"#.utf8)
+        let items = try LiveAuthenticatedRedditService.decodeInbox(data, includeReplies: true).items
+        XCTAssertEqual(items.map(\.id), ["root", "reply", "last"])
+        XCTAssertEqual(items.map { $0.body?.plainText }, ["First", "Second", "Third"])
+        XCTAssertEqual(items[1].conversationFullname, "t4_root")
+        XCTAssertEqual(items[2].conversationFullname, "t4_root")
+        XCTAssertEqual(try LiveAuthenticatedRedditService.decodeInbox(data).items.count, 1)
+    }
+
+    func testInboxRequestsUseWebsiteSessionAndRejectUnsafeHosts() async throws {
+        let account = AccountID(rawValue: UUID())
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "test")])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [InboxRequestProtocol.self]
+        let service = LiveAuthenticatedRedditService(credentialVault: vault, reddit: FixtureRedditClient(), sessionConfiguration: configuration)
+        let signedOut = LiveAuthenticatedRedditService(credentialVault: InMemoryCredentialVault(), reddit: FixtureRedditClient(), sessionConfiguration: configuration)
+        do {
+            _ = try await signedOut.fetchInbox(section: .all, accountID: account)
+            XCTFail("A missing session must prevent the request")
+        } catch { XCTAssertEqual(error as? RedditClientError, .authenticationRequired) }
+        _ = try await service.fetchInbox(section: .all, accountID: account)
+        _ = try await service.fetchInbox(section: .all, after: "t4_older", accountID: account)
+        _ = try await service.fetchConversation(messageID: "t4_abc", accountID: account)
+        for destination in ["https://example.com", "http://www.reddit.com", "https://www.reddit.com:8443"] {
+            let unsafe = LiveAuthenticatedRedditService(credentialVault: vault, reddit: FixtureRedditClient(), baseURL: URL(string: destination)!, sessionConfiguration: configuration)
+            do {
+                _ = try await unsafe.fetchInbox(section: .all, accountID: account)
+                XCTFail("Unsafe destinations must be rejected")
+            } catch { XCTAssertEqual(error as? RedditClientError, .invalidURL) }
+        }
+        do {
+            _ = try await service.fetchConversation(messageID: "../inbox", accountID: account)
+            XCTFail("Invalid message IDs must be rejected")
+        } catch { XCTAssertEqual(error as? RedditClientError, .invalidURL) }
+    }
+}
+
+private final class InboxRequestProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        XCTAssertEqual(request.url?.host, "www.reddit.com")
+        XCTAssertEqual(request.url?.scheme, "https")
+        XCTAssertTrue(["/message/inbox.json", "/message/messages/abc.json"].contains(request.url!.path))
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), URLSessionRedditClient.browserUserAgent)
+        let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "after" }?.value
+        XCTAssertTrue(after == nil || after == "t4_older")
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(#"{"data":{"children":[]}}"#.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

@@ -8,6 +8,7 @@ actor InMemoryPersistenceStore: PersistenceStore {
     private var statistics: [UsageStatistic: Int] = [:]
     private var communityVisits: [String: Int] = [:]
     private var communitiesVisitedThisSession: Set<String> = []
+    private var feedPreferences: [String: FeedSortPreference] = [:]
 
     func loadAccounts() async throws -> [Account] {
         accounts.values.sorted { ($0.lastUsedAt ?? $0.createdAt) > ($1.lastUsedAt ?? $1.createdAt) }
@@ -41,6 +42,14 @@ actor InMemoryPersistenceStore: PersistenceStore {
 
     func clearSeenPosts() async throws {
         seen.removeAll()
+    }
+
+    func loadFeedPreference(feedKey: String, accountScope: String) async throws -> FeedSortPreference? {
+        feedPreferences["\(accountScope)|\(feedKey)"]
+    }
+
+    func saveFeedPreference(_ preference: FeedSortPreference, feedKey: String, accountScope: String) async throws {
+        feedPreferences["\(accountScope)|\(feedKey)"] = preference
     }
 
     func loadDrafts(accountID: AccountID?) async throws -> [Draft] {
@@ -213,6 +222,41 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
         try context.fetch(FetchDescriptor<SeenPostRecord>()).forEach(context.delete)
         seenIDsCache?.removeAll()
         seenCount = 0
+        try context.save()
+    }
+
+    func loadFeedPreference(feedKey: String, accountScope: String) async throws -> FeedSortPreference? {
+        var descriptor = FetchDescriptor<FeedPreferenceRecord>(
+            predicate: #Predicate<FeedPreferenceRecord> {
+                $0.feedKey == feedKey && $0.accountScopeKey == accountScope
+            }
+        )
+        descriptor.fetchLimit = 1
+        guard let record = try context.fetch(descriptor).first else { return nil }
+        return FeedSortPreference(
+            sort: PostSort(rawValue: record.sortRawValue),
+            topTime: record.topTimeRawValue.flatMap(TopTime.init(rawValue:))
+        )
+    }
+
+    func saveFeedPreference(_ preference: FeedSortPreference, feedKey: String, accountScope: String) async throws {
+        var descriptor = FetchDescriptor<FeedPreferenceRecord>(
+            predicate: #Predicate<FeedPreferenceRecord> {
+                $0.feedKey == feedKey && $0.accountScopeKey == accountScope
+            }
+        )
+        descriptor.fetchLimit = 1
+        if let record = try context.fetch(descriptor).first {
+            record.sortRawValue = preference.sort.rawValue
+            record.topTimeRawValue = preference.topTime?.rawValue
+        } else {
+            context.insert(FeedPreferenceRecord(
+                accountScopeKey: accountScope,
+                feedKey: feedKey,
+                sort: preference.sort,
+                topTime: preference.topTime
+            ))
+        }
         try context.save()
     }
 

@@ -510,6 +510,7 @@ struct InboxItem: Codable, Hashable, Sendable, Identifiable {
     var createdAt: Date
     var isRead: Bool
     var kind: String
+    var conversationFullname: String? = nil
 }
 
 struct Message: Codable, Hashable, Sendable, Identifiable {

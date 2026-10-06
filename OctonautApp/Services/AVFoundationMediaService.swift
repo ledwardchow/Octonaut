@@ -294,6 +294,22 @@ enum RedditVideoPlayback {
         return components.url ?? source
     }
 
+    /// A shared `https://v.redd.it/<id>` link is a redirect to the post page,
+    /// not media. Its HLS playlist plays the video with audio.
+    static func playableURL(forSharedLink link: URL) -> URL {
+        let segments = link.path.split(separator: "/")
+        guard link.scheme?.lowercased() == "https",
+              link.host?.lowercased() == "v.redd.it",
+              link.user == nil, link.password == nil,
+              link.port == nil || link.port == 443,
+              segments.count == 1, link.pathExtension.isEmpty,
+              segments[0].allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+              let playlist = URL(string: "https://v.redd.it/\(segments[0])/HLSPlaylist.m3u8") else {
+            return url(for: link, isGIF: false)
+        }
+        return playlist
+    }
+
     static func failureMessage(for error: NSError?) -> String {
         var current = error
         // AVFoundation wraps CoreAudio errors in its own error domain.

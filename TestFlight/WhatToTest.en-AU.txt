@@ -1,8 +1,51 @@
 Changes in current build:
-Fix: user profile tap zone is too big on post cards
-Fix: user flair would cause subreddit/user display to compress multiline
+Fixed crash when saving media to Photos.
+Joining and leaving communities now saves reliably to Reddit.
+Private messages now send, with a subject field.
+Inbox items open full messages, replies, and conversations.
+Replying in a conversation now replies to the thread.
+Inbox Messages filter and mark read now work.
+Inbox replies link to the original discussion.
+Reply to comments directly from your inbox.
+Opening a read inbox item no longer marks it unread.
+Send errors now show Reddit's reason.
+Switch accounts from the account menu.
+Log out now asks for confirmation.
+Summaries now use Apple Intelligence by default.
+Hid settings that had no effect yet.
+Signed-in and signed-out browsing no longer share cookies.
+Feed no longer preloads videos when autoplay is off.
+Mac now blurs NSFW thumbnails and post images.
+Block users from posts and comments on Mac.
+Unsent posts, comments and messages reopen as drafts.
+Composer can't be swiped away with unsent text.
+Searches containing "+" now work, like "C++".
+Fixed possible crash with semantic filters.
+Settings now shows the real app version.
+Share Feed now shares the current feed.
+Deleting a feed or resetting settings now asks first.
+A failed page load no longer wipes the feed.
+Videos ride out brief buffering instead of restarting.
+Login Try Again works after a save error.
+Failed login no longer flickers and retries constantly.
+Full-screen video shows an error and Try Again.
+Shared v.redd.it links now play.
+Videos with sound now pause other audio.
+Removed the Image post type until uploads work.
+Text posts no longer send a leftover link.
+"Mark Visible Seen" no longer unmarks seen posts.
+Feed keeps loading more after a failed refresh.
+Save and vote state stays in step with Reddit.
+Search links now run their search.
+Semantic filter works with its default rule.
+Private, banned and quarantined communities now say so.
+"Continue this thread" now opens the rest of the thread.
+Inbox now loads older messages as you scroll.
+Report to Reddit for breaking Reddit's rules.
 
 Changes in previous builds:
+Fix: user profile tap zone is too big on post cards
+Fix: user flair would cause subreddit/user display to compress multiline
 Fix: Some videos didn't play its audio
 Posts with lots of text content now trim correctly 
 You can now comment on posts without any comments

@@ -798,6 +798,7 @@ struct OctonautDestinationView: View {
     let route: FeatureRoute
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    @Environment(AppDependencies.self) private var dependencies
 
     var body: some View {
         switch route {
@@ -809,8 +810,8 @@ struct OctonautDestinationView: View {
             PostDetailView(post: PostCardModel(deepLinkURL: url), store: store, router: router)
         case .community(let name):
             CommunityView(name: name, store: store, router: router)
-        case .search:
-            SearchRootView(store: store, router: router)
+        case .search(let query):
+            SearchRootView(store: store, router: router, reddit: dependencies.reddit, initialQuery: query)
         case .conversation(let id):
             ConversationView(itemID: id, store: store, router: router)
         case .account(let username):

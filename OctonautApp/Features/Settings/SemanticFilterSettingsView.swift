@@ -4,7 +4,7 @@ import SwiftUI
 struct SemanticFilterSettingsView: View {
     let intelligence: any IntelligenceService
     @AppStorage("filters.semantic.enabled") private var isEnabled = false
-    @AppStorage("filters.semantic.instruction") private var instruction = "Hide posts that are mainly promotional."
+    @AppStorage("filters.semantic.instruction") private var instruction = SemanticFilterEngine.defaultInstruction
     @AppStorage("filters.blockedCommunities") private var blockedCommunities = ""
     @AppStorage("filters.keywordTerms") private var keywordTerms = ""
     @State private var availability: IntelligenceAvailability = .unsupported

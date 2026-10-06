@@ -9,10 +9,18 @@ struct SearchRootView: View {
     @State private var scope: FeatureSearchScope = .posts
     @State private var submittedQuery = ""
     @State private var model: SearchFeatureModel
+    private let initialQuery: String
 
-    init(store: OctonautFeatureStore, router: OctonautFeatureRouter, reddit: (any RedditClient)? = nil) {
+    init(
+        store: OctonautFeatureStore,
+        router: OctonautFeatureRouter,
+        reddit: (any RedditClient)? = nil,
+        initialQuery: String = ""
+    ) {
         self.store = store
         self.router = router
+        self.initialQuery = initialQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        _query = State(initialValue: self.initialQuery)
         _model = State(initialValue: SearchFeatureModel(reddit: reddit ?? UnavailableRedditClient()))
     }
 
@@ -29,6 +37,12 @@ struct SearchRootView: View {
             ForEach(FeatureSearchScope.allCases) { value in
                 Text(value.rawValue).tag(value)
             }
+        }
+        .task {
+            // An octonaut://search?q= link arrives with its query already filled in.
+            guard !initialQuery.isEmpty, submittedQuery.isEmpty else { return }
+            submittedQuery = initialQuery
+            await model.submit(query: initialQuery, scope: scope, account: dependencies.accounts.selectedAccountID)
         }
         .onSubmit(of: .search) {
             submittedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -53,12 +53,12 @@ protocol RedditClient: Sendable {
         after: String?,
         account: AccountID?
     ) async throws -> Listing<UserComment>
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule]
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult
 }
 
 extension RedditClient {
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
         throw UnavailableServiceError(service: "Reporting rules")
     }
 }
@@ -115,18 +115,27 @@ enum RedditResponseCache {
 /// A Reddit web-session JSON client. It uses an ephemeral URLSession and asks
 /// the credential vault for the selected account on every request.
 actor URLSessionRedditClient: RedditClient {
+    /// Reddit throttles unfamiliar clients on website routes, so every Reddit
+    /// request presents the same Safari user agent.
+    static let browserUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+
     private let baseURL: URL
     private let session: URLSession
+    /// Signed-in requests use their own session with no cookie jar or response
+    /// cache, so one account's cookies never reach another account or the
+    /// anonymous path, and private responses are never written to disk.
+    private let authenticatedSession: URLSession
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
+    private var anonymousBootstrapTask: Task<Bool, Never>?
     private var isMoreCommentsRequestInFlight = false
     private var moreCommentsRequestWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
-        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+        userAgent: String = URLSessionRedditClient.browserUserAgent,
         sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.baseURL = baseURL
@@ -134,6 +143,13 @@ actor URLSessionRedditClient: RedditClient {
         self.userAgent = userAgent
 
         let configuration = sessionConfiguration ?? URLSessionConfiguration.ephemeral
+        let authenticatedConfiguration = configuration.copy() as! URLSessionConfiguration
+        authenticatedConfiguration.httpShouldSetCookies = false
+        authenticatedConfiguration.httpCookieStorage = nil
+        authenticatedConfiguration.urlCache = nil
+        authenticatedConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        authenticatedConfiguration.timeoutIntervalForRequest = 30
+        authenticatedConfiguration.timeoutIntervalForResource = 60
         // Ephemeral sessions keep Reddit's logged-out edge cookies in memory
         // without persisting browsing state beyond this app process.
         configuration.httpShouldSetCookies = true
@@ -143,6 +159,11 @@ actor URLSessionRedditClient: RedditClient {
         configuration.timeoutIntervalForResource = 60
         self.session = URLSession(
             configuration: configuration,
+            delegate: RedditRedirectDelegate(),
+            delegateQueue: nil
+        )
+        self.authenticatedSession = URLSession(
+            configuration: authenticatedConfiguration,
             delegate: RedditRedirectDelegate(),
             delegateQueue: nil
         )
@@ -367,26 +388,36 @@ actor URLSessionRedditClient: RedditClient {
         return try RedditJSONCodec.decodeUserComments(data)
     }
 
-    func reportRules(community: String, account: AccountID) async throws -> [RedditReportRule] {
+    func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
         guard RedditReportRule.validCommunity(community) else { throw RedditClientError.invalidURL }
         let data = try await requestData(
             method: "GET", path: "/r/\(community)/about/rules.json",
             query: [URLQueryItem(name: "raw_json", value: "1")], body: nil,
             account: account, retryable: true
         )
-        return try RedditReportRule.decode(data)
+        return RedditReportOptions(
+            rules: try RedditReportRule.decode(data),
+            siteReasons: RedditSiteReportReason.decode(data)
+        )
+    }
+
+    private func validateReport(fullname: String, community: String, reason: String, account: AccountID) async throws {
+        guard RedditReportTarget.validFullname(fullname), RedditReportRule.validCommunity(community),
+              !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 100 else {
+            throw RedditClientError.invalidResponse
+        }
+        guard let credential = try await credentialVault.credential(for: account),
+              let modhash = credential.modhash, !modhash.isEmpty else {
+            throw RedditClientError.authenticationRequired
+        }
     }
 
     func perform(_ action: RedditAction, account: AccountID) async throws -> ActionResult {
         if case .report(let fullname, let community, let reason) = action {
-            guard RedditReportTarget.validFullname(fullname), RedditReportRule.validCommunity(community),
-                  !reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, reason.count <= 100 else {
-                throw RedditClientError.invalidResponse
-            }
-            guard let credential = try await credentialVault.credential(for: account),
-                  let modhash = credential.modhash, !modhash.isEmpty else {
-                throw RedditClientError.authenticationRequired
-            }
+            try await validateReport(fullname: fullname, community: community, reason: reason, account: account)
+        }
+        if case .reportSiteRule(let fullname, let community, let reason) = action {
+            try await validateReport(fullname: fullname, community: community, reason: reason, account: account)
         }
         var request = Self.mutationRequest(for: action)
         if case .block(_, false) = action {
@@ -415,7 +446,10 @@ actor URLSessionRedditClient: RedditClient {
             account: account,
             retryable: false
         )
-        if case .report = action { return try RedditReportRule.decodeSubmission(data) }
+        switch action {
+        case .report, .reportSiteRule: return try RedditReportRule.decodeSubmission(data)
+        default: break
+        }
         if data.isEmpty { return ActionResult(succeeded: true) }
         return try RedditJSONCodec.decodeActionResult(data)
     }
@@ -519,7 +553,7 @@ actor URLSessionRedditClient: RedditClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await (account == nil ? session : authenticatedSession).data(for: request)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -540,6 +574,12 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     static func validateResponse(_ data: Data, response http: HTTPURLResponse, isAnonymous: Bool) throws {
+        // Reddit explains community-level refusals in a JSON "reason". Those are
+        // not a logged-out block, so signing in would not help.
+        if http.statusCode == 403 || http.statusCode == 404,
+           let message = communityUnavailableMessage(data) {
+            throw RedditClientError.http(statusCode: http.statusCode, message: message)
+        }
         if http.statusCode == 401 || http.statusCode == 403 {
             if isAnonymous { throw RedditClientError.anonymousAccessBlocked }
             if http.statusCode == 403 { throw RedditClientError.accessDenied }
@@ -561,20 +601,40 @@ actor URLSessionRedditClient: RedditClient {
         }
     }
 
+    static func communityUnavailableMessage(_ data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let reason = object["reason"] as? String else { return nil }
+        switch reason {
+        case "private": return "This community is private."
+        case "banned": return "This community has been banned."
+        case "quarantined": return "This community is quarantined. Open it on reddit.com to opt in."
+        case "gated": return "This community requires confirming on reddit.com before viewing."
+        case "gold_only", "premium_only": return "This community is only for Reddit Premium members."
+        default: return nil
+        }
+    }
+
     private func bootstrapAnonymousSessionIfNeeded() async {
         guard !didBootstrapAnonymousSession else { return }
-        didBootstrapAnonymousSession = true
+        if let task = anonymousBootstrapTask {
+            _ = await task.value
+            return
+        }
         guard let url = URL(string: "https://old.reddit.com/") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
-        do {
-            _ = try await session.data(for: request)
-        } catch {
-            // A later manual refresh should be able to retry the cookie seed.
-            didBootstrapAnonymousSession = false
+        let task = Task { [session, request] in
+            guard let (_, response) = try? await session.data(for: request),
+                  let http = response as? HTTPURLResponse else { return false }
+            return (200..<300).contains(http.statusCode)
         }
+        anonymousBootstrapTask = task
+        // Only the caller that created this task updates the state. Other
+        // callers wait for the same request without clearing a later retry.
+        didBootstrapAnonymousSession = await task.value
+        anonymousBootstrapTask = nil
     }
 
     private func makeURL(path: String, query: [URLQueryItem], websiteHost: String? = nil) -> URL? {
@@ -591,6 +651,9 @@ actor URLSessionRedditClient: RedditClient {
               components.port == nil || components.port == 443 else { return nil }
         components.path = path.hasPrefix("/") ? path : "/\(path)"
         components.queryItems = query.isEmpty ? nil : query.filter { $0.value != nil }
+        // URLComponents leaves "+" as-is, and Reddit reads it as a space ("C++" becomes "C  ").
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
         return components.url
     }
 
@@ -644,6 +707,10 @@ actor URLSessionRedditClient: RedditClient {
         switch action {
         case .report(let fullname, let community, let reason):
             return ("POST", "/api/report", [], ["thing_id": fullname, "sr_name": community, "reason": reason, "rule_reason": reason, "api_type": "json", "strict_freeform_reports": "true"])
+        case .reportSiteRule(let fullname, let community, let reason):
+            // Mirrors the community-rule request with Reddit's site_reason field. Strict mode
+            // makes Reddit reject an unrecognised reason instead of filing it as free text.
+            return ("POST", "/api/report", [], ["thing_id": fullname, "sr_name": community, "reason": reason, "site_reason": reason, "api_type": "json", "strict_freeform_reports": "true"])
         case .vote(let fullname, let direction):
             return ("POST", "/api/vote", [], ["id": fullname, "dir": String(max(-1, min(direction, 1)))])
         case .save(let fullname, let saved):
