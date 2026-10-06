@@ -16,6 +16,7 @@ Log out now asks for confirmation.
 Summaries now use Apple Intelligence by default.
 Hid settings that had no effect yet.
 Signed-in and signed-out browsing no longer share cookies.
+Feed no longer preloads videos when autoplay is off.
 
 Changes in previous builds:
 Fix: Some videos didn't play its audio

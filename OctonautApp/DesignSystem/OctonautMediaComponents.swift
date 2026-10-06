@@ -498,11 +498,18 @@ final class OctonautFeedMediaPreloader {
     }
 
     private let maximumMedia = 120
+    /// A paused player keeps buffering and holds decoded frames, so only a few
+    /// videos are held ahead. Unmetered networks get more, bounded by memory.
+    private var maximumVideos: Int { OctonautNetworkStatus.shared.isUnmetered ? 8 : 4 }
     private var imageTasks: [URL: Task<Void, Never>] = [:]
     private var videoTasks: [VideoKey: Task<OctonautAVPlayerFactory.Playback, Never>] = [:]
     private var mediaOrder: [MediaKey] = []
 
-    func preload(posts: some Sequence<PostCardModel>, compact: Bool) {
+    func preload(posts: some Sequence<PostCardModel>, compact: Bool, autoplay: AutoplayVideo) {
+        // Warming a video downloads it, so only do it when the row would autoplay.
+        let videosAllowed = autoplay.shouldAutoplay(
+            isConnectedViaWiFi: OctonautNetworkStatus.shared.isConnectedViaWiFi
+        )
         for post in posts {
             for url in imageURLs(for: post, compact: compact) {
                 prepareImage(at: url)
@@ -511,7 +518,7 @@ final class OctonautFeedMediaPreloader {
             // Anything else is built synchronously at the row, so warming it
             // here would construct players -- and their decode sessions and
             // connections -- for a whole window of posts nobody is looking at.
-            if !compact,
+            if !compact, videosAllowed,
                post.mediaKind == "video" || post.mediaKind == "gif",
                let url = post.mediaURL,
                let audioURL = post.audioURL {
@@ -573,6 +580,12 @@ final class OctonautFeedMediaPreloader {
     }
 
     private func trimPreparedMedia() {
+        while videoTasks.count > maximumVideos,
+              let index = mediaOrder.firstIndex(where: { if case .video = $0 { true } else { false } }),
+              case .video(let expiredKey) = mediaOrder.remove(at: index) {
+            // A visible row may still own this player; it keeps its own reference.
+            videoTasks.removeValue(forKey: expiredKey)
+        }
         while mediaOrder.count > maximumMedia {
             switch mediaOrder.removeFirst() {
             case .image(let expiredURL):
@@ -1334,14 +1347,18 @@ private final class OctonautNetworkStatus {
     static let shared = OctonautNetworkStatus()
 
     private(set) var isConnectedViaWiFi = false
+    /// Not cellular/hotspot (expensive) and not Low Data Mode (constrained).
+    private(set) var isUnmetered = false
     @ObservationIgnored private let monitor = NWPathMonitor()
     @ObservationIgnored private let queue = DispatchQueue(label: "com.octonaut.network-status")
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             let isConnectedViaWiFi = path.status == .satisfied && path.usesInterfaceType(.wifi)
+            let isUnmetered = path.status == .satisfied && !path.isExpensive && !path.isConstrained
             Task { @MainActor [weak self] in
                 self?.isConnectedViaWiFi = isConnectedViaWiFi
+                self?.isUnmetered = isUnmetered
             }
         }
         monitor.start(queue: queue)

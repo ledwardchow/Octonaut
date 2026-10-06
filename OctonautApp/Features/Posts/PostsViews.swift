@@ -409,7 +409,8 @@ struct FeedView: View {
         .task(id: visiblePosts.map(\.id)) {
             mediaPreloader.preload(
                 posts: visiblePosts.prefix(mediaPreloadDistance),
-                compact: compactRows
+                compact: compactRows,
+                autoplay: dependencies.settings.autoplayVideo
             )
         }
         .loginRequiredModal(isPresented: $showingLogin)
@@ -571,7 +572,11 @@ struct FeedView: View {
         let posts = visiblePosts
         guard posts.indices.contains(index) else { return }
         let end = min(posts.count, index + mediaPreloadDistance + 1)
-        mediaPreloader.preload(posts: posts[index..<end], compact: compactRows)
+        mediaPreloader.preload(
+            posts: posts[index..<end],
+            compact: compactRows,
+            autoplay: dependencies.settings.autoplayVideo
+        )
     }
 
     private func beginCrosspost(_ post: PostCardModel) {
