@@ -11,6 +11,7 @@ struct MacFeedListView: View {
     let onComposePost: () -> Void
     @Environment(AppDependencies.self) private var dependencies
     @State private var reportTarget: RedditReportTarget?
+    @State private var blockTarget: String?
     @State private var actionError: String?
 
     var body: some View {
@@ -86,6 +87,11 @@ struct MacFeedListView: View {
                             .listRowSeparatorTint(.secondary.opacity(0.22))
                             .contextMenu {
                                 Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
+                                if OctonautUserDestination.route(for: post.author) != nil {
+                                    Button("Block u/\(post.author)", systemImage: "person.crop.circle.badge.xmark") {
+                                        if dependencies.accounts.requireLogin() { blockTarget = post.author }
+                                    }
+                                }
                                 Button(post.vote == 1 ? "Remove Upvote" : "Upvote") {
                                     performVote(post, value: post.vote == 1 ? 0 : 1)
                                 }
@@ -150,6 +156,7 @@ struct MacFeedListView: View {
             }
         }
         .sheet(item: $reportTarget) { ReportContentView(target: $0) }
+        .modifier(MacBlockUserConfirmation(username: $blockTarget, store: store))
         .alert(
             "Reddit action failed",
             isPresented: Binding(
@@ -394,10 +401,95 @@ private struct MacPostMediaCard: View {
     }
 }
 
+/// Confirms, then blocks a user on the selected Reddit account (App Store guideline 1.2).
+private struct MacBlockUserConfirmation: ViewModifier {
+    @Binding var username: String?
+    let store: OctonautFeatureStore
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var blockError: String?
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                "Block u/\(username ?? "")?",
+                isPresented: Binding(get: { username != nil }, set: { if !$0 { username = nil } }),
+                titleVisibility: .visible,
+                presenting: username
+            ) { name in
+                Button("Block user", role: .destructive) { block(name) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("This blocks the user on your selected Reddit account.")
+            }
+            .alert(
+                "Couldn't block user",
+                isPresented: Binding(get: { blockError != nil }, set: { if !$0 { blockError = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(blockError ?? "")
+            }
+    }
+
+    private func block(_ name: String) {
+        guard let accountID = dependencies.accounts.selectedAccountID else { return }
+        Task {
+            do {
+                try await store.performProfileAction(.block(username: name, blocked: true), username: name, accountID: accountID)
+            } catch {
+                blockError = error.localizedDescription
+            }
+        }
+    }
+}
+
+/// The detail header image, blurred behind a reveal button when it is NSFW or a spoiler.
+private struct MacSensitiveHeaderImage: View {
+    let post: PostCardModel
+    let url: URL
+    @Environment(AppDependencies.self) private var dependencies
+    @State private var isRevealed = false
+
+    private var shouldBlur: Bool {
+        !isRevealed && post.isSensitive(
+            blurringNSFW: dependencies.settings.blurNSFWMedia,
+            blurringSpoilers: dependencies.settings.blurSpoilers
+        )
+    }
+
+    var body: some View {
+        AsyncImage(url: url) { image in
+            image.resizable().scaledToFit()
+        } placeholder: {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 180)
+        }
+        .blur(radius: shouldBlur ? 30 : 0, opaque: true)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            if shouldBlur {
+                Button { isRevealed = true } label: {
+                    VStack(spacing: 6) {
+                        Image(systemName: "eye.slash").font(.title2)
+                        Text(post.isNSFW ? "Sensitive media" : "Spoiler")
+                            .font(.caption.weight(.semibold))
+                        Text("Click to reveal").font(.caption2)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(14)
+                    .background(.black.opacity(0.62), in: RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
 private struct MacPostRow: View {
     let post: PostCardModel
     let canVote: Bool
     let onVote: (Int) -> Void
+    @Environment(AppDependencies.self) private var dependencies
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -449,6 +541,10 @@ private struct MacPostRow: View {
                     Color.secondary.opacity(0.12)
                 }
                 .frame(width: 72, height: 54)
+                .blur(radius: post.isSensitive(
+                    blurringNSFW: dependencies.settings.blurNSFWMedia,
+                    blurringSpoilers: dependencies.settings.blurSpoilers
+                ) ? 14 : 0, opaque: true)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
@@ -465,6 +561,7 @@ struct MacPostDetailView: View {
     let onCompose: (MacComposerContext) -> Void
     @Environment(AppDependencies.self) private var dependencies
     @State private var reportTarget: RedditReportTarget?
+    @State private var blockTarget: String?
     @State private var actionError: String?
     @State private var isMediaFillingPane = false
     @State private var selectedMediaPage = 0
@@ -497,6 +594,7 @@ struct MacPostDetailView: View {
             }
             .navigationTitle("r/\(displayedPost.community)")
             .sheet(item: $reportTarget) { ReportContentView(target: $0) }
+            .modifier(MacBlockUserConfirmation(username: $blockTarget, store: store))
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack {
                     Spacer()
@@ -546,6 +644,16 @@ struct MacPostDetailView: View {
                             Label("Report", systemImage: "flag").labelStyle(.iconOnly)
                         }
                         .help("Report content")
+
+                        if OctonautUserDestination.route(for: displayedPost.author) != nil {
+                            Button {
+                                if dependencies.accounts.requireLogin() { blockTarget = displayedPost.author }
+                            } label: {
+                                Label("Block u/\(displayedPost.author)", systemImage: "person.crop.circle.badge.xmark")
+                                    .labelStyle(.iconOnly)
+                            }
+                            .help("Block u/\(displayedPost.author)")
+                        }
 
                         ShareLink(item: displayedPost.shareURL) {
                             Label("Share", systemImage: "square.and.arrow.up")
@@ -652,6 +760,11 @@ struct MacPostDetailView: View {
                                 Button("Report", systemImage: "flag") {
                                     if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(commentID: comment.id, post: post) }
                                 }
+                                if OctonautUserDestination.route(for: comment.author) != nil {
+                                    Button("Block u/\(comment.author)", systemImage: "person.crop.circle.badge.xmark") {
+                                        if dependencies.accounts.requireLogin() { blockTarget = comment.author }
+                                    }
+                                }
                             }
                         }
                     }
@@ -735,15 +848,9 @@ struct MacPostDetailView: View {
             }
 
             if post.mediaKind == "image", let mediaURL = post.mediaURL {
-                AsyncImage(url: mediaURL) { image in
-                    image.resizable().scaledToFit()
-                } placeholder: {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, minHeight: 180)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .modifier(MacMediaDownloadContextMenu(post: post))
-                .id(post.id)
+                MacSensitiveHeaderImage(post: post, url: mediaURL)
+                    .modifier(MacMediaDownloadContextMenu(post: post))
+                    .id(post.id)
             } else if let mediaURL = post.mediaURL {
                 Link(destination: mediaURL) {
                     Label("Open \(post.mediaTitle.lowercased())", systemImage: "play.rectangle")

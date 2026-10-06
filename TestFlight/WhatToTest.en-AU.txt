@@ -17,6 +17,10 @@ Summaries now use Apple Intelligence by default.
 Hid settings that had no effect yet.
 Signed-in and signed-out browsing no longer share cookies.
 Feed no longer preloads videos when autoplay is off.
+Mac now blurs NSFW thumbnails and post images.
+Block users from posts and comments on Mac.
+Unsent posts, comments and messages reopen as drafts.
+Composer can't be swiped away with unsent text.
 
 Changes in previous builds:
 Fix: Some videos didn't play its audio

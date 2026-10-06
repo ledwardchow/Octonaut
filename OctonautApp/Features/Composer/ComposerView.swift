@@ -41,6 +41,9 @@ struct ComposerView: View {
     }
 
     private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }
+    /// Text the user typed, as opposed to a prefilled community or recipient.
+    private var hasContent: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty }
+    private var draftFields: [String] { [title, bodyText, link, community, recipient, postType] }
     private var isPostComment: Bool { kind == .comment && targetID?.hasPrefix("t3_") == true }
     private var canSubmit: Bool {
         switch kind {
@@ -149,7 +152,11 @@ struct ComposerView: View {
                 }
             }
             .confirmationDialog("Discard this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
-                Button("Discard", role: .destructive) { dismiss() }
+                Button("Discard", role: .destructive) {
+                    let id = draftID
+                    Task { try? await dependencies.persistence.deleteDraft(id) }
+                    dismiss()
+                }
                 Button("Keep Editing", role: .cancel) {}
             }
             .alert(sendError == nil ? "Complete the required fields" : "Couldn't send", isPresented: $showingError) {
@@ -165,13 +172,17 @@ struct ComposerView: View {
                     Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : kind == .message ? "Add a recipient, subject and message." : "Add some text before sending.")
                 }
             }
-            .task(id: bodyText) {
-                try? await Task.sleep(for: .milliseconds(500))
+            .task(id: draftFields) {
+                // A cancelled wait means the view closed or the text changed again.
+                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
                 await saveDraft()
             }
             .task {
                 if draftAccountID == nil { draftAccountID = dependencies.accounts.selectedAccountID }
+                await restoreDraft()
             }
+            // Swiping away would skip the discard prompt and lose the text.
+            .interactiveDismissDisabled(hasContent)
         }
     }
 
@@ -248,18 +259,48 @@ struct ComposerView: View {
         }
     }
 
-    private func saveDraft() async {
-        guard isDirty, let accountID = draftAccountID else { return }
-        let draftKind: DraftKind = switch kind {
+    private var draftKind: DraftKind? {
+        switch kind {
         case .post: .post
-        case .comment, .edit: .comment
+        case .comment: .comment
         case .message: .message
+        case .edit: nil
+        }
+    }
+
+    private var draftTarget: String { kind == .post ? community : (targetID ?? recipient) }
+
+    /// Reopens the newest saved draft for the same account, kind and target.
+    private func restoreDraft() async {
+        guard !hasContent, kind != .edit, let accountID = draftAccountID, let draftKind,
+              let drafts = try? await dependencies.persistence.loadDrafts(accountID: accountID) else { return }
+        let target = draftTarget
+        let match = drafts
+            .filter { $0.kind == draftKind && (kind == .post && community.isEmpty || ($0.target ?? "") == target) }
+            .max { $0.modifiedAt < $1.modifiedAt }
+        guard let match, !hasContent else { return }
+        draftID = match.id
+        title = match.title
+        bodyText = match.body
+        if let restoredLink = match.link {
+            link = restoredLink.absoluteString
+            postType = "Link"
+        }
+        if kind == .post, community.isEmpty { community = match.target ?? "" }
+    }
+
+    private func saveDraft() async {
+        // Edits start from the existing text and share a target with replies, so they aren't drafted.
+        guard !sending, kind != .edit, let accountID = draftAccountID, let draftKind else { return }
+        guard hasContent else {
+            try? await dependencies.persistence.deleteDraft(draftID)
+            return
         }
         let draft = Draft(
             id: draftID,
             kind: draftKind,
             accountID: accountID,
-            target: kind == .post ? community : (targetID ?? recipient),
+            target: draftTarget,
             title: title,
             body: bodyText,
             link: URL(string: link),
