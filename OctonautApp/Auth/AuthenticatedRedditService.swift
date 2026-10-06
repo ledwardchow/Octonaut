@@ -34,14 +34,14 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
     }
 
     func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message] {
-        let encodedID = messageID.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? messageID
-        let listing: Listing<InboxItem>
-        do {
-            listing = try decodeInbox(try await request(path: "/message/messages/\(encodedID).json", accountID: accountID))
-        } catch {
-            listing = try await fetchInbox(section: .messages, accountID: accountID)
-        }
-        return listing.items.filter { $0.id == messageID || $0.fullname == messageID || listing.items.count > 1 }
+        let shortID = messageID.hasPrefix("t4_") ? String(messageID.dropFirst(3)) : messageID
+        let encodedID = shortID.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? shortID
+        // Reddit nests the rest of a private message thread under the first message's replies.
+        let listing = try decodeInbox(
+            try await request(path: "/message/messages/\(encodedID).json", accountID: accountID),
+            includeReplies: true
+        )
+        return listing.items
             .map {
                 Message(
                     id: $0.id,
@@ -84,12 +84,18 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         return data
     }
 
-    private func decodeInbox(_ data: Data) throws -> Listing<InboxItem> {
+    private func decodeInbox(_ data: Data, includeReplies: Bool = false) throws -> Listing<InboxItem> {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let listing = root["data"] as? [String: Any] else {
             throw RedditClientError.malformedResponse
         }
-        let children = listing["children"] as? [[String: Any]] ?? []
+        var children = listing["children"] as? [[String: Any]] ?? []
+        if includeReplies {
+            children = children.flatMap { child -> [[String: Any]] in
+                let replies = ((child["data"] as? [String: Any])?["replies"] as? [String: Any])?["data"] as? [String: Any]
+                return [child] + (replies?["children"] as? [[String: Any]] ?? [])
+            }
+        }
         let items = children.compactMap { child -> InboxItem? in
             let payload = child["data"] as? [String: Any] ?? child
             guard let id = string(payload, "id") ?? string(payload, "name") else { return nil }
@@ -112,7 +118,7 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
                 postPermalink: permalink,
                 createdAt: Date(timeIntervalSince1970: timestamp),
                 isRead: !unread,
-                kind: string(child, "kind") ?? string(payload, "type") ?? "notification"
+                kind: fullname.hasPrefix("t4_") ? "message" : string(payload, "type") ?? string(child, "kind") ?? "notification"
             )
         }
         return Listing(items: items, after: listing["after"] as? String, before: listing["before"] as? String)

@@ -1,6 +1,19 @@
 Changes in current build:
 Fix: user profile tap zone is too big on post cards
 Fix: user flair would cause subreddit/user display to compress multiline
+Fixed crash when saving media to Photos.
+Joining or leaving communities now saves to Reddit.
+Private messages now send, with a subject field.
+Message threads show the whole conversation.
+Replying in a conversation now replies to the thread.
+Inbox Messages filter and mark read now work.
+Opening a read inbox item no longer marks it unread.
+Send errors now show Reddit's reason.
+Switch accounts from the account menu.
+Log out now asks for confirmation.
+Summaries now use Apple Intelligence by default.
+Hid settings that had no effect yet.
+Signed-in and signed-out browsing no longer share cookies.
 
 Changes in previous builds:
 Fix: Some videos didn't play its audio

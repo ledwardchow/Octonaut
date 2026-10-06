@@ -30,6 +30,8 @@ targets:
       - path: OctonautApp
       - path: PRIVACY.md
         buildPhase: resources
+      - path: PrivacyInfo.xcprivacy
+        buildPhase: resources
       - path: Design/AppIcons/Octonaut-Pearl-Blue.icon
         type: file
         buildPhase: resources
@@ -49,6 +51,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Octonaut
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.news
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown"
     info:
@@ -80,6 +83,8 @@ targets:
     sources:
       - path: OctonautApp/Legal
       - path: PRIVACY.md
+        buildPhase: resources
+      - path: PrivacyInfo.xcprivacy
         buildPhase: resources
       - path: OctonautApp/Domain
       - path: OctonautApp/Persistence

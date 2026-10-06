@@ -64,6 +64,21 @@ final class SettingsTests: XCTestCase {
                        "reddit_session=synthetic-session")
     }
 
+    func testAnonymousCookiesAreNotSentWithAccountRequests() async throws {
+        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
+        let account = AccountID()
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
+        let client = makeAnonymousBootstrapClient(vault: vault)
+        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
+        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+
+        let requests = AnonymousBootstrapProtocol.jsonRequests
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests[1].value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-session")
+        XCTAssertFalse(requests[2].value(forHTTPHeaderField: "Cookie")?.contains("reddit_session") ?? false)
+    }
+
     private func makeAnonymousBootstrapClient(
         vault: InMemoryCredentialVault = InMemoryCredentialVault()
     ) -> URLSessionRedditClient {
@@ -397,7 +412,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.defaultTopTime, .day)
         XCTAssertTrue(settings.openRedditLinksInOctonaut)
         XCTAssertTrue(settings.collectLocalUsageStatistics)
-        XCTAssertEqual(settings.summaryProvider, .openAICompatible)
+        XCTAssertEqual(settings.summaryProvider, .onDevice)
         XCTAssertEqual(settings.summaryEndpoint, "https://openrouter.ai/api/v1")
         XCTAssertEqual(settings.summaryModel, "openai/gpt-5.6-luna")
         XCTAssertFalse(settings.keyExcerptsFallback)
@@ -511,12 +526,12 @@ final class SettingsTests: XCTestCase {
     func testSummaryProviderSettingsRoundTripThroughDefaults() {
         let suite = "OctonautTests.\(UUID())"
         let settings = SettingsStore(defaults: UserDefaults(suiteName: suite)!)
-        settings.summaryProvider = .onDevice
+        settings.summaryProvider = .openAICompatible
         settings.summaryEndpoint = "https://example.test/v1"
         settings.summaryModel = "summary-model"
 
         let reloaded = SettingsStore(defaults: UserDefaults(suiteName: suite)!)
-        XCTAssertEqual(reloaded.summaryProvider, .onDevice)
+        XCTAssertEqual(reloaded.summaryProvider, .openAICompatible)
         XCTAssertEqual(reloaded.summaryEndpoint, "https://example.test/v1")
         XCTAssertEqual(reloaded.summaryModel, "summary-model")
     }
@@ -1095,7 +1110,9 @@ private final class AnonymousBootstrapProtocol: URLProtocol, @unchecked Sendable
         let data = isSeed ? Data()
             : Data(#"{"data":{"children":[],"after":null,"before":null}}"#.utf8)
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status,
-                            httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+                            httpVersion: nil,
+                            headerFields: ["Set-Cookie": "loid=synthetic-anonymous; Domain=.reddit.com; Path=/; Secure"])!,
+                            cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }

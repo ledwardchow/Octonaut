@@ -2225,9 +2225,29 @@ final class OctonautFeatureStore {
         UserDefaults.standard.set(favorites, forKey: favoriteCommunitiesKey(accountID: accountID))
     }
 
+    /// Flips the Join state immediately, then sends it for the selected
+    /// account. The previous value is restored when Reddit rejects it.
     func toggleSubscribe(communityID: String) {
-        guard let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
-        communities[index].isSubscribed.toggle()
+        guard let index = communities.firstIndex(where: { $0.id == communityID }),
+              let accountID else { return }
+        let name = communities[index].name
+        let subscribed = !communities[index].isSubscribed
+        let generation = accountGeneration
+        communities[index].isSubscribed = subscribed
+        Task {
+            do {
+                let action = RedditAction.subscribe(community: name, subscribed: subscribed)
+                if let authenticated {
+                    _ = try await authenticated.perform(action, accountID: accountID)
+                } else if let reddit {
+                    _ = try await reddit.perform(action, account: accountID)
+                }
+            } catch {
+                guard isCurrentAccount(accountID, generation: generation),
+                      let index = communities.firstIndex(where: { $0.id == communityID }) else { return }
+                communities[index].isSubscribed = !subscribed
+            }
+        }
     }
 
     private func updateLoadedFeedCache() {

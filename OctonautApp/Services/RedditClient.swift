@@ -117,6 +117,10 @@ enum RedditResponseCache {
 actor URLSessionRedditClient: RedditClient {
     private let baseURL: URL
     private let session: URLSession
+    /// Signed-in requests use their own session with no cookie jar or response
+    /// cache, so one account's cookies never reach another account or the
+    /// anonymous path, and private responses are never written to disk.
+    private let authenticatedSession: URLSession
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
@@ -135,6 +139,13 @@ actor URLSessionRedditClient: RedditClient {
         self.userAgent = userAgent
 
         let configuration = sessionConfiguration ?? URLSessionConfiguration.ephemeral
+        let authenticatedConfiguration = configuration.copy() as! URLSessionConfiguration
+        authenticatedConfiguration.httpShouldSetCookies = false
+        authenticatedConfiguration.httpCookieStorage = nil
+        authenticatedConfiguration.urlCache = nil
+        authenticatedConfiguration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        authenticatedConfiguration.timeoutIntervalForRequest = 30
+        authenticatedConfiguration.timeoutIntervalForResource = 60
         // Ephemeral sessions keep Reddit's logged-out edge cookies in memory
         // without persisting browsing state beyond this app process.
         configuration.httpShouldSetCookies = true
@@ -144,6 +155,11 @@ actor URLSessionRedditClient: RedditClient {
         configuration.timeoutIntervalForResource = 60
         self.session = URLSession(
             configuration: configuration,
+            delegate: RedditRedirectDelegate(),
+            delegateQueue: nil
+        )
+        self.authenticatedSession = URLSession(
+            configuration: authenticatedConfiguration,
             delegate: RedditRedirectDelegate(),
             delegateQueue: nil
         )
@@ -520,7 +536,7 @@ actor URLSessionRedditClient: RedditClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await (account == nil ? session : authenticatedSession).data(for: request)
         } catch is CancellationError {
             throw CancellationError()
         } catch {

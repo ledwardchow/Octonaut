@@ -162,6 +162,7 @@ struct UserProfileView: View {
     @State private var showingLogin = false
     @State private var messageRecipient: ProfileMessageRecipient?
     @State private var confirmingBlock = false
+    @State private var confirmingLogOut = false
     @State private var actionInProgress = false
     @State private var profileActionError: String?
     @State private var selectedSection: ProfileSection = .posts
@@ -369,11 +370,25 @@ struct UserProfileView: View {
                         Button { router.push(.composer(.post)) } label: {
                             Label("New Post", systemImage: "square.and.pencil")
                         }
-                        Button { onLogOut?() } label: {
-                            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
+                        Section("Switch Account") {
+                            ForEach(dependencies.accounts.accounts.filter { $0.id != dependencies.accounts.selectedAccountID }) { account in
+                                Button {
+                                    Task { try? await dependencies.accounts.select(account.id) }
+                                } label: {
+                                    Label(account.username, systemImage: "person.crop.circle")
+                                }
+                            }
+                            Button(action: onAddAccount) {
+                                Label("Add Account", systemImage: "person.badge.plus")
+                            }
+                            Button {
+                                Task { try? await dependencies.accounts.select(nil) }
+                            } label: {
+                                Label("Browse Signed Out", systemImage: "person.crop.circle.badge.questionmark")
+                            }
                         }
-                        Button(action: onAddAccount) {
-                            Label("Add Account", systemImage: "person.badge.plus")
+                        Button(role: .destructive) { confirmingLogOut = true } label: {
+                            Label("Log Out", systemImage: "rectangle.portrait.and.arrow.right")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
@@ -382,6 +397,16 @@ struct UserProfileView: View {
                             .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Account actions")
+                    .confirmationDialog(
+                        "Log out of u/\(username)?",
+                        isPresented: $confirmingLogOut,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Log Out", role: .destructive) { onLogOut?() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("This removes the saved login and drafts for this account.")
+                    }
                 }
             }
         }

@@ -412,7 +412,7 @@ final class SettingsStore {
         automaticCommentSummaries = defaults.object(forKey: Keys.automaticCommentSummaries) as? Bool ?? false
         keyExcerptsFallback = defaults.object(forKey: Keys.keyExcerptsFallback) as? Bool ?? false
         cacheSummaries = defaults.object(forKey: Keys.cacheSummaries) as? Bool ?? true
-        summaryProvider = SummaryProvider(rawValue: defaults.string(forKey: Keys.summaryProvider) ?? "openAICompatible") ?? .openAICompatible
+        summaryProvider = SummaryProvider(rawValue: defaults.string(forKey: Keys.summaryProvider) ?? "onDevice") ?? .onDevice
         summaryEndpoint = defaults.string(forKey: Keys.summaryEndpoint) ?? "https://openrouter.ai/api/v1"
         summaryModel = defaults.string(forKey: Keys.summaryModel) ?? "openai/gpt-5.6-luna"
         autoplayVideo = AutoplayVideo(rawValue: defaults.string(forKey: Keys.autoplayVideo) ?? "wifi") ?? .wifi

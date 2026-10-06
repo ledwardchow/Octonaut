@@ -17,7 +17,6 @@ struct MacSettingsView: View {
                 }
                 Toggle("Show post flair", isOn: $settings.showPostFlair)
                 Toggle("Hide seen posts", isOn: $settings.hideSeenPosts)
-                Toggle("Show filter count", isOn: $settings.showFilterCount)
             }
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gearshape") }
@@ -26,37 +25,14 @@ struct MacSettingsView: View {
                 AppIconPicker()
                 Toggle("Blur spoilers", isOn: $settings.blurSpoilers)
                 Toggle("Blur NSFW media", isOn: $settings.blurNSFWMedia)
-                Toggle("Use pure black background", isOn: $settings.pureBlackBackground)
             }
             .formStyle(.grouped)
             .tabItem { Label("Appearance", systemImage: "paintbrush") }
 
+            // ponytail: Intelligence, pure black, filter count, link handling and cache-size
+            // settings are hidden on Mac until the Mac app applies them.
             Form {
-                Picker("Summary provider", selection: $settings.summaryProvider) {
-                    ForEach(SummaryProvider.allCases, id: \.self) { provider in
-                        Text(provider.title).tag(provider)
-                    }
-                }
-                Toggle("Show post summaries", isOn: $settings.showPostSummaries)
-                Toggle("Show comment summaries", isOn: $settings.showCommentSummaries)
-                TextField("Endpoint", text: $settings.summaryEndpoint)
-                TextField("Model", text: $settings.summaryModel)
-            }
-            .formStyle(.grouped)
-            .tabItem { Label("Intelligence", systemImage: "sparkles") }
-
-            Form {
-                Toggle(
-                    "Open Reddit links in Octonaut",
-                    isOn: $settings.openRedditLinksInOctonaut
-                )
                 Toggle("Collect local usage statistics", isOn: $settings.collectLocalUsageStatistics)
-                Stepper(
-                    "Image cache: \(settings.imageCacheLimitMB) MB",
-                    value: $settings.imageCacheLimitMB,
-                    in: 100...2_000,
-                    step: 100
-                )
                 Section("Reset") {
                     Button("Reset App", role: .destructive) {
                         showingAppReset = true

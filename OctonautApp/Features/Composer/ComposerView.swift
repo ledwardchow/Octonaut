@@ -18,6 +18,7 @@ struct ComposerView: View {
     @State private var sendReplies = true
     @State private var showingDiscard = false
     @State private var showingError = false
+    @State private var sendError: String?
     @State private var sending = false
     @State private var draftID = UUID()
     @State private var draftAccountID: AccountID?
@@ -47,7 +48,7 @@ struct ComposerView: View {
         case .comment, .edit:
             return targetID?.isEmpty == false
                 && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        case .message: return !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .message: return !recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -105,6 +106,9 @@ struct ComposerView: View {
                         if kind == .post {
                             Section("Title") { TextField("A clear title", text: $title) }
                         }
+                        if kind == .message {
+                            Section("Subject") { TextField("Subject", text: $title) }
+                        }
                         if kind == .post, postType == "Link" {
                             Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
                         }
@@ -148,15 +152,17 @@ struct ComposerView: View {
                 Button("Discard", role: .destructive) { dismiss() }
                 Button("Keep Editing", role: .cancel) {}
             }
-            .alert("Complete the required fields", isPresented: $showingError) {
+            .alert(sendError == nil ? "Complete the required fields" : "Couldn't send", isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
             } message: {
-                if dependencies.accounts.selectedAccount == nil {
+                if let sendError {
+                    Text(sendError)
+                } else if dependencies.accounts.selectedAccount == nil {
                     Text("Add or select a Reddit account before sending.")
                 } else if dependencies.accounts.selectedAccount?.health == .needsLogin {
                     Text("Sign in again from the Account tab before sending.")
                 } else {
-                    Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : "Add some text before sending.")
+                    Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : kind == .message ? "Add a recipient, subject and message." : "Add some text before sending.")
                 }
             }
             .task(id: bodyText) {
@@ -197,6 +203,7 @@ struct ComposerView: View {
     }
 
     private func submit() {
+        sendError = nil
         guard canSubmit else { showingError = true; return }
         guard let selectedAccount = dependencies.accounts.selectedAccount,
               selectedAccount.health != .needsLogin,
@@ -220,7 +227,7 @@ struct ComposerView: View {
             let target = targetID ?? ""
             action = kind == .edit ? .edit(thingID: target, text: bodyText) : .comment(thingID: target, text: bodyText)
         case .message:
-            action = .composeMessage(to: recipient.trimmingCharacters(in: .whitespacesAndNewlines), subject: title, text: bodyText)
+            action = .composeMessage(to: recipient.trimmingCharacters(in: .whitespacesAndNewlines), subject: title.trimmingCharacters(in: .whitespacesAndNewlines), text: bodyText)
         }
         Task {
             do {
@@ -235,6 +242,7 @@ struct ComposerView: View {
                 showingError = true
             } catch {
                 sending = false
+                sendError = error.localizedDescription
                 showingError = true
             }
         }

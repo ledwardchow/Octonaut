@@ -29,7 +29,7 @@ struct InboxRootView: View {
                     }
                     ForEach(items) { item in
                         Button {
-                            markRead(item)
+                            if item.isUnread { markRead(item) }
                             if item.kind == .message {
                                 router.push(.conversation(item.id))
                             } else if let postURL = item.postURL {
@@ -96,7 +96,7 @@ struct InboxRootView: View {
             guard dependencies.accounts.isCurrent(token) else { return }
             store.inbox = page.items.map { item in
                 InboxCardModel(
-                    id: item.id,
+                    id: item.fullname,
                     kind: item.kind.localizedCaseInsensitiveContains("message") ? .message : item.kind.localizedCaseInsensitiveContains("mention") ? .mention : .reply,
                     title: item.subject,
                     subtitle: [item.community.map { "r/\($0.name)" }, item.author.map { "u/\($0.username)" }].compactMap { $0 }.joined(separator: " • "),
@@ -222,7 +222,7 @@ struct ConversationView: View {
         }
         .navigationTitle("Conversation")
         .safeAreaInset(edge: .bottom) {
-            Button { composer = .message } label: {
+            Button { composer = .comment } label: {
                 Label("Reply", systemImage: "arrowshape.turn.up.left")
                     .frame(maxWidth: .infinity)
             }
@@ -231,7 +231,12 @@ struct ConversationView: View {
             .padding(.vertical, 8)
             .background(.bar)
         }
-        .sheet(item: $composer) { kind in ComposerView(kind: kind, store: store) }
+        .sheet(item: $composer) { kind in
+            // Replying to a private message uses /api/comment with the t4_ fullname.
+            ComposerView(kind: kind, store: store, targetID: itemID) {
+                Task { await loadConversation() }
+            }
+        }
         .task { await loadConversation() }
     }
 
