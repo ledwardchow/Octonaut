@@ -104,6 +104,9 @@ enum DeterministicPostFilter {
 }
 
 actor SemanticFilterEngine {
+    /// Shown in Settings until the user edits it, and used when nothing is stored.
+    static let defaultInstruction = "Hide posts that are mainly promotional."
+
     private let service: any IntelligenceService
     private var cache: [SemanticFilterCacheKey: FilterDecision] = [:]
     private let promptVersion = "semantic-filter-v1"

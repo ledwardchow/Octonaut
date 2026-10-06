@@ -183,6 +183,9 @@ final class OctonautAudioSession: @unchecked Sendable {
 
             activations += 1
             guard activations == 1 else { return }
+            // Audible playback interrupts other apps' audio like any video app;
+            // their audio resumes when this session deactivates.
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, options: [])
             try? AVAudioSession.sharedInstance().setActive(true)
         }
     }
@@ -197,6 +200,9 @@ final class OctonautAudioSession: @unchecked Sendable {
                 guard activations == 0 else { return }
                 try? AVAudioSession.sharedInstance()
                     .setActive(false, options: [.notifyOthersOnDeactivation])
+                // Back to mixing so muted feed videos leave other apps' audio alone.
+                isCategoryConfigured = false
+                configureCategoryIfNeeded()
                 pendingDeactivation = nil
             }
             pendingDeactivation = work
@@ -2099,6 +2105,8 @@ struct OctonautVideoDetailView: View {
     @State private var positionObserver: Any?
     @State private var muxOutcome: OctonautMuxOutcome = .notApplicable
     @State private var audioSessionActivated = false
+    @State private var failureMessage: String?
+    @State private var loadAttempt = 0
 
     private var coordinator: OctonautPlaybackCoordinator { .shared }
 
@@ -2114,13 +2122,39 @@ struct OctonautVideoDetailView: View {
                 .overlay(alignment: .topLeading) {
                     OctonautMuxWarningBadge(outcome: muxOutcome)
                 }
-            } else {
+                .onReceive(
+                    player.publisher(for: \.currentItem)
+                        .map { item -> AnyPublisher<AVPlayerItem.Status, Never> in
+                            item?.publisher(for: \.status).eraseToAnyPublisher()
+                                ?? Just(.unknown).eraseToAnyPublisher()
+                        }
+                        .switchToLatest()
+                ) { status in
+                    if status == .failed { showFailure(player.currentItem?.error) }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .AVPlayerItemFailedToPlayToEndTime)) { note in
+                    guard (note.object as? AVPlayerItem) === player.currentItem else { return }
+                    showFailure(note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error)
+                }
+            } else if failureMessage == nil {
                 ProgressView()
                     .tint(.white)
             }
+            if let failureMessage {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.largeTitle)
+                    Text(failureMessage).multilineTextAlignment(.center)
+                    Button("Try Again") { retry() }
+                        .buttonStyle(.borderedProminent)
+                }
+                .foregroundStyle(.white)
+                .padding(24)
+                .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
+                .padding()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: url) {
+        .task(id: "\(url.absoluteString)#\(loadAttempt)") {
             coordinator.beginFullScreen()
             let playback = await OctonautAVPlayerFactory.makePlayer(videoURL: url, audioURL: audioURL)
             guard !Task.isCancelled else { return }
@@ -2181,6 +2215,25 @@ struct OctonautVideoDetailView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Video player")
+    }
+
+    private func showFailure(_ error: Error?) {
+        player?.pause()
+        failureMessage = RedditVideoPlayback.failureMessage(for: error as NSError?)
+    }
+
+    /// Builds a fresh player, keeping the position the viewer had reached.
+    private func retry() {
+        if let player {
+            coordinator.record(player.currentTime().seconds, for: url)
+            player.pause()
+        }
+        removePositionObserver()
+        looper.detach()
+        player = nil
+        onPlayerChange?(nil)
+        failureMessage = nil
+        loadAttempt += 1
     }
 
     /// Keeps the shared playhead current so dismissing the viewer hands the

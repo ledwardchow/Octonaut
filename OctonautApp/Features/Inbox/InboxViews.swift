@@ -11,6 +11,8 @@ struct InboxRootView: View {
     @State private var selectedItem: InboxCardModel?
     @State private var isLoading = false
     @State private var loadError: String?
+    @State private var nextInboxPage: String?
+    @State private var loadMoreError: String?
 
     private var items: [InboxCardModel] {
         guard filter != "Unread" else { return store.inbox.filter(\.isUnread) }
@@ -50,6 +52,21 @@ struct InboxRootView: View {
                         }
                         .contextMenu {
                             Button { markRead(item) } label: { Label(item.isUnread ? "Mark Read" : "Mark Unread", systemImage: "envelope") }
+                        }
+                    }
+                    if let nextInboxPage, !items.isEmpty {
+                        if let loadMoreError {
+                            VStack(spacing: 6) {
+                                Text(loadMoreError).font(.caption).foregroundStyle(.secondary)
+                                Button("Load More") { Task { await loadMoreInbox() } }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
+                        } else {
+                            ProgressView()
+                                .frame(maxWidth: .infinity)
+                                .listRowSeparator(.hidden)
+                                .task(id: nextInboxPage) { await loadMoreInbox() }
                         }
                     }
                 }
@@ -106,25 +123,14 @@ struct InboxRootView: View {
         let refreshKey = inboxRefreshKey
         isLoading = true
         loadError = nil
+        loadMoreError = nil
+        nextInboxPage = nil
         defer { if refreshKey == inboxRefreshKey { isLoading = false } }
         do {
             let page = try await dependencies.authenticated.fetchInbox(section: sectionForFilter, accountID: accountID)
             guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey, !Task.isCancelled else { return }
-            store.inbox = page.items.map { item in
-                InboxCardModel(
-                    id: item.fullname,
-                    kind: item.kind.localizedCaseInsensitiveContains("message") ? .message : item.kind.localizedCaseInsensitiveContains("mention") ? .mention : .reply,
-                    title: item.subject,
-                    subtitle: [item.community.map { "r/\($0.name)" }, item.author.map { "u/\($0.username)" }].compactMap { $0 }.joined(separator: " • "),
-                    preview: item.body?.plainText ?? "",
-                    author: item.author?.username ?? "",
-                    age: item.createdAt.formatted(.relative(presentation: .named)),
-                    score: nil,
-                    isUnread: !item.isRead,
-                    postURL: item.postPermalink,
-                    conversationID: item.conversationFullname
-                )
-            }
+            store.inbox = page.items.map(cardModel)
+            nextInboxPage = page.after
         } catch is CancellationError {
             return
         } catch {
@@ -134,6 +140,46 @@ struct InboxRootView: View {
                 await dependencies.accounts.markNeedsLogin(accountID)
             }
         }
+    }
+
+    /// Appends the next page of older items.
+    private func loadMoreInbox() async {
+        guard let accountID = dependencies.accounts.selectedAccountID, let after = nextInboxPage else { return }
+        let token = dependencies.accounts.token(for: accountID)
+        let refreshKey = inboxRefreshKey
+        loadMoreError = nil
+        do {
+            let page = try await dependencies.authenticated.fetchInbox(section: sectionForFilter, after: after, accountID: accountID)
+            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey,
+                  nextInboxPage == after, !Task.isCancelled else { return }
+            let existing = Set(store.inbox.map(\.id))
+            store.inbox.append(contentsOf: page.items.map(cardModel).filter { !existing.contains($0.id) })
+            nextInboxPage = page.after == after ? nil : page.after
+        } catch is CancellationError {
+            return
+        } catch {
+            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey else { return }
+            loadMoreError = error.localizedDescription
+            if error as? RedditClientError == .authenticationRequired {
+                await dependencies.accounts.markNeedsLogin(accountID)
+            }
+        }
+    }
+
+    private func cardModel(_ item: InboxItem) -> InboxCardModel {
+        InboxCardModel(
+            id: item.fullname,
+            kind: item.kind.localizedCaseInsensitiveContains("message") ? .message : item.kind.localizedCaseInsensitiveContains("mention") ? .mention : .reply,
+            title: item.subject,
+            subtitle: [item.community.map { "r/\($0.name)" }, item.author.map { "u/\($0.username)" }].compactMap { $0 }.joined(separator: " • "),
+            preview: item.body?.plainText ?? "",
+            author: item.author?.username ?? "",
+            age: item.createdAt.formatted(.relative(presentation: .named)),
+            score: nil,
+            isUnread: !item.isRead,
+            postURL: item.postPermalink,
+            conversationID: item.conversationFullname
+        )
     }
 
     private var sectionForFilter: InboxSection {

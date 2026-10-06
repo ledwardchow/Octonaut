@@ -34,7 +34,7 @@ struct MediaURLView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if isVideo {
-                OctonautVideoDetailView(url: url)
+                OctonautVideoDetailView(url: RedditVideoPlayback.playableURL(forSharedLink: url))
             } else {
                 OctonautZoomableImage(url: url, accessibilityLabel: "Shared Reddit image")
                     .padding(.horizontal)

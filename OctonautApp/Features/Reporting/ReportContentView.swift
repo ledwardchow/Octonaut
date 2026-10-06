@@ -41,7 +41,9 @@ struct ReportContentView: View {
                         } else if loading {
                             ProgressView("Loading community rules…")
                         } else if rules.isEmpty && errorMessage == nil {
-                            Text("This community has no reporting rules to show. Open the content on Reddit to report it.")
+                            // ponytail: Reddit's site-wide reasons go through the browser handoff below;
+                            // add them in-app once their /api/report fields can be verified.
+                            Text("This community has no report rules. Use Open on Reddit below to report it for breaking Reddit's rules, such as spam or harassment.")
                         } else {
                             ForEach(rules) { rule in
                                 Button {

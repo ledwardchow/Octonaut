@@ -360,7 +360,7 @@ struct FeedView: View {
                             .onAppear {
                                 preloadMedia(after: index)
                                 if dependencies.settings.autoMarkSeenWhileScrolling, !post.isSeen {
-                                    store.markSeen(postID: post.id)
+                                    store.markSeen(postID: post.id, seen: true)
                                 }
                                 if index >= visiblePosts.count - 2 { Task { await store.loadMorePosts(for: descriptor) } }
                             }
@@ -552,7 +552,7 @@ struct FeedView: View {
                 }
             }
             Button {
-                store.posts.map(\.id).forEach { store.markSeen(postID: $0) }
+                store.posts.map(\.id).forEach { store.markSeen(postID: $0, seen: true) }
             } label: {
                 Label("Mark Visible Seen", systemImage: "eye")
             }

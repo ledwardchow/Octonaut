@@ -160,6 +160,7 @@ final class InboxTests: XCTestCase {
             XCTFail("A missing session must prevent the request")
         } catch { XCTAssertEqual(error as? RedditClientError, .authenticationRequired) }
         _ = try await service.fetchInbox(section: .all, accountID: account)
+        _ = try await service.fetchInbox(section: .all, after: "t4_older", accountID: account)
         _ = try await service.fetchConversation(messageID: "t4_abc", accountID: account)
         for destination in ["https://example.com", "http://www.reddit.com", "https://www.reddit.com:8443"] {
             let unsafe = LiveAuthenticatedRedditService(credentialVault: vault, reddit: FixtureRedditClient(), baseURL: URL(string: destination)!, sessionConfiguration: configuration)
@@ -185,6 +186,10 @@ private final class InboxRequestProtocol: URLProtocol, @unchecked Sendable {
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), URLSessionRedditClient.browserUserAgent)
+        let after = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "after" }?.value
+        XCTAssertTrue(after == nil || after == "t4_older")
         let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(#"{"data":{"children":[]}}"#.utf8))

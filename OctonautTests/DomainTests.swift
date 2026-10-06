@@ -9,7 +9,7 @@ private actor ControlledSubscriptionService: AuthenticatedRedditService {
     private var pending: CheckedContinuation<ActionResult, Never>?
     private var requestWaiter: CheckedContinuation<Void, Never>?
 
-    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem> {
         Listing(items: [])
     }
 
@@ -146,6 +146,22 @@ final class DomainTests: XCTestCase {
         await model.submit(query: "swift", scope: .posts, account: nil)
         let accounts = await client.searchAccounts
         XCTAssertEqual(accounts, [account, account, account, account, nil])
+    }
+
+    func testCommunityRefusalsAreNotReportedAsLoggedOutBlocks() throws {
+        for (status, reason, expected) in [
+            (403, "private", "This community is private."),
+            (404, "banned", "This community has been banned."),
+            (403, "quarantined", "This community is quarantined. Open it on reddit.com to opt in.")
+        ] {
+            let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/r/example.json")!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            let data = Data(#"{"reason": "\#(reason)", "message": "Forbidden", "error": \#(status)}"#.utf8)
+            for isAnonymous in [true, false] {
+                XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(data, response: response, isAnonymous: isAnonymous)) { error in
+                    XCTAssertEqual(error as? RedditClientError, .http(statusCode: status, message: expected))
+                }
+            }
+        }
     }
 
     func testBlockedAnonymousResponsesOfferLogin() throws {
@@ -299,6 +315,23 @@ final class DomainTests: XCTestCase {
                 "https://v.redd.it/clip/HLSPlaylist.m3u8"
             )
             XCTAssertEqual(RedditVideoPlayback.url(for: source, isGIF: true), source)
+        }
+    }
+
+    func testSharedRedditVideoLinkPlaysPlaylist() throws {
+        let shared = try XCTUnwrap(URL(string: "https://v.redd.it/abc123xyz"))
+        XCTAssertEqual(
+            RedditVideoPlayback.playableURL(forSharedLink: shared).absoluteString,
+            "https://v.redd.it/abc123xyz/HLSPlaylist.m3u8"
+        )
+        let file = try XCTUnwrap(URL(string: "https://v.redd.it/clip/DASH_720.mp4"))
+        XCTAssertEqual(
+            RedditVideoPlayback.playableURL(forSharedLink: file).absoluteString,
+            "https://v.redd.it/clip/HLSPlaylist.m3u8"
+        )
+        for value in ["http://v.redd.it/abc123", "https://v.redd.it.example.com/abc123", "https://example.com/abc123"] {
+            let source = try XCTUnwrap(URL(string: value))
+            XCTAssertEqual(RedditVideoPlayback.playableURL(forSharedLink: source), source)
         }
     }
 

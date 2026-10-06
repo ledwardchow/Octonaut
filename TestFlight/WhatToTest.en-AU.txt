@@ -1,6 +1,4 @@
 Changes in current build:
-Fix: user profile tap zone is too big on post cards
-Fix: user flair would cause subreddit/user display to compress multiline
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
 Private messages now send, with a subject field.
@@ -28,8 +26,25 @@ Share Feed now shares the current feed.
 Deleting a feed or resetting settings now asks first.
 A failed page load no longer wipes the feed.
 Videos ride out brief buffering instead of restarting.
+Login Try Again works after a save error.
+Failed login no longer flickers and retries constantly.
+Full-screen video shows an error and Try Again.
+Shared v.redd.it links now play.
+Videos with sound now pause other audio.
+Removed the Image post type until uploads work.
+Text posts no longer send a leftover link.
+"Mark Visible Seen" no longer unmarks seen posts.
+Feed keeps loading more after a failed refresh.
+Save and vote state stays in step with Reddit.
+Search links now run their search.
+Semantic filter works with its default rule.
+Private, banned and quarantined communities now say so.
+"Continue this thread" now opens the rest of the thread.
+Inbox now loads older messages as you scroll.
 
 Changes in previous builds:
+Fix: user profile tap zone is too big on post cards
+Fix: user flair would cause subreddit/user display to compress multiline
 Fix: Some videos didn't play its audio
 Posts with lots of text content now trim correctly 
 You can now comment on posts without any comments

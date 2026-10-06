@@ -1061,6 +1061,9 @@ final class OctonautFeatureStore {
     /// Set when loading the next page fails after the client's own retries.
     /// The loaded posts stay on screen and the feed footer offers a retry.
     private(set) var nextPageError: String?
+    /// The newest vote or save sent for each item. A failure only rolls back
+    /// the UI when no later tap on the same item has superseded it.
+    @ObservationIgnored private var latestMutation: [String: UUID] = [:]
     var communitiesState: OctonautLoadState = .loaded
     var inboxState: OctonautLoadState = .loaded
     var searchText = ""
@@ -1289,9 +1292,11 @@ final class OctonautFeatureStore {
             return
         } catch {
             guard feedRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
-            nextPage = nil
             let failure = OctonautLoadState.failure(error)
-            feedState = hasWarmContent && failure != .loginRequired ? .loaded : failure
+            let keepsWarmContent = hasWarmContent && failure != .loginRequired
+            // Warm posts keep their own cursor, so scrolling can still load the next page.
+            if !keepsWarmContent { nextPage = nil }
+            feedState = keepsWarmContent ? .loaded : failure
         }
     }
 
@@ -1610,7 +1615,15 @@ final class OctonautFeatureStore {
             )
             guard detailRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return false }
-            detailPost = PostCardModel(post: thread.post)
+            let freshPost = PostCardModel(post: thread.post)
+            detailPost = freshPost
+            // Bring the feed row in line with what Reddit just reported.
+            if let index = posts.firstIndex(where: { $0.id == freshPost.id }) {
+                posts[index].vote = freshPost.vote
+                posts[index].score = freshPost.score
+                posts[index].isSaved = freshPost.isSaved
+                updateLoadedFeedCache()
+            }
             comments = thread.comments.map { node in
                 switch node {
                 case .comment(let comment): return CommentCardModel(comment: comment)
@@ -1855,7 +1868,8 @@ final class OctonautFeatureStore {
 
         guard UserDefaults.standard.bool(forKey: "filters.semantic.enabled"),
             let semanticFilter,
-            let instruction = UserDefaults.standard.string(forKey: "filters.semantic.instruction"),
+            case let instruction = UserDefaults.standard.string(forKey: "filters.semantic.instruction")
+                ?? SemanticFilterEngine.defaultInstruction,
             !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
             return (deterministic.visible, deterministic.removedCount)
@@ -2099,6 +2113,7 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
+        let token = beginMutation("vote:\(postID)")
         vote(postID: postID, value: value)
         do {
             let action = RedditAction.vote(
@@ -2109,19 +2124,11 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("vote:\(postID)", token) {
                 vote(postID: postID, value: oldVote)
             }
             throw error
         }
-    }
-
-    func save(postID: String) {
-        if let index = posts.firstIndex(where: { $0.id == postID }) {
-            posts[index].isSaved.toggle()
-        }
-        if detailPost?.id == postID { detailPost?.isSaved.toggle() }
-        updateLoadedFeedCache()
     }
 
     /// Applies a save change immediately, then sends it for the selected
@@ -2137,7 +2144,9 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
-        save(postID: postID)
+        let token = beginMutation("save:\(postID)")
+        // Set both copies explicitly; toggling each one let them drift apart.
+        applySavedFlag(!oldSaved, postID: postID)
         do {
             let action = RedditAction.save(
                 fullname: IDNormalization.fullname(postID, kind: "t3"), saved: !oldSaved)
@@ -2147,8 +2156,8 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
-                save(postID: postID)
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("save:\(postID)", token) {
+                applySavedFlag(oldSaved, postID: postID)
             }
             throw error
         }
@@ -2193,6 +2202,7 @@ final class OctonautFeatureStore {
     func setSaved(_ saved: Bool, postID: String, accountID: AccountID) async throws {
         guard self.accountID == accountID else { return }
         let generation = accountGeneration
+        let token = beginMutation("save:\(postID)")
         applySavedFlag(saved, postID: postID)
         do {
             let action = RedditAction.save(
@@ -2203,7 +2213,7 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("save:\(postID)", token) {
                 applySavedFlag(!saved, postID: postID)
             }
             throw error
@@ -2218,13 +2228,18 @@ final class OctonautFeatureStore {
         updateLoadedFeedCache()
     }
 
-    func markSeen(postID: String) {
-        guard let index = posts.firstIndex(where: { $0.id == postID }) else { return }
-        posts[index].isSeen.toggle()
-        if detailPost?.id == postID { detailPost?.isSeen.toggle() }
+    /// Toggles the seen state, or sets it when `seen` is given. Also works for
+    /// a detail post opened from outside the loaded feed.
+    func markSeen(postID: String, seen: Bool? = nil) {
+        let index = posts.firstIndex(where: { $0.id == postID })
+        let detailSeen = detailPost?.id == postID ? detailPost?.isSeen : nil
+        guard let current = index.map({ posts[$0].isSeen }) ?? detailSeen else { return }
+        let isSeen = seen ?? !current
+        guard isSeen != current else { return }
+        if let index { posts[index].isSeen = isSeen }
+        if detailPost?.id == postID { detailPost?.isSeen = isSeen }
         updateLoadedFeedCache()
         guard let persistence else { return }
-        let isSeen = posts[index].isSeen
         Task {
             if isSeen {
                 try? await persistence.markPostSeen(postID, seenAt: .now)
@@ -2354,6 +2369,7 @@ final class OctonautFeatureStore {
             return
         }
         let generation = accountGeneration
+        let token = beginMutation("vote:\(id)")
         voteComment(id: id, value: value)
         do {
             let action = RedditAction.vote(
@@ -2364,11 +2380,21 @@ final class OctonautFeatureStore {
                 _ = try await reddit.perform(action, account: accountID)
             }
         } catch {
-            if isCurrentAccount(accountID, generation: generation) {
+            if isCurrentAccount(accountID, generation: generation), isLatestMutation("vote:\(id)", token) {
                 voteComment(id: id, value: oldVote)
             }
             throw error
         }
+    }
+
+    private func beginMutation(_ key: String) -> UUID {
+        let token = UUID()
+        latestMutation[key] = token
+        return token
+    }
+
+    private func isLatestMutation(_ key: String, _ token: UUID) -> Bool {
+        latestMutation[key] == token
     }
 
     private func commentVote(id: String, in values: [CommentCardModel]) -> Int? {

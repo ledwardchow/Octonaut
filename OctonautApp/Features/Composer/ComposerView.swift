@@ -99,7 +99,7 @@ struct ComposerView: View {
                                 Picker("Post type", selection: $postType) {
                                     Text("Text").tag("Text")
                                     Text("Link").tag("Link")
-                                    Text("Image").tag("Image")
+                                    // ponytail: no Image type until media upload exists; share an image link instead.
                                 }
                             }
                         }
@@ -231,7 +231,8 @@ struct ComposerView: View {
                 community: community.trimmingCharacters(in: .whitespacesAndNewlines),
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 text: bodyText.isEmpty ? nil : bodyText,
-                link: URL(string: link),
+                // A link typed before switching back to Text must not turn this into a link post.
+                link: postType == "Link" ? URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)) : nil,
                 sendReplies: sendReplies
             )
         case .comment, .edit:
@@ -303,7 +304,7 @@ struct ComposerView: View {
             target: draftTarget,
             title: title,
             body: bodyText,
-            link: URL(string: link),
+            link: postType == "Link" ? URL(string: link) : nil,
             modifiedAt: .now
         )
         try? await dependencies.persistence.saveDraft(draft)

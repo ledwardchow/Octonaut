@@ -115,6 +115,10 @@ enum RedditResponseCache {
 /// A Reddit web-session JSON client. It uses an ephemeral URLSession and asks
 /// the credential vault for the selected account on every request.
 actor URLSessionRedditClient: RedditClient {
+    /// Reddit throttles unfamiliar clients on website routes, so every Reddit
+    /// request presents the same Safari user agent.
+    static let browserUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
+
     private let baseURL: URL
     private let session: URLSession
     /// Signed-in requests use their own session with no cookie jar or response
@@ -131,7 +135,7 @@ actor URLSessionRedditClient: RedditClient {
     init(
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
-        userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
+        userAgent: String = URLSessionRedditClient.browserUserAgent,
         sessionConfiguration: URLSessionConfiguration? = nil
     ) {
         self.baseURL = baseURL
@@ -557,6 +561,12 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     static func validateResponse(_ data: Data, response http: HTTPURLResponse, isAnonymous: Bool) throws {
+        // Reddit explains community-level refusals in a JSON "reason". Those are
+        // not a logged-out block, so signing in would not help.
+        if http.statusCode == 403 || http.statusCode == 404,
+           let message = communityUnavailableMessage(data) {
+            throw RedditClientError.http(statusCode: http.statusCode, message: message)
+        }
         if http.statusCode == 401 || http.statusCode == 403 {
             if isAnonymous { throw RedditClientError.anonymousAccessBlocked }
             if http.statusCode == 403 { throw RedditClientError.accessDenied }
@@ -575,6 +585,19 @@ actor URLSessionRedditClient: RedditClient {
         }
         if firstNonWhitespace == 0x3C { // '<' - an HTML login/error page
             throw isAnonymous ? RedditClientError.anonymousAccessBlocked : RedditClientError.authenticationRequired
+        }
+    }
+
+    static func communityUnavailableMessage(_ data: Data) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let reason = object["reason"] as? String else { return nil }
+        switch reason {
+        case "private": return "This community is private."
+        case "banned": return "This community has been banned."
+        case "quarantined": return "This community is quarantined. Open it on reddit.com to opt in."
+        case "gated": return "This community requires confirming on reddit.com before viewing."
+        case "gold_only", "premium_only": return "This community is only for Reddit Premium members."
+        default: return nil
         }
     }
 

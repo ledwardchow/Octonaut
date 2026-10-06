@@ -1,9 +1,16 @@
 import Foundation
 
 protocol AuthenticatedRedditService: Sendable {
-    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem>
+    /// Pass the previous page's `after` cursor to load older items.
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem>
     func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message]
     func perform(_ action: RedditAction, accountID: AccountID) async throws -> ActionResult
+}
+
+extension AuthenticatedRedditService {
+    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
+        try await fetchInbox(section: section, after: nil, accountID: accountID)
+    }
 }
 
 actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
@@ -29,8 +36,8 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         session = URLSession(configuration: configuration, delegate: AuthenticatedRedirectDelegate(), delegateQueue: nil)
     }
 
-    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
-        let data = try await request(path: "/message/\(section.rawValue).json", accountID: accountID)
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem> {
+        let data = try await request(path: "/message/\(section.rawValue).json", after: after, accountID: accountID)
         return try Self.decodeInbox(data)
     }
 
@@ -42,7 +49,7 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         let encodedID = shortID
         // Reddit nests the rest of a private message thread under the first message's replies.
         let listing = try Self.decodeInbox(
-            try await request(path: "/message/messages/\(encodedID).json", accountID: accountID),
+            try await request(path: "/message/messages/\(encodedID).json", after: nil, accountID: accountID),
             includeReplies: true
         )
         return listing.items
@@ -64,18 +71,19 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         try await reddit.perform(action, account: accountID)
     }
 
-    private func request(path: String, accountID: AccountID) async throws -> Data {
+    private func request(path: String, after: String?, accountID: AccountID) async throws -> Data {
         guard let credential = try await credentialVault.credential(for: accountID) else {
             throw RedditClientError.authenticationRequired
         }
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
         components?.path = path
         components?.queryItems = [URLQueryItem(name: "raw_json", value: "1"), URLQueryItem(name: "limit", value: "100")]
+            + (after.map { [URLQueryItem(name: "after", value: $0)] } ?? [])
         guard let url = components?.url, RedditReportTarget.isRedditURL(url) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("\(credential.cookieName)=\(credential.cookieValue)", forHTTPHeaderField: "Cookie")
-        request.setValue("Octonaut/1.0 (iOS; Reddit reader)", forHTTPHeaderField: "User-Agent")
+        request.setValue(URLSessionRedditClient.browserUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw RedditClientError.invalidResponse }
@@ -175,7 +183,7 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
 }
 
 actor FixtureAuthenticatedRedditService: AuthenticatedRedditService {
-    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem> {
         Listing(items: [])
     }
 
