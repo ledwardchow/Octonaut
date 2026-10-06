@@ -2,7 +2,7 @@ Changes in current build:
 Fix: user profile tap zone is too big on post cards
 Fix: user flair would cause subreddit/user display to compress multiline
 Fixed crash when saving media to Photos.
-Joining or leaving communities now saves to Reddit.
+Joining and leaving communities now saves reliably to Reddit.
 Private messages now send, with a subject field.
 Message threads show the whole conversation.
 Replying in a conversation now replies to the thread.

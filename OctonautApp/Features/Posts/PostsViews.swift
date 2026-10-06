@@ -182,7 +182,8 @@ struct PostsRootView: View {
         let row = OctonautCommunityRow(
             community: community,
             onFavorite: { store.toggleFavorite(communityID: community.id) },
-            onSubscribe: { if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) } }
+            onSubscribe: { if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) } },
+            isSubscriptionSaving: store.isSubscriptionSaving(communityID: community.id)
         )
         Group {
             if let onSelectFeed {
@@ -624,6 +625,7 @@ struct CommunityView: View {
                         Button { if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) } } label: {
                             Label(community.isSubscribed ? "Joined" : "Join", systemImage: community.isSubscribed ? "checkmark" : "person.badge.plus")
                         }
+                        .disabled(store.isSubscriptionSaving(communityID: community.id))
                     }
                 }
             }

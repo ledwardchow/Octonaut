@@ -986,6 +986,11 @@ final class OctonautFeatureStore {
     @ObservationIgnored private var visibleDetailKey: DetailCacheKey?
     @ObservationIgnored private var communitiesRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var communitiesRefreshID: UUID?
+    private struct SubscriptionKey: Hashable {
+        let accountID: AccountID
+        let communityID: String
+    }
+    private var subscriptionsSaving: Set<SubscriptionKey> = []
     var posts: [PostCardModel] = [
         .sample,
         .mediaSample,
@@ -2225,23 +2230,39 @@ final class OctonautFeatureStore {
         UserDefaults.standard.set(favorites, forKey: favoriteCommunitiesKey(accountID: accountID))
     }
 
-    /// Flips the Join state immediately, then sends it for the selected
-    /// account. The previous value is restored when Reddit rejects it.
+    func isSubscriptionSaving(communityID: String) -> Bool {
+        guard let accountID else { return false }
+        return subscriptionsSaving.contains(SubscriptionKey(accountID: accountID, communityID: communityID))
+    }
+
+    /// Only one change per account and community can be saved at a time.
     func toggleSubscribe(communityID: String) {
         guard let index = communities.firstIndex(where: { $0.id == communityID }),
               let accountID else { return }
+        let key = SubscriptionKey(accountID: accountID, communityID: communityID)
+        guard subscriptionsSaving.insert(key).inserted else { return }
         let name = communities[index].name
         let subscribed = !communities[index].isSubscribed
         let generation = accountGeneration
         communities[index].isSubscribed = subscribed
         Task {
+            defer { subscriptionsSaving.remove(key) }
             do {
                 let action = RedditAction.subscribe(community: name, subscribed: subscribed)
+                let result: ActionResult
                 if let authenticated {
-                    _ = try await authenticated.perform(action, accountID: accountID)
+                    result = try await authenticated.perform(action, accountID: accountID)
                 } else if let reddit {
-                    _ = try await reddit.perform(action, account: accountID)
+                    result = try await reddit.perform(action, account: accountID)
+                } else {
+                    throw RedditClientError.authenticationRequired
                 }
+                guard result.succeeded else {
+                    throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not save this change."])
+                }
+                // Invalidate the account that sent the request, even if the
+                // user switched accounts while it was saving.
+                await SubscribedCommunitiesCache.shared.remove(for: accountID)
             } catch {
                 guard isCurrentAccount(accountID, generation: generation),
                       let index = communities.firstIndex(where: { $0.id == communityID }) else { return }

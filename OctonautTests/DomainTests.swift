@@ -4,7 +4,136 @@ import XCTest
 
 @testable import Octonaut
 
+private actor ControlledSubscriptionService: AuthenticatedRedditService {
+    private(set) var requests: [(action: RedditAction, account: AccountID)] = []
+    private var pending: CheckedContinuation<ActionResult, Never>?
+    private var requestWaiter: CheckedContinuation<Void, Never>?
+
+    func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
+        Listing(items: [])
+    }
+
+    func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message] { [] }
+
+    func perform(_ action: RedditAction, accountID: AccountID) async throws -> ActionResult {
+        requests.append((action, accountID))
+        return await withCheckedContinuation { continuation in
+            pending = continuation
+            requestWaiter?.resume()
+            requestWaiter = nil
+        }
+    }
+
+    func waitForRequest() async {
+        if pending != nil { return }
+        await withCheckedContinuation { requestWaiter = $0 }
+    }
+
+    func complete(_ result: ActionResult) {
+        let continuation = pending
+        pending = nil
+        continuation?.resume(returning: result)
+    }
+}
+
 final class DomainTests: XCTestCase {
+    @MainActor
+    func testSubscriptionSuccessInvalidatesCacheAndReloadsCommunities() async throws {
+        let account = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: account)
+        await store.refreshCommunities()
+        let cachedBefore = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNotNil(cachedBefore)
+
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        await service.complete(ActionResult(succeeded: true))
+        await waitForSubscription(store)
+
+        let cachedAfter = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNil(cachedAfter)
+        await store.refreshCommunities()
+        let reads = await client.subscribedCommunitiesRequests()
+        XCTAssertEqual(reads, 2, "Returning to Communities must fetch the updated subscriptions")
+        await SubscribedCommunitiesCache.shared.remove(for: account)
+    }
+
+    @MainActor
+    func testSubscriptionIgnoresRepeatedTapsAndAllowsRetryAfterFailure() async throws {
+        let account = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: account)
+        await store.refreshCommunities()
+
+        store.toggleSubscribe(communityID: "swift")
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        store.toggleSubscribe(communityID: "swift")
+        let firstRequests = await service.requests
+        XCTAssertEqual(firstRequests.count, 1)
+        XCTAssertEqual(firstRequests.first?.account, account)
+        if case .subscribe(let community, let subscribed) = firstRequests.first?.action {
+            XCTAssertEqual(community, "swift")
+            XCTAssertFalse(subscribed)
+        } else { XCTFail("Expected a website subscription action") }
+        XCTAssertEqual(store.communities.first?.isSubscribed, false)
+
+        await service.complete(ActionResult(succeeded: false, message: "Denied"))
+        await waitForSubscription(store)
+        XCTAssertEqual(store.communities.first?.isSubscribed, true)
+        let cached = await SubscribedCommunitiesCache.shared.value(for: account)
+        XCTAssertNotNil(cached, "A rejected change must preserve the cache")
+
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        await service.complete(ActionResult(succeeded: true))
+        await waitForSubscription(store)
+        let retryRequests = await service.requests
+        XCTAssertEqual(retryRequests.count, 2)
+        XCTAssertEqual(store.communities.first?.isSubscribed, false)
+        await SubscribedCommunitiesCache.shared.remove(for: account)
+    }
+
+    @MainActor
+    func testSubscriptionCompletionInvalidatesOriginalAccountAfterSwitch() async throws {
+        let first = AccountID()
+        let second = AccountID()
+        let client = FixtureRedditClient(communitiesData: subscriptionFixture)
+        let service = ControlledSubscriptionService()
+        let store = OctonautFeatureStore(reddit: client, authenticated: service, accountID: first)
+        await store.refreshCommunities()
+        store.toggleSubscribe(communityID: "swift")
+        await service.waitForRequest()
+        store.synchronizeAccount(id: second, generation: 1, accounts: [])
+        await store.refreshCommunities()
+
+        await service.complete(ActionResult(succeeded: true))
+        // Return to the original account so the pending-state check observes its request.
+        store.synchronizeAccount(id: first, generation: 2, accounts: [])
+        await waitForSubscription(store)
+        let firstCache = await SubscribedCommunitiesCache.shared.value(for: first)
+        let secondCache = await SubscribedCommunitiesCache.shared.value(for: second)
+        XCTAssertNil(firstCache)
+        XCTAssertNotNil(secondCache)
+        await SubscribedCommunitiesCache.shared.remove(for: first)
+        await SubscribedCommunitiesCache.shared.remove(for: second)
+    }
+
+    private var subscriptionFixture: Data {
+        Data(#"{"data":{"after":null,"before":null,"children":[{"kind":"t5","data":{"display_name":"Swift","user_is_subscriber":true}}]}}"#.utf8)
+    }
+
+    @MainActor
+    private func waitForSubscription(_ store: OctonautFeatureStore) async {
+        for _ in 0..<1000 {
+            if !store.isSubscriptionSaving(communityID: "swift") { return }
+            await Task.yield()
+        }
+        XCTFail("Subscription request did not finish")
+    }
     @MainActor
     func testSearchUsesSelectedAccountAndReturnsToAnonymous() async {
         let client = FixtureRedditClient()

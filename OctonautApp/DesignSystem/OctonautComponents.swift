@@ -626,6 +626,7 @@ struct OctonautCommunityRow: View {
     let community: CommunityCardModel
     var onFavorite: (() -> Void)?
     var onSubscribe: (() -> Void)?
+    var isSubscriptionSaving = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -668,6 +669,7 @@ struct OctonautCommunityRow: View {
                 Label(
                     community.isSubscribed ? "Unsubscribe" : "Subscribe", systemImage: "person.badge.plus")
             }
+            .disabled(isSubscriptionSaving)
             Button {
                 onFavorite?()
             } label: {
