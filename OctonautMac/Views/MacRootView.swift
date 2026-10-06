@@ -214,7 +214,8 @@ struct MacRootView: View {
         case .inbox:
             MacInboxView(
                 service: dependencies.authenticated,
-                accounts: dependencies.accounts
+                accounts: dependencies.accounts,
+                openDiscussion: { selectedPost = PostCardModel(deepLinkURL: $0) }
             )
         case .accounts:
             MacAccountsView(accounts: dependencies.accounts)

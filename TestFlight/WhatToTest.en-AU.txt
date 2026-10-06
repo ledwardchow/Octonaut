@@ -4,9 +4,11 @@ Fix: user flair would cause subreddit/user display to compress multiline
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
 Private messages now send, with a subject field.
-Message threads show the whole conversation.
+Inbox items open full messages, replies, and conversations.
 Replying in a conversation now replies to the thread.
 Inbox Messages filter and mark read now work.
+Inbox replies link to the original discussion.
+Reply to comments directly from your inbox.
 Opening a read inbox item no longer marks it unread.
 Send errors now show Reddit's reason.
 Switch accounts from the account menu.

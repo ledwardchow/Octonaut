@@ -8,6 +8,9 @@ struct InboxRootView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var filter = "All"
     @State private var showingMarkAllRead = false
+    @State private var selectedItem: InboxCardModel?
+    @State private var isLoading = false
+    @State private var loadError: String?
 
     private var items: [InboxCardModel] {
         guard filter != "Unread" else { return store.inbox.filter(\.isUnread) }
@@ -23,18 +26,19 @@ struct InboxRootView: View {
                 ContentUnavailableView("Sign in again", systemImage: "person.crop.circle.badge.exclamationmark", description: Text("This Reddit session has expired. Reauthenticate from the Account tab."))
             } else {
                 List {
-                    if items.isEmpty {
+                    if isLoading && items.isEmpty {
+                        ProgressView("Loading inbox…")
+                    } else if let loadError, items.isEmpty {
+                        ContentUnavailableView("Inbox unavailable", systemImage: "exclamationmark.triangle", description: Text(loadError))
+                        Button("Try Again") { Task { await refreshLiveInbox() } }
+                    } else if items.isEmpty {
                         ContentUnavailableView("Inbox is empty", systemImage: "tray", description: Text("New replies and messages will appear here."))
                             .listRowSeparator(.hidden)
                     }
                     ForEach(items) { item in
                         Button {
                             if item.isUnread { markRead(item) }
-                            if item.kind == .message {
-                                router.push(.conversation(item.id))
-                            } else if let postURL = item.postURL {
-                                router.push(.postURL(postURL))
-                            }
+                            selectedItem = item
                         } label: {
                             inboxRow(item)
                         }
@@ -51,6 +55,13 @@ struct InboxRootView: View {
                 }
                 .listStyle(.plain)
                 .refreshable { await refreshLiveInbox() }
+            }
+        }
+        .navigationDestination(item: $selectedItem) { item in
+            if item.kind == .message {
+                ConversationView(itemID: item.conversationID ?? item.id, store: store, router: router, initialItem: item)
+            } else {
+                InboxDetailView(item: item, store: store, router: router)
             }
         }
         .navigationTitle("Inbox")
@@ -79,6 +90,7 @@ struct InboxRootView: View {
             Button("Mark All Read") { markAllRead() }
             Button("Cancel", role: .cancel) {}
         }
+        .onChange(of: dependencies.accounts.selectionGeneration) { selectedItem = nil }
         .task(id: inboxRefreshKey) { await refreshLiveInbox() }
     }
 
@@ -91,9 +103,13 @@ struct InboxRootView: View {
             return
         }
         let token = dependencies.accounts.token(for: accountID)
+        let refreshKey = inboxRefreshKey
+        isLoading = true
+        loadError = nil
+        defer { if refreshKey == inboxRefreshKey { isLoading = false } }
         do {
             let page = try await dependencies.authenticated.fetchInbox(section: sectionForFilter, accountID: accountID)
-            guard dependencies.accounts.isCurrent(token) else { return }
+            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey, !Task.isCancelled else { return }
             store.inbox = page.items.map { item in
                 InboxCardModel(
                     id: item.fullname,
@@ -105,13 +121,18 @@ struct InboxRootView: View {
                     age: item.createdAt.formatted(.relative(presentation: .named)),
                     score: nil,
                     isUnread: !item.isRead,
-                    postURL: item.postPermalink
+                    postURL: item.postPermalink,
+                    conversationID: item.conversationFullname
                 )
             }
-        } catch let error as RedditClientError where error == .authenticationRequired {
-            await dependencies.accounts.markNeedsLogin(accountID)
+        } catch is CancellationError {
+            return
         } catch {
-            // Keep previous rows visible if a refresh fails.
+            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey else { return }
+            loadError = error.localizedDescription
+            if error as? RedditClientError == .authenticationRequired {
+                await dependencies.accounts.markNeedsLogin(accountID)
+            }
         }
     }
 
@@ -175,9 +196,11 @@ struct InboxRootView: View {
             if item.isUnread {
                 Circle().fill(.orange).frame(width: 8, height: 8).padding(.top, 5)
             }
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(.horizontal)
         .padding(.vertical, 13)
+        .contentShape(Rectangle())
         .background(item.isUnread ? Color.orange.opacity(0.07) : .clear)
         .overlay(alignment: .bottom) { Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5) }
         .accessibilityElement(children: .combine)
@@ -190,6 +213,7 @@ struct ConversationView: View {
     let itemID: String
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var initialItem: InboxCardModel? = nil
     @Environment(AppDependencies.self) private var dependencies
     @State private var composer: ComposerKind?
     @State private var messages: [Message] = []
@@ -199,6 +223,14 @@ struct ConversationView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                if let initialItem, messages.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(initialItem.title).font(.headline)
+                        Text(initialItem.subtitle).font(.caption).foregroundStyle(.secondary)
+                        RedditMarkdownView(source: initialItem.preview).textSelection(.enabled)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if isLoading {
                     ProgressView("Loading conversation…")
                         .padding(.top, 40)
@@ -209,7 +241,8 @@ struct ConversationView: View {
                         description: Text(errorMessage)
                     )
                     .padding(.top, 30)
-                } else if messages.isEmpty {
+                    Button("Try Again") { Task { await loadConversation() } }
+                } else if messages.isEmpty && initialItem == nil {
                     ContentUnavailableView("No messages", systemImage: "bubble.left.and.bubble.right")
                         .padding(.top, 30)
                 } else {
@@ -220,7 +253,8 @@ struct ConversationView: View {
             }
             .padding()
         }
-        .navigationTitle("Conversation")
+        .navigationTitle(initialItem?.title ?? "Conversation")
+        .refreshable { await loadConversation() }
         .safeAreaInset(edge: .bottom) {
             Button { composer = .comment } label: {
                 Label("Reply", systemImage: "arrowshape.turn.up.left")
@@ -233,7 +267,7 @@ struct ConversationView: View {
         }
         .sheet(item: $composer) { kind in
             // Replying to a private message uses /api/comment with the t4_ fullname.
-            ComposerView(kind: kind, store: store, targetID: itemID) {
+            ComposerView(kind: kind, store: store, targetID: initialItem?.id ?? itemID) {
                 Task { await loadConversation() }
             }
         }
@@ -247,7 +281,8 @@ struct ConversationView: View {
             VStack(alignment: isMine ? .trailing : .leading, spacing: 4) {
                 Text(isMine ? "You" : message.sender?.displayName ?? "Reddit user")
                     .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Text(message.body.plainText)
+                RedditMarkdownView(source: message.body.plainText)
+                    .textSelection(.enabled)
                     .font(.body)
                     .foregroundStyle(isMine ? .white : .primary)
                     .padding(11)
@@ -264,16 +299,64 @@ struct ConversationView: View {
             errorMessage = "Sign in to load this conversation."
             return
         }
+        let token = dependencies.accounts.token(for: accountID)
         isLoading = true
+        defer { isLoading = false }
         errorMessage = nil
         do {
-            messages = try await dependencies.authenticated.fetchConversation(messageID: itemID, accountID: accountID)
+            let loaded = try await dependencies.authenticated.fetchConversation(messageID: itemID, accountID: accountID)
+            guard dependencies.accounts.isCurrent(token), !Task.isCancelled else { return }
+            messages = loaded.sorted { $0.createdAt < $1.createdAt }
+        } catch is CancellationError {
+            return
         } catch let error as RedditClientError where error == .authenticationRequired {
+            guard dependencies.accounts.isCurrent(token) else { return }
             await dependencies.accounts.markNeedsLogin(accountID)
             errorMessage = error.localizedDescription
         } catch {
+            guard dependencies.accounts.isCurrent(token) else { return }
             errorMessage = error.localizedDescription
         }
-        isLoading = false
+    }
+}
+
+@MainActor
+private struct InboxDetailView: View {
+    let item: InboxCardModel
+    let store: OctonautFeatureStore
+    let router: OctonautFeatureRouter
+    @State private var composer: ComposerKind?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(item.title).font(.title2.bold())
+                Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary)
+                Text(item.age).font(.caption).foregroundStyle(.secondary)
+                RedditMarkdownView(source: item.preview).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let url = item.postURL {
+                    Button { router.push(.postURL(url)) } label: {
+                        Label("View discussion", systemImage: "bubble.left.and.bubble.right")
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle(item.kind == .mention ? "Mention" : "Reply")
+        .safeAreaInset(edge: .bottom) {
+            if item.id.hasPrefix("t1_") {
+                Button { composer = .comment } label: {
+                    Label("Reply", systemImage: "arrowshape.turn.up.left").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .padding()
+                .background(.bar)
+            }
+        }
+        .sheet(item: $composer) { kind in
+            ComposerView(kind: kind, store: store, targetID: item.id)
+        }
     }
 }

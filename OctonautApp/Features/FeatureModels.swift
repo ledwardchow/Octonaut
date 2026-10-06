@@ -663,6 +663,7 @@ struct InboxCardModel: Identifiable, Hashable, Sendable {
     var score: Int?
     var isUnread: Bool
     var postURL: URL? = nil
+    var conversationID: String? = nil
 }
 
 struct AccountCardModel: Identifiable, Hashable, Sendable {
