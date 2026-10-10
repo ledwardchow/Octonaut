@@ -1,4 +1,5 @@
 Changes in current build:
+Comment headers collapse and expand again.
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
 Private messages now send, with a subject field.

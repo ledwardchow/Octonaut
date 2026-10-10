@@ -717,9 +717,13 @@ struct OctonautCommentRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
-            Rectangle()
-                .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
-                .frame(width: 3)
+            Button(action: { onCollapse?() }) {
+                Rectangle()
+                    .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
+                    .frame(width: 3)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Button(action: { onCollapse?() }) {
@@ -731,15 +735,22 @@ struct OctonautCommentRow: View {
                     .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
                     OctonautUsernameLink(username: comment.author)
                         .font(.caption.weight(.semibold))
-                    if comment.isOriginalPoster(postAuthor: postAuthor) {
-                        OctonautPill(title: "OP", color: theme.accent)
+                    Button(action: { onCollapse?() }) {
+                        HStack(spacing: 6) {
+                            if comment.isOriginalPoster(postAuthor: postAuthor) {
+                                OctonautPill(title: "OP", color: theme.accent)
+                            }
+                            if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
+                                OctonautUserFlairPill(flair: authorFlair)
+                            }
+                            if comment.isModerator { OctonautPill(title: "MOD", color: theme.moderator) }
+                            Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    if let authorFlair = comment.authorFlair, !comment.author.isEmpty {
-                        OctonautUserFlairPill(flair: authorFlair)
-                    }
-                    if comment.isModerator { OctonautPill(title: "MOD", color: theme.moderator) }
-                    Text("• \(comment.age)").font(.caption).foregroundStyle(theme.tertiaryText)
-                    Spacer()
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
                 }
                 .foregroundStyle(theme.primaryText)
                 if !comment.isCollapsed {
@@ -763,9 +774,10 @@ struct OctonautCommentRow: View {
                     }
                     .font(.caption)
                 } else {
-                    Text("Show comment")
+                    Button("Show comment", action: { onCollapse?() })
                         .font(.caption)
                         .foregroundStyle(theme.accent)
+                        .buttonStyle(.plain)
                 }
             }
         }
