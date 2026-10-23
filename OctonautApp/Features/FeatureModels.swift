@@ -947,6 +947,17 @@ enum FeatureSheet: Identifiable, Hashable {
 @MainActor
 @Observable
 final class OctonautFeatureStore {
+    enum DetachedPostActionKind: Hashable {
+        case vote
+        case save
+    }
+
+    private struct DetachedPostActionKey: Hashable {
+        let accountID: AccountID
+        let postID: String
+        let kind: DetachedPostActionKind
+    }
+
     private let screenshotMode: Bool
     private struct FeedCacheEntry {
         let posts: [PostCardModel]
@@ -1064,6 +1075,7 @@ final class OctonautFeatureStore {
     /// The newest vote or save sent for each item. A failure only rolls back
     /// the UI when no later tap on the same item has superseded it.
     @ObservationIgnored private var latestMutation: [String: UUID] = [:]
+    @ObservationIgnored private var pendingDetachedPostActions: Set<DetachedPostActionKey> = []
     var communitiesState: OctonautLoadState = .loaded
     var inboxState: OctonautLoadState = .loaded
     var searchText = ""
@@ -1080,7 +1092,16 @@ final class OctonautFeatureStore {
     var userProfileState: OctonautLoadState = .idle
     var loadedUserProfileUsername = ""
     var loadedUserProfileAccountContext = ""
-    var unreadCount: Int { inbox.filter(\.isUnread).count }
+    /// Unread inbox fullnames fetched for the badge, so it is right before
+    /// the Inbox has been opened and whatever filter the Inbox shows.
+    private(set) var unreadInboxIDs: Set<String> = []
+    @ObservationIgnored private var unreadRequestID = UUID()
+    var unreadCount: Int {
+        // Rows the Inbox has loaded are newer than the badge fetch.
+        let read = Set(inbox.lazy.filter { !$0.isUnread }.map(\.id))
+        let unread = Set(inbox.lazy.filter(\.isUnread).map(\.id))
+        return unreadInboxIDs.subtracting(read).union(unread).count
+    }
     var accountContextKey: String {
         "\(accountID?.description ?? "anonymous"):\(accountGeneration)"
     }
@@ -1171,6 +1192,8 @@ final class OctonautFeatureStore {
         communitiesRefreshTask?.cancel()
         communitiesRefreshTask = nil
         communitiesRefreshID = nil
+        // Session blocks belong to the account that made them.
+        blockedAuthors.removeAll()
         feedCache.removeAll()
         detailCache.removeAll()
         visibleDetailKey = nil
@@ -1182,6 +1205,9 @@ final class OctonautFeatureStore {
         moreFailedIDs.removeAll()
         comments.removeAll()
         inbox.removeAll()
+        userProfilePosts.removeAll()
+        unreadInboxIDs.removeAll()
+        unreadRequestID = UUID()
         communities.removeAll()
         communitiesState = id == nil ? .empty : .idle
         inboxState = id == nil ? .empty : .idle
@@ -1330,7 +1356,7 @@ final class OctonautFeatureStore {
             let filtered = await applyFilters(to: listing.items)
             guard feedRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
-            posts = filtered.posts.map(PostCardModel.init)
+            posts = cardModels(for: filtered.posts, seenIDs: filtered.seenIDs)
             filteredPostCount = filtered.removedCount
             nextPage = listing.after
             loadedFeed = descriptor
@@ -1470,6 +1496,18 @@ final class OctonautFeatureStore {
         inboxState = inbox.isEmpty ? .empty : .loaded
     }
 
+    /// Reads the selected account's unread items for the inbox badge.
+    func refreshUnreadCount() async {
+        guard !screenshotMode, let authenticated, let selectedAccountID = accountID else { return }
+        let requestID = UUID()
+        unreadRequestID = requestID
+        let selectedGeneration = accountGeneration
+        guard let listing = try? await authenticated.fetchUnreadForBadge(accountID: selectedAccountID),
+              unreadRequestID == requestID, !Task.isCancelled,
+              isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+        unreadInboxIDs = Set(listing.items.filter { !$0.isRead }.map(\.fullname))
+    }
+
     func loadUserProfile(username: String, forceRefresh: Bool = false) async {
         let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedUsername.isEmpty else {
@@ -1557,7 +1595,10 @@ final class OctonautFeatureStore {
         } catch is CancellationError {
             return
         } catch {
-            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return }
+            // A slow failure for a profile the reader has left must not
+            // replace the profile now on screen.
+            guard isCurrentAccount(selectedAccountID, generation: selectedGeneration),
+                  loadedUserProfileUsername == normalizedUsername else { return }
             if !hasCachedContent {
                 userProfileState = .failure(error)
             }
@@ -1871,7 +1912,10 @@ final class OctonautFeatureStore {
             else { return }
             let existing = Set(posts.map(\.id))
             posts.append(
-                contentsOf: filtered.posts.filter { !existing.contains($0.id) }.map(PostCardModel.init))
+                contentsOf: cardModels(
+                    for: filtered.posts.filter { !existing.contains($0.id) },
+                    seenIDs: filtered.seenIDs
+                ))
             filteredPostCount += filtered.removedCount
             self.nextPage = listing.after == nextPage ? nil : listing.after
             feedState = posts.isEmpty ? .empty : .loaded
@@ -1894,10 +1938,11 @@ final class OctonautFeatureStore {
         }
     }
 
-    private func applyFilters(to values: [Post]) async -> (posts: [Post], removedCount: Int) {
+    private func applyFilters(to values: [Post]) async -> (posts: [Post], removedCount: Int, seenIDs: Set<String>) {
         var seenIDs = Set<String>()
         let hideSeen = settings?.hideSeenPosts ?? false
-        if hideSeen, let persistence {
+        // Read even when seen posts stay visible, so rows keep their seen mark.
+        if let persistence {
             seenIDs = Set((try? await persistence.loadSeenPostIDs()) ?? [])
         }
 
@@ -1927,7 +1972,7 @@ final class OctonautFeatureStore {
                 ?? SemanticFilterEngine.defaultInstruction,
             !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
-            return (deterministic.visible, deterministic.removedCount + values.count - unblocked.count)
+            return (deterministic.visible, deterministic.removedCount + values.count - unblocked.count, seenIDs)
         }
 
         let rule = SemanticRule(
@@ -1938,7 +1983,16 @@ final class OctonautFeatureStore {
         let decisions = await semanticFilter.classify(posts: deterministic.visible, rule: rule)
         let hiddenIDs = Set(decisions.filter(\.shouldHide).map(\.itemID))
         let visible = deterministic.visible.filter { !hiddenIDs.contains($0.id) }
-        return (visible, values.count - visible.count)
+        return (visible, values.count - visible.count, seenIDs)
+    }
+
+    /// Feed rows for decoded posts, with this device's seen marks applied.
+    private func cardModels(for values: [Post], seenIDs: Set<String>) -> [PostCardModel] {
+        values.map { post in
+            var model = PostCardModel(post: post)
+            if seenIDs.contains(post.id) { model.isSeen = true }
+            return model
+        }
     }
 
     /// Updates the account used by subsequent reads. Callers should refresh
@@ -1957,6 +2011,8 @@ final class OctonautFeatureStore {
         detailState = .idle
         comments.removeAll()
         inbox.removeAll()
+        unreadInboxIDs.removeAll()
+        unreadRequestID = UUID()
         inboxState = accountID == nil ? .empty : .idle
         userProfile = nil
         userProfilePosts.removeAll()
@@ -2279,6 +2335,18 @@ final class OctonautFeatureStore {
         }
     }
 
+    func beginDetachedPostAction(_ kind: DetachedPostActionKind, postID: String, accountID: AccountID) -> Bool {
+        pendingDetachedPostActions.insert(
+            DetachedPostActionKey(accountID: accountID, postID: postID, kind: kind)
+        ).inserted
+    }
+
+    func endDetachedPostAction(_ kind: DetachedPostActionKind, postID: String, accountID: AccountID) {
+        pendingDetachedPostActions.remove(
+            DetachedPostActionKey(accountID: accountID, postID: postID, kind: kind)
+        )
+    }
+
     /// Sends a vote for a post the visible feed may not hold, such as a search
     /// result or profile row. `performVote` does nothing when the post is
     /// absent, so the caller passes the value to restore if Reddit rejects it.
@@ -2415,6 +2483,8 @@ final class OctonautFeatureStore {
 
     func markAllRead() {
         for index in inbox.indices { inbox[index].isUnread = false }
+        unreadInboxIDs.removeAll()
+        unreadRequestID = UUID()
     }
 
     func toggleComment(id: String) {

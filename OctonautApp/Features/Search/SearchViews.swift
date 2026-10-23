@@ -53,6 +53,7 @@ struct SearchRootView: View {
             Task { await model.submit(query: submittedQuery, scope: newScope, account: dependencies.accounts.selectedAccountID) }
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
+            model.invalidateForAccountChange()
             Task { await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID) }
         }
         .toolbar {

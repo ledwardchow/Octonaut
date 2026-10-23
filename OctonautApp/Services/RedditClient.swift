@@ -492,12 +492,14 @@ actor URLSessionRedditClient: RedditClient {
         }
         guard let envelope = try? JSONSerialization.jsonObject(with: identityData) as? [String: Any],
               let identity = envelope["data"] as? [String: Any],
-              let name = identity["name"] as? String, !name.isEmpty else {
+              let name = identity["name"] as? String, !name.isEmpty,
+              var credential = try await credentialVault.credential(for: account),
+              let expectedUser = credential.redditUser,
+              name.caseInsensitiveCompare(expectedUser) == .orderedSame else {
             throw RedditClientError.authenticationRequired
         }
         guard let modhash = (identity["modhash"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !modhash.isEmpty,
-              var credential = try await credentialVault.credential(for: account),
               credential.modhash != modhash else { return false }
         credential.modhash = modhash
         try await credentialVault.save(credential, for: account)

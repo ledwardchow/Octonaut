@@ -170,7 +170,7 @@
 		3E07930B4DE408F45C34596E /* FeatureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureModels.swift; sourceTree = "<group>"; };
 		42F708CABD2C643A1BC4DAFF /* OctonautPlayerControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautPlayerControls.swift; sourceTree = "<group>"; };
 		46C041064484A736B1FCF4D8 /* ReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportingTests.swift; sourceTree = "<group>"; };
-		4DD643A89061C969F106E42D /* OctonautMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = OctonautMac.app; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4DD643A89061C969F106E42D /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EA472F0D0173FA4B790DED6 /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		573291A83CE53B9C67DE560C /* SwiftDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataModels.swift; sourceTree = "<group>"; };
 		5E702C6ADAEE69BA35D8C9B9 /* OctonautImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautImageCache.swift; sourceTree = "<group>"; };
@@ -183,7 +183,7 @@
 		6E8E512134F4BB0198430532 /* AccountCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountCoordinator.swift; sourceTree = "<group>"; };
 		77C544E1607B287B34E2178C /* MacSidebarSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarSelection.swift; sourceTree = "<group>"; };
 		7A40BD8CDE0AA06BEBDEF658 /* MacRedditLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRedditLoginView.swift; sourceTree = "<group>"; };
-		7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OctonautTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OctonautTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7ECC0450C9C3B6FFD48B55D2 /* OctonautMediaComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautMediaComponents.swift; sourceTree = "<group>"; };
 		85EF8FE6589B257568A4AE85 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		870B8FB1231BA4B512F7CD46 /* MacComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerView.swift; sourceTree = "<group>"; };
@@ -333,7 +333,7 @@
 			isa = PBXGroup;
 			children = (
 				B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */,
-				4DD643A89061C969F106E42D /* OctonautMac.app */,
+				4DD643A89061C969F106E42D /* Octonaut.app */,
 				7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */,
 			);
 			name = Products;
@@ -584,7 +584,7 @@
 			packageProductDependencies = (
 			);
 			productName = OctonautMac;
-			productReference = 4DD643A89061C969F106E42D /* OctonautMac.app */;
+			productReference = 4DD643A89061C969F106E42D /* Octonaut.app */;
 			productType = "com.apple.product-type.application";
 		};
 		6813939EEF5681F07F2FC42B /* Octonaut */ = {
@@ -630,7 +630,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2700;
+				LastUpgradeCheck = 2710;
 				TargetAttributes = {
 					1624150B7D18E1D612B6A231 = {
 						DevelopmentTeam = 22AYPY84RT;
@@ -903,10 +903,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 22AYPY84RT;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -928,6 +930,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -972,10 +975,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 22AYPY84RT;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -990,6 +995,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -1004,6 +1010,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautMac/OctonautMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1072,6 +1079,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautMac/OctonautMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;

@@ -204,6 +204,7 @@ final class InboxTests: XCTestCase {
         _ = try await service.fetchInbox(section: .all, accountID: account)
         _ = try await service.fetchInbox(section: .all, after: "t4_older", accountID: account)
         _ = try await service.fetchConversation(messageID: "t4_abc", accountID: account)
+        _ = try await service.fetchUnreadForBadge(accountID: account)
         for destination in ["https://example.com", "http://www.reddit.com", "https://www.reddit.com:8443"] {
             let unsafe = LiveAuthenticatedRedditService(credentialVault: vault, reddit: FixtureRedditClient(), baseURL: URL(string: destination)!, sessionConfiguration: configuration)
             do {
@@ -216,6 +217,42 @@ final class InboxTests: XCTestCase {
             XCTFail("Invalid message IDs must be rejected")
         } catch { XCTAssertEqual(error as? RedditClientError, .invalidURL) }
     }
+
+    func testUnreadBadgeLoadsEveryPageWithoutMarkingItemsRead() async throws {
+        let account = AccountID(rawValue: UUID())
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic")])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [UnreadBadgePagesProtocol.self]
+        let service = LiveAuthenticatedRedditService(
+            credentialVault: vault, reddit: FixtureRedditClient(), sessionConfiguration: configuration)
+
+        let listing = try await service.fetchUnreadForBadge(accountID: account)
+
+        XCTAssertEqual(listing.items.map(\.fullname), ["t4_first", "t4_second"])
+    }
+}
+
+private final class UnreadBadgePagesProtocol: URLProtocol, @unchecked Sendable {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(request.url?.absoluteString.hasPrefix("https://www.reddit.com/message/unread.json"), true)
+        XCTAssertEqual(query.first { $0.name == "mark" }?.value, "false")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic")
+        let after = query.first { $0.name == "after" }?.value
+        XCTAssertTrue(after == nil || after == "t4_first")
+        let body = after == nil
+            ? #"{"data":{"after":"t4_first","children":[{"kind":"t4","data":{"id":"first","name":"t4_first","new":true}}]}}"#
+            : #"{"data":{"children":[{"kind":"t4","data":{"id":"second","name":"t4_second","new":true}}]}}"#
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
 
 private final class InboxRequestProtocol: URLProtocol, @unchecked Sendable {
@@ -224,7 +261,11 @@ private final class InboxRequestProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         XCTAssertEqual(request.url?.host, "www.reddit.com")
         XCTAssertEqual(request.url?.scheme, "https")
-        XCTAssertTrue(["/message/inbox.json", "/message/messages/abc.json"].contains(request.url!.path))
+        XCTAssertTrue(["/message/inbox.json", "/message/messages/abc.json", "/message/unread.json"].contains(request.url!.path))
+        let mark = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "mark" }?.value
+        // Only the badge read asks Reddit not to mark items read.
+        XCTAssertEqual(mark, request.url!.path == "/message/unread.json" ? "false" : nil)
         XCTAssertEqual(request.httpMethod, "GET")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
@@ -276,7 +317,7 @@ final class ForbiddenMutationTests: XCTestCase {
 
     func testForbiddenMutationRetriesOnceWithRefreshedModhash() async throws {
         let account = AccountID(rawValue: UUID())
-        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "old")])
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "old", redditUser: "reader")])
         ForbiddenMutationProtocol.identity = (200, #"{"kind":"t2","data":{"name":"reader","modhash":"fresh"}}"#)
         ForbiddenMutationProtocol.acceptedModhash = "fresh"
         let result = try await makeClient(vault: vault).perform(.vote(fullname: "t3_abc", direction: 1), account: account)
@@ -288,9 +329,23 @@ final class ForbiddenMutationTests: XCTestCase {
         XCTAssertEqual(saved?.cookieValue, "synthetic")
     }
 
+    func testForbiddenMutationRejectsAnotherSessionUser() async throws {
+        let account = AccountID(rawValue: UUID())
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "old", redditUser: "reader")])
+        ForbiddenMutationProtocol.identity = (200, #"{"kind":"t2","data":{"name":"someone_else","modhash":"fresh"}}"#)
+        ForbiddenMutationProtocol.acceptedModhash = "fresh"
+        do {
+            _ = try await makeClient(vault: vault).perform(.vote(fullname: "t3_abc", direction: 1), account: account)
+            XCTFail("A different session user must not retry the mutation")
+        } catch { XCTAssertEqual(error as? RedditClientError, .authenticationRequired) }
+        XCTAssertEqual(ForbiddenMutationProtocol.paths, ["/api/vote", "/user/me/about.json"])
+        let saved = try await vault.credential(for: account)
+        XCTAssertEqual(saved?.modhash, "old")
+    }
+
     func testForbiddenMutationWithValidSessionStaysAccessDenied() async throws {
         let account = AccountID(rawValue: UUID())
-        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "current")])
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic", modhash: "current", redditUser: "reader")])
         ForbiddenMutationProtocol.identity = (200, #"{"kind":"t2","data":{"name":"reader","modhash":"current"}}"#)
         do {
             _ = try await makeClient(vault: vault).perform(.vote(fullname: "t3_abc", direction: 1), account: account)

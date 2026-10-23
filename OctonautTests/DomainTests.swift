@@ -2399,3 +2399,118 @@ final class LogoutCredentialTests: XCTestCase {
         XCTAssertEqual(savedAccounts.map(\.id), [other.id])
     }
 }
+
+private actor UnreadBadgeService: AuthenticatedRedditService {
+    private(set) var badgeRequests = 0
+
+    func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem> {
+        Listing(items: [])
+    }
+
+    func fetchUnreadForBadge(accountID: AccountID) async throws -> Listing<InboxItem> {
+        badgeRequests += 1
+        let data = Data(
+            #"{"data":{"children":[{"kind":"t4","data":{"id":"m1","name":"t4_m1","subject":"Hi","new":true}},{"kind":"t1","data":{"id":"c1","name":"t1_c1","subject":"comment reply","was_comment":true,"new":true}}]}}"#.utf8
+        )
+        return try LiveAuthenticatedRedditService.decodeInbox(data)
+    }
+
+    func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message] { [] }
+
+    func perform(_ action: RedditAction, accountID: AccountID) async throws -> ActionResult {
+        ActionResult(succeeded: true)
+    }
+}
+
+extension DomainTests {
+    @MainActor
+    func testSwitchingAccountClearsSessionBlocks() {
+        let store = OctonautFeatureStore(reddit: FixtureRedditClient(), accountID: AccountID())
+        store.applyBlock(true, username: "swift_reader")
+        store.userProfilePosts = [PostCardModel(post: FixtureData.posts[0])]
+        XCTAssertTrue(store.isBlockedAuthor("swift_reader"))
+
+        store.synchronizeAccount(id: AccountID(), generation: 1, accounts: [])
+
+        XCTAssertTrue(store.blockedAuthors.isEmpty)
+        XCTAssertTrue(store.userProfilePosts.isEmpty)
+    }
+
+    @MainActor
+    func testFeedRowsKeepSeenMarksAfterReload() async throws {
+        let data = Data(
+            #"{"data":{"after":null,"before":null,"children":[{"kind":"t3","data":{"id":"seen1","name":"t3_seen1","permalink":"/r/swift/comments/seen1/a/","title":"Seen","subreddit":"swift","is_self":true}},{"kind":"t3","data":{"id":"new1","name":"t3_new1","permalink":"/r/swift/comments/new1/b/","title":"New","subreddit":"swift","is_self":true}}]}}"#.utf8
+        )
+        let persistence = InMemoryPersistenceStore()
+        try await persistence.markPostSeen("seen1", seenAt: .now)
+        let store = OctonautFeatureStore(
+            reddit: FixtureRedditClient(listingData: data),
+            accountID: AccountID(),
+            persistence: persistence
+        )
+
+        await store.refreshPosts(for: .home)
+
+        XCTAssertEqual(store.posts.map(\.id), ["seen1", "new1"])
+        XCTAssertEqual(store.posts.map(\.isSeen), [true, false])
+    }
+
+    @MainActor
+    func testLateProfileFailureDoesNotReplaceTheProfileOnScreen() async {
+        let account = AccountID()
+        let client = FixtureRedditClient(
+            listingsByDestination: [.user(username: "slow_reader", section: .submitted): Data("not json".utf8)],
+            delaysByDestination: [.user(username: "slow_reader", section: .submitted): .milliseconds(150)]
+        )
+        let store = OctonautFeatureStore(reddit: client, accountID: account)
+
+        let slowLoad = Task { await store.loadUserProfile(username: "slow_reader", forceRefresh: true) }
+        while await client.listingRequests() == 0 { await Task.yield() }
+        await store.loadUserProfile(username: "fast_reader", forceRefresh: true)
+        await slowLoad.value
+
+        XCTAssertEqual(store.userProfile?.reference.username, "fast_reader")
+        XCTAssertEqual(store.userProfileState, .loaded)
+        await UserProfileCache.shared.remove(for: account)
+    }
+
+    @MainActor
+    func testInboxBadgeCountsUnreadBeforeInboxOpens() async {
+        let service = UnreadBadgeService()
+        let store = OctonautFeatureStore(
+            reddit: FixtureRedditClient(), authenticated: service, accountID: AccountID())
+
+        await store.refreshUnreadCount()
+        XCTAssertEqual(store.unreadCount, 2)
+
+        // A row the Inbox has since marked read stops counting.
+        store.inbox = [InboxCardModel(
+            id: "t4_m1", kind: .message, title: "Hi", subtitle: "", preview: "",
+            author: "", age: "", score: nil, isUnread: false)]
+        XCTAssertEqual(store.unreadCount, 1)
+
+        store.markAllRead()
+        XCTAssertEqual(store.unreadCount, 0)
+
+        await store.refreshUnreadCount()
+        store.synchronizeAccount(id: AccountID(), generation: 1, accounts: [])
+        XCTAssertEqual(store.unreadCount, 0)
+    }
+
+    func testLoginCheckRedirectsOnlyToHTTPSReddit() {
+        let delegate = RedditLoginRedirectDelegate()
+        let task = URLSession.shared.dataTask(with: URL(string: "https://www.reddit.com/user/me/about.json")!)
+        let response = HTTPURLResponse(url: task.originalRequest!.url!, statusCode: 302, httpVersion: nil, headerFields: nil)!
+        func follows(_ destination: String) -> Bool {
+            var followed: URLRequest?
+            delegate.urlSession(
+                .shared, task: task, willPerformHTTPRedirection: response,
+                newRequest: URLRequest(url: URL(string: destination)!)
+            ) { followed = $0 }
+            return followed != nil
+        }
+        XCTAssertTrue(follows("https://old.reddit.com/user/me/about.json"))
+        XCTAssertFalse(follows("http://www.reddit.com/user/me/about.json"))
+        XCTAssertFalse(follows("https://example.com/user/me/about.json"))
+    }
+}

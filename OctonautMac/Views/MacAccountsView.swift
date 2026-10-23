@@ -183,6 +183,10 @@ struct MacInboxView: View {
         .task(id: accounts.selectionGeneration) {
             await model.load(accountID: accounts.selectedAccountID)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .octonautMacRefresh)) { _ in
+            guard accounts.selectedAccountID != nil else { return }
+            load()
+        }
     }
 
     private func load() {

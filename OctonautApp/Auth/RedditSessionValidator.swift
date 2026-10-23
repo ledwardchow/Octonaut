@@ -76,7 +76,7 @@ actor RedditSessionValidator {
     }
 }
 
-private final class RedditLoginRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class RedditLoginRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     private let allowedHosts: Set<String> = ["www.reddit.com", "reddit.com", "old.reddit.com", "new.reddit.com", "m.reddit.com"]
 
     func urlSession(
@@ -86,7 +86,10 @@ private final class RedditLoginRedirectDelegate: NSObject, URLSessionTaskDelegat
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
-        guard let host = request.url?.host?.lowercased(), allowedHosts.contains(host) else {
+        // The session cookie rides along on a redirect, so it may only go to
+        // an HTTPS Reddit host.
+        guard let url = request.url, RedditReportTarget.isRedditURL(url),
+              let host = url.host?.lowercased(), allowedHosts.contains(host) else {
             completionHandler(nil)
             return
         }

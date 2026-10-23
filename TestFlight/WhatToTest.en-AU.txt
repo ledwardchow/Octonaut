@@ -50,6 +50,16 @@ Report to Reddit for breaking Reddit's rules.
 Posts and comments no longer lose text between < and >.
 Expired logins now ask you to sign in again.
 Vote and save now work in search and profiles.
+Quick repeated votes and saves stay in order.
+Switching accounts clears old search and profile posts.
+Blocks no longer carry over to other accounts.
+Seen posts stay marked after a refresh.
+Profiles no longer show another profile's error.
+Inbox badge shows unread before opening Inbox.
+Mac Refresh now reloads the Inbox.
+Login check only follows secure Reddit redirects.
+Mac lightbox caption links now open.
+Mac lightbox resizes smoothly.
 
 Changes in previous builds:
 Fix: user profile tap zone is too big on post cards

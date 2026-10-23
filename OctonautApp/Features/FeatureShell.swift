@@ -166,9 +166,11 @@ struct OctonautTabsView: View {
                 generation: dependencies.accounts.selectionGeneration,
                 accounts: dependencies.accounts.accounts
             )
+            await store.refreshUnreadCount()
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
             postsSplitState.clearDetail()
+            store.userProfilePosts.removeAll()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -199,6 +201,7 @@ struct OctonautTabsView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await dependencies.persistence.beginUsageSession() }
+            Task { await store.refreshUnreadCount() }
         }
         .environment(\.openURL, OpenURLAction { url in
             guard dependencies.settings.openRedditLinksInOctonaut,
@@ -856,10 +859,12 @@ struct DetachedPostActions {
               let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }) else { return }
         let previous = posts.wrappedValue[index].vote
         guard previous != value else { return }
+        guard store.beginDetachedPostAction(.vote, postID: postID, accountID: accountID) else { return }
         posts.wrappedValue[index].vote = value
         posts.wrappedValue[index].score += value - previous
         let token = accounts.token(for: accountID)
         Task {
+            defer { store.endDetachedPostAction(.vote, postID: postID, accountID: accountID) }
             do {
                 try await store.setVote(value, previous: previous, postID: postID, accountID: accountID)
             } catch {
@@ -877,10 +882,12 @@ struct DetachedPostActions {
     func toggleSave(postID: String, in posts: Binding<[PostCardModel]>) {
         guard accounts.requireLogin(), let accountID = accounts.selectedAccountID,
               let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }) else { return }
+        guard store.beginDetachedPostAction(.save, postID: postID, accountID: accountID) else { return }
         let saved = !posts.wrappedValue[index].isSaved
         posts.wrappedValue[index].isSaved = saved
         let token = accounts.token(for: accountID)
         Task {
+            defer { store.endDetachedPostAction(.save, postID: postID, accountID: accountID) }
             do {
                 try await store.setSaved(saved, postID: postID, accountID: accountID)
             } catch {

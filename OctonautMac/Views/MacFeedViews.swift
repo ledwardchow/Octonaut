@@ -808,7 +808,7 @@ struct MacPostDetailView: View {
             .background(.black)
             .contentShape(Rectangle())
             .gesture(
-                DragGesture(minimumDistance: 1)
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
                     .updating($embeddedMediaHeightDrag) { value, state, _ in
                         state = value.translation.height
                     }
@@ -1211,16 +1211,24 @@ private struct MacMediaLightboxView: View {
                 .font(.headline)
                 .lineLimit(2)
             if !post.body.isEmpty {
-                RedditMarkdownView(source: post.body)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.78))
-                    .tint(.accentColor)
-                    .lineLimit(2)
+                // A line limit stops SwiftUI from handling link clicks, so long captions scroll instead.
+                ViewThatFits(in: .vertical) {
+                    lightboxCaption
+                    ScrollView { lightboxCaption }
+                }
+                .frame(maxHeight: 64)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .background(LinearGradient(colors: [.clear, .black.opacity(0.84)], startPoint: .top, endPoint: .bottom))
+    }
+
+    private var lightboxCaption: some View {
+        RedditMarkdownView(source: post.body)
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.78))
+            .tint(.accentColor)
     }
 
     private func navigate(by offset: Int) {

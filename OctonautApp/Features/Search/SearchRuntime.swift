@@ -28,6 +28,16 @@ final class SearchFeatureModel {
         self.reddit = reddit
     }
 
+    func invalidateForAccountChange() {
+        requestGeneration &+= 1
+        postsAfter = nil
+        communitiesAfter = nil
+        posts.removeAll()
+        communities.removeAll()
+        users.removeAll()
+        state = .idle
+    }
+
     func loadTrendingCommunities(forceRefresh: Bool = false, account: AccountID? = nil) async {
         if !forceRefresh, trendingState == .loading || trendingState == .loaded { return }
         trendingGeneration &+= 1

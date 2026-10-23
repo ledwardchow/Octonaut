@@ -5,9 +5,15 @@ protocol AuthenticatedRedditService: Sendable {
     func fetchInbox(section: InboxSection, after: String?, accountID: AccountID) async throws -> Listing<InboxItem>
     func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message]
     func perform(_ action: RedditAction, accountID: AccountID) async throws -> ActionResult
+    /// Unread items for the inbox badge. Reading them must not mark them read.
+    func fetchUnreadForBadge(accountID: AccountID) async throws -> Listing<InboxItem>
 }
 
 extension AuthenticatedRedditService {
+    func fetchUnreadForBadge(accountID: AccountID) async throws -> Listing<InboxItem> {
+        try await fetchInbox(section: .unread, after: nil, accountID: accountID)
+    }
+
     func fetchInbox(section: InboxSection, accountID: AccountID) async throws -> Listing<InboxItem> {
         try await fetchInbox(section: section, after: nil, accountID: accountID)
     }
@@ -41,6 +47,23 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         return try Self.decodeInbox(data)
     }
 
+    func fetchUnreadForBadge(accountID: AccountID) async throws -> Listing<InboxItem> {
+        var items: [InboxItem] = []
+        var after: String?
+        var seenCursors: Set<String> = []
+        repeat {
+            let data = try await request(
+                path: "/message/unread.json", after: after, accountID: accountID,
+                extraQuery: [URLQueryItem(name: "mark", value: "false")]
+            )
+            let page = try Self.decodeInbox(data)
+            items.append(contentsOf: page.items)
+            guard let next = page.after, seenCursors.insert(next).inserted else { break }
+            after = next
+        } while true
+        return Listing(items: items)
+    }
+
     func fetchConversation(messageID: String, accountID: AccountID) async throws -> [Message] {
         let shortID = messageID.hasPrefix("t4_") ? String(messageID.dropFirst(3)) : messageID
         guard !shortID.isEmpty, shortID.utf8.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0) }) else {
@@ -71,7 +94,12 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         try await reddit.perform(action, account: accountID)
     }
 
-    private func request(path: String, after: String?, accountID: AccountID) async throws -> Data {
+    private func request(
+        path: String,
+        after: String?,
+        accountID: AccountID,
+        extraQuery: [URLQueryItem] = []
+    ) async throws -> Data {
         guard let credential = try await credentialVault.credential(for: accountID) else {
             throw RedditClientError.authenticationRequired
         }
@@ -79,6 +107,7 @@ actor LiveAuthenticatedRedditService: AuthenticatedRedditService {
         components?.path = path
         components?.queryItems = [URLQueryItem(name: "raw_json", value: "1"), URLQueryItem(name: "limit", value: "100")]
             + (after.map { [URLQueryItem(name: "after", value: $0)] } ?? [])
+            + extraQuery
         guard let url = components?.url, RedditReportTarget.isRedditURL(url) else { throw RedditClientError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
