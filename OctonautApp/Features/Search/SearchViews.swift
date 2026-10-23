@@ -53,6 +53,7 @@ struct SearchRootView: View {
             Task { await model.submit(query: submittedQuery, scope: newScope, account: dependencies.accounts.selectedAccountID) }
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
+            model.invalidateForAccountChange()
             Task { await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID) }
         }
         .toolbar {
@@ -146,25 +147,28 @@ struct SearchRootView: View {
         }
     }
 
+    private var postActions: DetachedPostActions {
+        DetachedPostActions(store: store, accounts: dependencies.accounts)
+    }
+
     @ViewBuilder
     private var loadedResults: some View {
         List {
             switch scope {
             case .posts:
                 ForEach(model.posts) { post in
+                    // Open from the title and comments, as the feed does: a
+                    // whole-row tap gesture also fired on the vote and save buttons.
                     OctonautPostRow(
                         post: post,
                         onUserOpen: { router.push($0) },
-                        showsFlair: dependencies.settings.showPostFlair
+                        showsFlair: dependencies.settings.showPostFlair,
+                        onVote: { postActions.vote(postID: post.id, value: $0, in: $model.posts) },
+                        onSave: { postActions.toggleSave(postID: post.id, in: $model.posts) },
+                        onOpen: { router.push(.post(post)) },
+                        onComments: { router.push(.post(post)) }
                     )
                     .fixedSize(horizontal: false, vertical: true)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            router.push(.post(post))
-                        }
-                    )
-                    .accessibilityAddTraits(.isButton)
                     .accessibilityAction {
                         router.push(.post(post))
                     }

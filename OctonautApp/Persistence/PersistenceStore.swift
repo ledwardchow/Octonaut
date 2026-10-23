@@ -162,7 +162,7 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
     }
 
     func loadSeenPostIDs() async throws -> [String] {
-        var descriptor = FetchDescriptor<SeenPostRecord>(
+        let descriptor = FetchDescriptor<SeenPostRecord>(
             sortBy: [SortDescriptor(\.lastSeenAt, order: .reverse)]
         )
         let records = try context.fetch(descriptor)
@@ -262,7 +262,7 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
 
     func loadDrafts(accountID: AccountID?) async throws -> [Draft] {
         let accountKey = accountID?.description
-        var descriptor = FetchDescriptor<DraftRecord>(
+        let descriptor = FetchDescriptor<DraftRecord>(
             predicate: #Predicate<DraftRecord> { $0.accountIDString == accountKey },
             sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
         )

@@ -140,10 +140,12 @@ struct LegalWebView {
     @Binding var loading: Bool
     @Binding var failed: Bool
 
+    @MainActor
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document, loading: $loading, failed: $failed)
     }
 
+    @MainActor
     func makeWebView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()

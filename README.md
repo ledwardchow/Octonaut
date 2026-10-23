@@ -27,7 +27,7 @@ Just want to try it on iPhone? [TestFlight](https://testflight.apple.com/join/kR
 
 Below are instructions to build it from source. If you're interested in using this on an iPhone and want to skip the build, use the [TestFlight](https://testflight.apple.com/join/kRJfvUE6) link. (The iPad and macOS apps have much less polish.)
 
-If you want to contribute code, please target your pull requests onto the develop branch. (Pushes to main trigger TestFlight releases!)
+If you want to contribute code, please target your pull requests onto the develop branch. (Pushes to main trigger TestFlight releases!) See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines and the Contributor License Agreement.
 
 ### Prerequisites
 

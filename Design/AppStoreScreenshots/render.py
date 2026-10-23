@@ -80,6 +80,28 @@ def render_phone(spec: tuple) -> None:
     canvas.save(output, "PNG", optimize=True)
 
 
+def render_duo(spec: tuple) -> None:
+    name, capture, headline, top, bottom, accent = spec
+    canvas = background((1398, 2034), top, bottom)
+    add_art(canvas, accent)
+    ImageDraw.Draw(canvas).multiline_text((96, 120), headline, font=font(92), fill=INK, spacing=-10)
+    place_capture(canvas, ROOT / "raw" / capture.replace("iphone-", "duo-"), (189, 440, 1020, 1484), 60)
+    output = ROOT / "iPhone-Duo-Closed" / name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output, "PNG", optimize=True)
+
+
+def render_duo_open(spec: tuple) -> None:
+    name, capture, headline, top, bottom, accent = spec
+    canvas = background((2853, 2007), top, bottom)
+    add_art(canvas, accent)
+    ImageDraw.Draw(canvas).text((200, 120), headline.replace("\n", " "), font=font(120), fill=INK)
+    place_capture(canvas, ROOT / "raw" / capture.replace("iphone-", "duo-open-"), (380, 390, 2093, 1472), 80)
+    output = ROOT / "iPhone-Duo-Open" / name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output, "PNG", optimize=True)
+
+
 def render_ipad(spec: tuple) -> None:
     name, capture, headline, top, bottom, accent = spec
     canvas = background((2064, 2752), top, bottom)
@@ -95,5 +117,8 @@ def render_ipad(spec: tuple) -> None:
 if __name__ == "__main__":
     for item in PHONE:
         render_phone(item)
+        render_duo(item)
+    for index, item in enumerate(item for item in PHONE if item[0] != "03-feeds.png"):
+        render_duo_open((f"{index + 1:02d}{item[0][2:]}",) + item[1:])
     for item in IPAD:
         render_ipad(item)

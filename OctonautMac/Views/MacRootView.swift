@@ -252,9 +252,8 @@ struct MacRootView: View {
         switch sidebarSelection {
         case .feed(let descriptor):
             await store.refreshPosts(for: descriptor, forceRefresh: force)
-        case .inbox:
-            await store.refreshInbox()
-        case .search, .accounts, nil:
+        case .inbox, .search, .accounts, nil:
+            // MacInboxView reloads its own model on .octonautMacRefresh.
             break
         }
     }

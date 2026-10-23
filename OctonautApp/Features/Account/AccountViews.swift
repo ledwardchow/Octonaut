@@ -161,6 +161,7 @@ struct UserProfileView: View {
     @Environment(\.openURL) private var openURL
     @State private var showingLogin = false
     @State private var messageRecipient: ProfileMessageRecipient?
+    @State private var showingNewPost = false
     @State private var confirmingBlock = false
     @State private var confirmingLogOut = false
     @State private var actionInProgress = false
@@ -255,6 +256,9 @@ struct UserProfileView: View {
             NavigationStack {
                 ComposerView(kind: .message, store: store, recipient: recipient.username)
             }
+        }
+        .sheet(isPresented: $showingNewPost) {
+            ComposerView(kind: .post, store: store)
         }
         .confirmationDialog("\(profile?.isBlocked == true ? "Unblock" : "Block") u/\(username)?", isPresented: $confirmingBlock, titleVisibility: .visible) {
             Button(profile?.isBlocked == true ? "Unblock user" : "Block user", role: profile?.isBlocked == true ? nil : .destructive) {
@@ -367,7 +371,7 @@ struct UserProfileView: View {
             .overlay(alignment: .topTrailing) {
                 if let onAddAccount {
                     Menu {
-                        Button { router.push(.composer(.post)) } label: {
+                        Button { showingNewPost = true } label: {
                             Label("New Post", systemImage: "square.and.pencil")
                         }
                         Section("Switch Account") {
@@ -412,6 +416,14 @@ struct UserProfileView: View {
         }
     }
 
+    private var postActions: DetachedPostActions {
+        DetachedPostActions(store: store, accounts: dependencies.accounts)
+    }
+
+    private var profilePosts: Binding<[PostCardModel]> {
+        Bindable(store).userProfilePosts
+    }
+
     @ViewBuilder
     private var profileContent: some View {
         switch selectedSection {
@@ -427,7 +439,9 @@ struct UserProfileView: View {
                             onUserOpen: { router.push($0) },
                             showsFlair: dependencies.settings.showPostFlair,
                             blursNSFW: dependencies.settings.blurNSFWMedia,
-                            blursSpoilers: dependencies.settings.blurSpoilers
+                            blursSpoilers: dependencies.settings.blurSpoilers,
+                            onVote: { postActions.vote(postID: post.id, value: $0, in: profilePosts) },
+                            onSave: { postActions.toggleSave(postID: post.id, in: profilePosts) }
                         )
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))
@@ -614,6 +628,10 @@ struct UserSectionView: View {
         }
     }
 
+    private var postActions: DetachedPostActions {
+        DetachedPostActions(store: store, accounts: dependencies.accounts)
+    }
+
     private var taskID: String {
         "\(username):\(section.rawValue):\(content.rawValue):\(store.accountContextKey)"
     }
@@ -629,7 +647,16 @@ struct UserSectionView: View {
                         onUserOpen: { router.push($0) },
                         showsFlair: dependencies.settings.showPostFlair,
                         blursNSFW: dependencies.settings.blurNSFWMedia,
-                        blursSpoilers: dependencies.settings.blurSpoilers
+                        blursSpoilers: dependencies.settings.blurSpoilers,
+                        onVote: { postActions.vote(postID: post.id, value: $0, in: $posts) },
+                        onSave: {
+                            // Unsaving from Saved removes the row, as the swipe action does.
+                            if section == .saved, post.isSaved {
+                                unsave(post)
+                            } else {
+                                postActions.toggleSave(postID: post.id, in: $posts)
+                            }
+                        }
                     )
                 }
                 .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 14))

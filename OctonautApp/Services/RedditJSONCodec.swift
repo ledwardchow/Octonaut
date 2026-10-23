@@ -508,10 +508,22 @@ enum RedditJSONCodec {
         )
     }
 
+    /// Every request sends `raw_json=1`, so plain fields are already unescaped
+    /// markdown. Only the HTML fallback is stripped; stripping markdown would
+    /// delete text such as `a < b > c` and turn a literal `\n` into a newline.
     private static func richText(plainText: String?, html: String?) -> RichText? {
-        let source = plainText ?? html.map(stripHTML)
-        guard let source, !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return RichText(plainText: stripHTML(source))
+        if let plainText, !plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Keep leading indentation so a body that opens with a code block survives.
+            var end = plainText.endIndex
+            while end > plainText.startIndex,
+                  plainText[plainText.index(before: end)].isWhitespace {
+                end = plainText.index(before: end)
+            }
+            return RichText(plainText: String(plainText[..<end]))
+        }
+        guard let html else { return nil }
+        let stripped = stripHTML(html)
+        return stripped.isEmpty ? nil : RichText(plainText: stripped)
     }
 
     private static let htmlTagRegex: NSRegularExpression = {
@@ -531,18 +543,19 @@ enum RedditJSONCodec {
     }()
 
     private static func stripHTML(_ string: String) -> String {
-        var value = string
-            .replacingOccurrences(of: "&amp;", with: "&")
+        // Remove tags before decoding entities, so escaped text such as
+        // `&lt;tag&gt;` is kept rather than mistaken for markup.
+        let value = htmlTagRegex.stringByReplacingMatches(
+            in: string,
+            range: NSRange(string.startIndex..., in: string),
+            withTemplate: ""
+        )
+        return value
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&#39;", with: "'")
             .replacingOccurrences(of: "&quot;", with: "\"")
-        value = htmlTagRegex.stringByReplacingMatches(
-            in: value,
-            range: NSRange(value.startIndex..., in: value),
-            withTemplate: ""
-        )
-        return value
+            .replacingOccurrences(of: "&amp;", with: "&")
             .replacingOccurrences(of: "\\n", with: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

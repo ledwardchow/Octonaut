@@ -438,20 +438,72 @@ actor URLSessionRedditClient: RedditClient {
                   }) else { throw RedditClientError.authenticationRequired }
             request.fields["container"] = "t2_\(id)"
         }
-        let data = try await requestData(
-            method: request.method,
-            path: request.path,
-            query: request.query,
-            body: request.fields,
-            account: account,
-            retryable: false
-        )
+        let data: Data
+        do {
+            data = try await requestData(
+                method: request.method,
+                path: request.path,
+                query: request.query,
+                body: request.fields,
+                account: account,
+                retryable: false
+            )
+        } catch RedditClientError.accessDenied {
+            // Reddit answers a mutation carrying an expired cookie or stale
+            // modhash with 403. Check the session before reporting a permission
+            // problem, so an expired account is asked to sign in again.
+            guard try await refreshModhashAfterForbiddenMutation(account: account) else {
+                throw RedditClientError.accessDenied
+            }
+            data = try await requestData(
+                method: request.method,
+                path: request.path,
+                query: request.query,
+                body: request.fields,
+                account: account,
+                retryable: false
+            )
+        }
         switch action {
         case .report, .reportSiteRule: return try RedditReportRule.decodeSubmission(data)
         default: break
         }
         if data.isEmpty { return ActionResult(succeeded: true) }
         return try RedditJSONCodec.decodeActionResult(data)
+    }
+
+    /// Throws `authenticationRequired` when the session no longer identifies a
+    /// user. Returns true when Reddit issued a different modhash, which is saved
+    /// so the mutation can be retried once; false means the 403 was genuine.
+    private func refreshModhashAfterForbiddenMutation(account: AccountID) async throws -> Bool {
+        let identityData: Data
+        do {
+            identityData = try await requestData(
+                method: "GET",
+                path: "/user/me/about.json",
+                query: [URLQueryItem(name: "raw_json", value: "1")],
+                body: nil,
+                account: account,
+                retryable: true,
+                responseCachePolicy: .reloadIgnoringCache
+            )
+        } catch let error as RedditClientError where error == .accessDenied || error == .notFound {
+            throw RedditClientError.authenticationRequired
+        }
+        guard let envelope = try? JSONSerialization.jsonObject(with: identityData) as? [String: Any],
+              let identity = envelope["data"] as? [String: Any],
+              let name = identity["name"] as? String, !name.isEmpty,
+              var credential = try await credentialVault.credential(for: account),
+              let expectedUser = credential.redditUser,
+              name.caseInsensitiveCompare(expectedUser) == .orderedSame else {
+            throw RedditClientError.authenticationRequired
+        }
+        guard let modhash = (identity["modhash"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !modhash.isEmpty,
+              credential.modhash != modhash else { return false }
+        credential.modhash = modhash
+        try await credentialVault.save(credential, for: account)
+        return true
     }
 
     private func requestData(

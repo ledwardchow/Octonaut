@@ -63,7 +63,6 @@
 		70458AE8255997DDB0BABD86 /* FeatureModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E07930B4DE408F45C34596E /* FeatureModels.swift */; };
 		7330BE0CE22C6F1777944187 /* HelpIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8ED835BC73E3299A2804C5E /* HelpIndex.swift */; };
 		7486635566A1411E90EA3437 /* PRIVACY.md in Resources */ = {isa = PBXBuildFile; fileRef = DD2C87581594A02655CFA76C /* PRIVACY.md */; };
-		A1B2C3D4E5F6071829304A01 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */; };
 		7612620F1B72F8B9A24514C2 /* ReportContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F8A3D0C616F42EBB073F3C /* ReportContentView.swift */; };
 		77E839BA916AABE238082EF4 /* AppDependencies.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9D975AB98754EF4264D93DB /* AppDependencies.swift */; };
 		79FDF9F184786A0288F71F3A /* OctonautMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D05898F888F020E03CB3639 /* OctonautMacApp.swift */; };
@@ -84,11 +83,12 @@
 		8CD55353A7DBBB6CD6044E0E /* CoreModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FAFC02501E15306D88C1557 /* CoreModels.swift */; };
 		8F67E8978EAB56139ADDFFB5 /* DeterministicExcerpts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 956BE1DAA7CF7A4589793448 /* DeterministicExcerpts.swift */; };
 		90BFACBEF34DC10DBA6E598F /* PRIVACY.md in Resources */ = {isa = PBXBuildFile; fileRef = DD2C87581594A02655CFA76C /* PRIVACY.md */; };
-		A1B2C3D4E5F6071829304A02 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */; };
 		9106AC28FEF4C335387FFA49 /* OctonautPlayerControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F708CABD2C643A1BC4DAFF /* OctonautPlayerControls.swift */; };
 		9531060980E2EFC53BC11A05 /* RedditReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F09F9B264621B860AB6B80FE /* RedditReporting.swift */; };
 		9A6B651A8ED84A5BDA336B88 /* CredentialVaultAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65FFA69A452BC8037ACCF243 /* CredentialVaultAdapter.swift */; };
 		9AC0CA6179F48600E3A25EA3 /* AccountCredentialVault.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90737E4E17F08A9D5702FDFB /* AccountCredentialVault.swift */; };
+		A1B2C3D4E5F6071829304A01 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */; };
+		A1B2C3D4E5F6071829304A02 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */; };
 		A56DD52680A9780141EF2773 /* MacRedditLoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A40BD8CDE0AA06BEBDEF658 /* MacRedditLoginView.swift */; };
 		A5F56FEFF186D02D8FD352CD /* RedditModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6404DD225DDA45A486E4CBEE /* RedditModels.swift */; };
 		AA693968A3260586519F7447 /* SearchRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D430638EEFFA69BEE5F13F7C /* SearchRuntime.swift */; };
@@ -170,7 +170,7 @@
 		3E07930B4DE408F45C34596E /* FeatureModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureModels.swift; sourceTree = "<group>"; };
 		42F708CABD2C643A1BC4DAFF /* OctonautPlayerControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautPlayerControls.swift; sourceTree = "<group>"; };
 		46C041064484A736B1FCF4D8 /* ReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportingTests.swift; sourceTree = "<group>"; };
-		4DD643A89061C969F106E42D /* OctonautMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OctonautMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		4DD643A89061C969F106E42D /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4EA472F0D0173FA4B790DED6 /* SettingsViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsViews.swift; sourceTree = "<group>"; };
 		573291A83CE53B9C67DE560C /* SwiftDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataModels.swift; sourceTree = "<group>"; };
 		5E702C6ADAEE69BA35D8C9B9 /* OctonautImageCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautImageCache.swift; sourceTree = "<group>"; };
@@ -183,7 +183,7 @@
 		6E8E512134F4BB0198430532 /* AccountCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountCoordinator.swift; sourceTree = "<group>"; };
 		77C544E1607B287B34E2178C /* MacSidebarSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarSelection.swift; sourceTree = "<group>"; };
 		7A40BD8CDE0AA06BEBDEF658 /* MacRedditLoginView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRedditLoginView.swift; sourceTree = "<group>"; };
-		7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = OctonautTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = OctonautTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		7ECC0450C9C3B6FFD48B55D2 /* OctonautMediaComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautMediaComponents.swift; sourceTree = "<group>"; };
 		85EF8FE6589B257568A4AE85 /* SettingsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsStore.swift; sourceTree = "<group>"; };
 		870B8FB1231BA4B512F7CD46 /* MacComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacComposerView.swift; sourceTree = "<group>"; };
@@ -196,9 +196,10 @@
 		9AF089A4CCA8AC63AE0A66A1 /* Fixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fixtures.swift; sourceTree = "<group>"; };
 		9C8D07C0486519FD2517A3F8 /* OctonautApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctonautApp.swift; sourceTree = "<group>"; };
 		9FCB290AAB8CBEEC89721872 /* MacSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSearchView.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		AD6FF5AE59ACB2883B417609 /* AppIconPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIconPicker.swift; sourceTree = "<group>"; };
 		AFFF1958B3F1C9D16EF909B4 /* MacFeedViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacFeedViews.swift; sourceTree = "<group>"; };
-		B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Octonaut.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B97B8C2326D533E9D1C7B982 /* NOTES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = NOTES.md; sourceTree = "<group>"; };
 		B9D975AB98754EF4264D93DB /* AppDependencies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDependencies.swift; sourceTree = "<group>"; };
 		BD910ECAEFEEC348BF2686C2 /* AVFoundationMediaService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AVFoundationMediaService.swift; sourceTree = "<group>"; };
@@ -217,7 +218,6 @@
 		DA26AD5A1014E91707FDDDD7 /* PersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceTests.swift; sourceTree = "<group>"; };
 		DA55C8478C832C05584AA531 /* LegalDocuments.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegalDocuments.swift; sourceTree = "<group>"; };
 		DA6372E1E5B21136128D9A74 /* ServiceContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceContracts.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F6071829304A00 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		DD2C87581594A02655CFA76C /* PRIVACY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = PRIVACY.md; sourceTree = "<group>"; };
 		E07A5BDE3E3E26B50D788109 /* IntelligenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntelligenceTests.swift; sourceTree = "<group>"; };
 		E175DD18B0D8FAB91E72D58E /* MacSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSettingsView.swift; sourceTree = "<group>"; };
@@ -333,7 +333,7 @@
 			isa = PBXGroup;
 			children = (
 				B1C4AFD94FC7C16AF85F27D9 /* Octonaut.app */,
-				4DD643A89061C969F106E42D /* OctonautMac.app */,
+				4DD643A89061C969F106E42D /* Octonaut.app */,
 				7B92711FF66EA463A7F70EC3 /* OctonautTests.xctest */,
 			);
 			name = Products;
@@ -584,7 +584,7 @@
 			packageProductDependencies = (
 			);
 			productName = OctonautMac;
-			productReference = 4DD643A89061C969F106E42D /* OctonautMac.app */;
+			productReference = 4DD643A89061C969F106E42D /* Octonaut.app */;
 			productType = "com.apple.product-type.application";
 		};
 		6813939EEF5681F07F2FC42B /* Octonaut */ = {
@@ -630,7 +630,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2700;
+				LastUpgradeCheck = 2710;
 				TargetAttributes = {
 					1624150B7D18E1D612B6A231 = {
 						DevelopmentTeam = 22AYPY84RT;
@@ -847,12 +847,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautApp/Octonaut.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 58;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = OctonautApp/Info.plist;
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -902,10 +903,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 22AYPY84RT;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -927,6 +930,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -971,10 +975,12 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 22AYPY84RT;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -989,6 +995,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -1003,6 +1010,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautMac/OctonautMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -1045,12 +1053,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautApp/Octonaut.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 58;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = OctonautApp/Info.plist;
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_CFBundleDisplayName = Octonaut;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
@@ -1070,6 +1079,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = OctonautMac/OctonautMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEAD_CODE_STRIPPING = YES;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;

@@ -3,6 +3,9 @@ Comment headers collapse and expand again.
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
 Private messages now send, with a subject field.
+Inbox compose and profile New Post now open properly.
+Long community names now fit in the title bar.
+Join a community from its header or ••• menu.
 Inbox items open full messages, replies, and conversations.
 Replying in a conversation now replies to the thread.
 Inbox Messages filter and mark read now work.
@@ -18,6 +21,7 @@ Signed-in and signed-out browsing no longer share cookies.
 Feed no longer preloads videos when autoplay is off.
 Mac now blurs NSFW thumbnails and post images.
 Block users from posts and comments on Mac.
+Blocked users' posts and comments disappear straight away.
 Unsent posts, comments and messages reopen as drafts.
 Composer can't be swiped away with unsent text.
 Searches containing "+" now work, like "C++".
@@ -43,6 +47,19 @@ Private, banned and quarantined communities now say so.
 "Continue this thread" now opens the rest of the thread.
 Inbox now loads older messages as you scroll.
 Report to Reddit for breaking Reddit's rules.
+Posts and comments no longer lose text between < and >.
+Expired logins now ask you to sign in again.
+Vote and save now work in search and profiles.
+Quick repeated votes and saves stay in order.
+Switching accounts clears old search and profile posts.
+Blocks no longer carry over to other accounts.
+Seen posts stay marked after a refresh.
+Profiles no longer show another profile's error.
+Inbox badge shows unread before opening Inbox.
+Mac Refresh now reloads the Inbox.
+Login check only follows secure Reddit redirects.
+Mac lightbox caption links now open.
+Mac lightbox resizes smoothly.
 
 Changes in previous builds:
 Fix: user profile tap zone is too big on post cards

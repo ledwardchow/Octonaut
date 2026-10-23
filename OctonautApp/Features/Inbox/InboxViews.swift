@@ -8,6 +8,7 @@ struct InboxRootView: View {
     @Environment(AppDependencies.self) private var dependencies
     @State private var filter = "All"
     @State private var showingMarkAllRead = false
+    @State private var showingComposer = false
     @State private var selectedItem: InboxCardModel?
     @State private var isLoading = false
     @State private var loadError: String?
@@ -94,7 +95,7 @@ struct InboxRootView: View {
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if dependencies.accounts.selectedAccount?.health == .healthy {
-                    Button { router.push(.composer(.message)) } label: { Image(systemName: "square.and.pencil") }
+                    Button { showingComposer = true } label: { Image(systemName: "square.and.pencil") }
                         .accessibilityLabel("Compose message")
                 }
                 if store.unreadCount > 0 {
@@ -102,6 +103,10 @@ struct InboxRootView: View {
                         .accessibilityLabel("Mark all read")
                 }
             }
+        }
+        // ComposerView brings its own NavigationStack, so it has to be presented, not pushed.
+        .sheet(isPresented: $showingComposer) {
+            ComposerView(kind: .message, store: store)
         }
         .confirmationDialog("Mark every inbox item as read?", isPresented: $showingMarkAllRead, titleVisibility: .visible) {
             Button("Mark All Read") { markAllRead() }

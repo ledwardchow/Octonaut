@@ -155,15 +155,18 @@ struct OctonautVoteControls: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Button {
-                onVote?(vote == 1 ? 0 : 1)
-            } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 16))
-                    .frame(width: 22, height: 30)
+            // Without a vote action the arrows would do nothing, so show the score alone.
+            if let onVote {
+                Button {
+                    onVote(vote == 1 ? 0 : 1)
+                } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 16))
+                        .frame(width: 22, height: 30)
+                }
+                .foregroundStyle(vote == 1 ? theme.upvote : theme.secondaryText)
+                .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
             }
-            .foregroundStyle(vote == 1 ? theme.upvote : theme.secondaryText)
-            .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
             Text(score.formatted())
                 .font(.caption.weight(.semibold).monospacedDigit())
                 .foregroundStyle(
@@ -171,20 +174,22 @@ struct OctonautVoteControls: View {
                 )
                 .lineLimit(1)
                 .fixedSize(horizontal: true, vertical: false)
-            Rectangle()
-                .fill(theme.divider)
-                .frame(width: 0.5, height: 18)
-            Button {
-                onVote?(vote == -1 ? 0 : -1)
-            } label: {
-                Image(systemName: "arrow.down")
-                    .font(.system(size: 16))
-                    .frame(width: 22, height: 30)
+            if let onVote {
+                Rectangle()
+                    .fill(theme.divider)
+                    .frame(width: 0.5, height: 18)
+                Button {
+                    onVote(vote == -1 ? 0 : -1)
+                } label: {
+                    Image(systemName: "arrow.down")
+                        .font(.system(size: 16))
+                        .frame(width: 22, height: 30)
+                }
+                .foregroundStyle(vote == -1 ? theme.downvote : theme.secondaryText)
+                .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
             }
-            .foregroundStyle(vote == -1 ? theme.downvote : theme.secondaryText)
-            .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, onVote == nil ? 10 : 4)
         .octonautActionPill(theme: theme)
         .buttonStyle(.plain)
         .accessibilityElement(children: .contain)
@@ -284,18 +289,18 @@ struct OctonautPostRow: View {
                 )
                 .padding(.horizontal, 6)
                 .octonautActionPill(theme: theme)
-                Spacer(minLength: 8)
-                Button {
-                    onSave?()
-                } label: {
-                    Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
-                        .font(.system(size: 16))
-                        .frame(width: 34, height: 34)
-                        .contentShape(Rectangle())
+                if let onSave {
+                    Spacer(minLength: 8)
+                    Button(action: onSave) {
+                        Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                            .font(.system(size: 16))
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
+                    }
+                    .octonautActionPill(theme: theme)
+                    .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
+                    .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
                 }
-                .octonautActionPill(theme: theme)
-                .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
-                .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
             }
             .font(.caption)
         }
@@ -310,25 +315,27 @@ struct OctonautPostRow: View {
         .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .contextMenu {
             Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
-            Button {
-                onVote?(1)
-            } label: {
-                Label("Upvote", systemImage: "arrow.up")
+            if let onVote {
+                Button {
+                    onVote(1)
+                } label: {
+                    Label("Upvote", systemImage: "arrow.up")
+                }
+                Button {
+                    onVote(-1)
+                } label: {
+                    Label("Downvote", systemImage: "arrow.down")
+                }
             }
-            Button {
-                onVote?(-1)
-            } label: {
-                Label("Downvote", systemImage: "arrow.down")
+            if let onSave {
+                Button(action: onSave) {
+                    Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
+                }
             }
-            Button {
-                onSave?()
-            } label: {
-                Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
-            }
-            Button {
-                onSeen?()
-            } label: {
-                Label(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
+            if let onSeen {
+                Button(action: onSeen) {
+                    Label(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
+                }
             }
             if let onCrosspost {
                 Button(action: onCrosspost) {
@@ -518,20 +525,22 @@ struct OctonautCompactPostRow: View {
         .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .contextMenu {
             Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: post) } }
-            Button {
-                onVote?(1)
-            } label: {
-                Label("Upvote", systemImage: "arrow.up")
+            if let onVote {
+                Button {
+                    onVote(1)
+                } label: {
+                    Label("Upvote", systemImage: "arrow.up")
+                }
+                Button {
+                    onVote(-1)
+                } label: {
+                    Label("Downvote", systemImage: "arrow.down")
+                }
             }
-            Button {
-                onVote?(-1)
-            } label: {
-                Label("Downvote", systemImage: "arrow.down")
-            }
-            Button {
-                onSave?()
-            } label: {
-                Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
+            if let onSave {
+                Button(action: onSave) {
+                    Label(post.isSaved ? "Unsave" : "Save", systemImage: "bookmark")
+                }
             }
         }
     }
@@ -679,7 +688,7 @@ struct OctonautCommunityRow: View {
     }
 }
 
-private struct OctonautCommunityIcon: View {
+struct OctonautCommunityIcon: View {
     let url: URL?
     let tint: Color
     @State private var image: UIImage?

@@ -190,40 +190,50 @@ struct PostDetailView: View {
                 }
             }
         }
+        .opacity(store.isBlockedAuthor(currentPost.author) ? 0 : 1)
+        .allowsHitTesting(!store.isBlockedAuthor(currentPost.author))
+        .accessibilityHidden(store.isBlockedAuthor(currentPost.author))
+        .overlay {
+            if store.isBlockedAuthor(currentPost.author) {
+                ContentUnavailableView("Post hidden", systemImage: "person.crop.circle.badge.xmark")
+            }
+        }
         .background(Color(uiColor: .systemBackground))
         .navigationTitle("Post")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: currentPost) } }
-                    Button {
-                        store.markSeen(postID: currentPost.id)
-                    } label: {
-                        Label(currentPost.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
-                    }
-                    if currentPost.hasMedia {
+            if !store.isBlockedAuthor(currentPost.author) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Report", systemImage: "flag") { if dependencies.accounts.requireLogin() { reportTarget = RedditReportTarget(post: currentPost) } }
                         Button {
-                            isMediaViewerPresented = true
+                            store.markSeen(postID: currentPost.id)
                         } label: {
-                            Label("Open Media", systemImage: "photo")
+                            Label(currentPost.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye")
                         }
-                    }
-                    Button {
-                        UIApplication.shared.open(currentPost.shareURL)
+                        if currentPost.hasMedia {
+                            Button {
+                                isMediaViewerPresented = true
+                            } label: {
+                                Label("Open Media", systemImage: "photo")
+                            }
+                        }
+                        Button {
+                            UIApplication.shared.open(currentPost.shareURL)
+                        } label: {
+                            Label("Open in Browser", systemImage: "safari")
+                        }
+                        ShareLink(item: currentPost.shareURL) {
+                            Label("Share Link", systemImage: "square.and.arrow.up")
+                        }
+                        Button {
+                            beginCrosspost()
+                        } label: {
+                            Label("Crosspost", systemImage: "arrow.triangle.branch")
+                        }
                     } label: {
-                        Label("Open in Browser", systemImage: "safari")
+                        Image(systemName: "ellipsis.circle")
                     }
-                    ShareLink(item: currentPost.shareURL) {
-                        Label("Share Link", systemImage: "square.and.arrow.up")
-                    }
-                    Button {
-                        beginCrosspost()
-                    } label: {
-                        Label("Crosspost", systemImage: "arrow.triangle.branch")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
@@ -265,7 +275,6 @@ struct PostDetailView: View {
         crosspostPost = currentPost
     }
 
-    @ViewBuilder
     /// Reddit marks a reply chain too deep to inline with a "more" stub that
     /// has no child IDs. It can only be read from the parent comment's page.
     private func continueThreadURL(_ comment: CommentCardModel) -> URL? {

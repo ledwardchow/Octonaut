@@ -110,7 +110,7 @@ struct SettingsDetailView: View {
     @ViewBuilder
     private var settingsContent: some View {
         if destination == .blockedUsers {
-            BlockedUsersSettingsContent(reddit: dependencies.reddit)
+            BlockedUsersSettingsContent(reddit: dependencies.reddit, store: store)
         } else {
             Form {
                 switch destination {
@@ -467,12 +467,14 @@ private struct AppResetNotice: Identifiable {
 @MainActor
 private struct BlockedUsersSettingsContent: View {
     @Environment(AppDependencies.self) private var dependencies
+    let store: OctonautFeatureStore
     @State private var model: BlockedUsersSettingsModel
     @State private var username = ""
     @State private var pendingAction: BlockedUserAction?
     @State private var showingLogin = false
 
-    init(reddit: any RedditClient) {
+    init(reddit: any RedditClient, store: OctonautFeatureStore) {
+        self.store = store
         _model = State(initialValue: BlockedUsersSettingsModel(reddit: reddit))
     }
 
@@ -556,9 +558,9 @@ private struct BlockedUsersSettingsContent: View {
             if let action = pendingAction {
                 Button(action.blocked ? "Block User" : "Unblock User", role: action.blocked ? .destructive : nil) {
                     Task {
-                        if await model.setBlocked(action.blocked, username: action.username), action.blocked {
-                            username = ""
-                        }
+                        guard await model.setBlocked(action.blocked, username: action.username) else { return }
+                        store.applyBlock(action.blocked, username: action.username)
+                        if action.blocked { username = "" }
                     }
                 }
             }

@@ -166,9 +166,11 @@ struct OctonautTabsView: View {
                 generation: dependencies.accounts.selectionGeneration,
                 accounts: dependencies.accounts.accounts
             )
+            await store.refreshUnreadCount()
         }
         .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in
             postsSplitState.clearDetail()
+            store.userProfilePosts.removeAll()
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -199,6 +201,7 @@ struct OctonautTabsView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task { await dependencies.persistence.beginUsageSession() }
+            Task { await store.refreshUnreadCount() }
         }
         .environment(\.openURL, OpenURLAction { url in
             guard dependencies.settings.openRedditLinksInOctonaut,
@@ -841,4 +844,65 @@ struct OctonautDestinationView: View {
     OctonautTabsView(store: OctonautFeatureStore())
         .environment(AppDependencies.preview())
         .environment(\.horizontalSizeClass, .regular)
+}
+
+/// Votes and saves for rows a screen keeps itself, such as search results and
+/// profile lists. The row changes straight away and is put back when Reddit
+/// rejects the change, unless a later tap has already replaced it.
+@MainActor
+struct DetachedPostActions {
+    let store: OctonautFeatureStore
+    let accounts: AccountCoordinator
+
+    func vote(postID: String, value: Int, in posts: Binding<[PostCardModel]>) {
+        guard accounts.requireLogin(), let accountID = accounts.selectedAccountID,
+              let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }) else { return }
+        let previous = posts.wrappedValue[index].vote
+        guard previous != value else { return }
+        guard store.beginDetachedPostAction(.vote, postID: postID, accountID: accountID) else { return }
+        posts.wrappedValue[index].vote = value
+        posts.wrappedValue[index].score += value - previous
+        let token = accounts.token(for: accountID)
+        Task {
+            defer { store.endDetachedPostAction(.vote, postID: postID, accountID: accountID) }
+            do {
+                try await store.setVote(value, previous: previous, postID: postID, accountID: accountID)
+            } catch {
+                guard accounts.isCurrent(token) else { return }
+                if let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }),
+                   posts.wrappedValue[index].vote == value {
+                    posts.wrappedValue[index].vote = previous
+                    posts.wrappedValue[index].score -= value - previous
+                }
+                await markNeedsLoginIfExpired(error, accountID: accountID)
+            }
+        }
+    }
+
+    func toggleSave(postID: String, in posts: Binding<[PostCardModel]>) {
+        guard accounts.requireLogin(), let accountID = accounts.selectedAccountID,
+              let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }) else { return }
+        guard store.beginDetachedPostAction(.save, postID: postID, accountID: accountID) else { return }
+        let saved = !posts.wrappedValue[index].isSaved
+        posts.wrappedValue[index].isSaved = saved
+        let token = accounts.token(for: accountID)
+        Task {
+            defer { store.endDetachedPostAction(.save, postID: postID, accountID: accountID) }
+            do {
+                try await store.setSaved(saved, postID: postID, accountID: accountID)
+            } catch {
+                guard accounts.isCurrent(token) else { return }
+                if let index = posts.wrappedValue.firstIndex(where: { $0.id == postID }),
+                   posts.wrappedValue[index].isSaved == saved {
+                    posts.wrappedValue[index].isSaved = !saved
+                }
+                await markNeedsLoginIfExpired(error, accountID: accountID)
+            }
+        }
+    }
+
+    private func markNeedsLoginIfExpired(_ error: any Error, accountID: AccountID) async {
+        guard let clientError = error as? RedditClientError, clientError == .authenticationRequired else { return }
+        await accounts.markNeedsLogin(accountID)
+    }
 }

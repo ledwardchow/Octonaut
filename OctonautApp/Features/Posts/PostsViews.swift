@@ -318,6 +318,11 @@ struct FeedView: View {
             } else {
                 ScrollViewReader { proxy in
                     List {
+                        if descriptor.kind == .community {
+                            communityHeader
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                        }
                         if store.filteredPostCount > 0, dependencies.settings.showFilterCount {
                             Label("\(store.filteredPostCount) posts hidden by your filters", systemImage: "line.3.horizontal.decrease.circle")
                                 .font(.caption)
@@ -404,27 +409,15 @@ struct FeedView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { availableHeight = $0 }
+        // The system title lays out and truncates long community names itself,
+        // and the title menu keeps sorting one tap away from the name.
         .navigationTitle(descriptor.name)
+        .navigationSubtitle(sortSummary)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarTitleMenu { sortMenuItems }
         .toolbar {
-            if usesWideInterface {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 16) {
-                        sortMenu
-                        displayMenu
-                        actionsMenu
-                    }
-                }
-            } else {
-                ToolbarItem(placement: .principal) {
-                    sortMenu
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    displayMenu
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    actionsMenu
-                }
+            ToolbarItem(placement: .topBarTrailing) {
+                feedMenu
             }
         }
         .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
@@ -470,45 +463,32 @@ struct FeedView: View {
         return "\(activeSort.title) · \(store.selectedTopTime.title)"
     }
 
-    private var sortMenu: some View {
-        Menu {
-            ForEach(availableSorts, id: \.rawValue) { sort in
-                if sort.acceptsTopTime {
-                    Menu {
-                        ForEach(TopTime.allCases, id: \.self) { time in
-                            Button {
-                                apply(sort: sort, topTime: time)
-                            } label: {
-                                sortLabel(
-                                    time.title,
-                                    isSelected: activeSort == sort && store.selectedTopTime == time
-                                )
-                            }
+    @ViewBuilder
+    private var sortMenuItems: some View {
+        ForEach(availableSorts, id: \.rawValue) { sort in
+            if sort.acceptsTopTime {
+                Menu {
+                    ForEach(TopTime.allCases, id: \.self) { time in
+                        Button {
+                            apply(sort: sort, topTime: time)
+                        } label: {
+                            sortLabel(
+                                time.title,
+                                isSelected: activeSort == sort && store.selectedTopTime == time
+                            )
                         }
-                    } label: {
-                        sortLabel(sort.title, isSelected: activeSort == sort)
                     }
-                } else {
-                    Button {
-                        apply(sort: sort)
-                    } label: {
-                        sortLabel(sort.title, isSelected: activeSort == sort)
-                    }
+                } label: {
+                    sortLabel(sort.title, isSelected: activeSort == sort)
                 }
-            }
-        } label: {
-            VStack(spacing: 0) {
-                HStack(spacing: 5) {
-                    Text(descriptor.name)
-                    Image(systemName: "chevron.down")
+            } else {
+                Button {
+                    apply(sort: sort)
+                } label: {
+                    sortLabel(sort.title, isSelected: activeSort == sort)
                 }
-                .font(.headline)
-                Text(sortSummary)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
         }
-        .accessibilityLabel("Sort, \(sortSummary)")
     }
 
     @ViewBuilder
@@ -524,32 +504,33 @@ struct FeedView: View {
         Task { await store.applySort(sort, topTime: topTime, for: descriptor) }
     }
 
-    private var displayMenu: some View {
+    /// Display and feed actions share one menu so the title keeps the room.
+    private var feedMenu: some View {
         Menu {
-            Picker("Display", selection: Binding(
-                get: { dependencies.settings.feedLayout(for: layoutCommunity) },
-                set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
-            )) {
-                Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
-                Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
+            Section("Display") {
+                Picker("Display", selection: Binding(
+                    get: { dependencies.settings.feedLayout(for: layoutCommunity) },
+                    set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
+                )) {
+                    Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
+                    Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
+                }
+                Button { router.push(.gallery(descriptor)) } label: {
+                    Label("Gallery", systemImage: "square.grid.2x2")
+                }
             }
-            Button { router.push(.gallery(descriptor)) } label: {
-                Label("Gallery", systemImage: "square.grid.2x2")
-            }
-        } label: {
-            Image(systemName: compactRows ? "list.bullet" : "rectangle.grid.1x2")
-        }
-        .accessibilityLabel("Feed display")
-    }
-
-    private var actionsMenu: some View {
-        Menu {
             if descriptor.kind == .community {
                 Button {
                     router.presentedSheet = .composer(.post, community: descriptor.name)
                 } label: {
                     Label("New Post", systemImage: "square.and.pencil")
                 }
+            }
+            if let community {
+                Button { toggleJoin(community) } label: {
+                    Label(community.isSubscribed ? "Leave" : "Join", systemImage: community.isSubscribed ? "person.badge.minus" : "person.badge.plus")
+                }
+                .disabled(store.isSubscriptionSaving(communityID: community.id))
             }
             Button {
                 store.posts.map(\.id).forEach { store.markSeen(postID: $0, seen: true) }
@@ -564,7 +545,45 @@ struct FeedView: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
-        .accessibilityLabel("Feed actions")
+        .accessibilityLabel("Feed options")
+    }
+
+    private var community: CommunityCardModel? {
+        guard descriptor.kind == .community else { return nil }
+        return store.communities.first { $0.name.caseInsensitiveCompare(descriptor.name) == .orderedSame }
+    }
+
+    private func toggleJoin(_ community: CommunityCardModel) {
+        if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) }
+    }
+
+    /// Shows the full community name, which the title bar may have to shorten.
+    private var communityHeader: some View {
+        HStack(spacing: 12) {
+            OctonautCommunityIcon(url: community?.iconURL, tint: .accentColor)
+                .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("r/\(descriptor.name)")
+                    .font(.title3.weight(.bold))
+                    .lineLimit(2)
+                if let memberCount = community?.memberCount {
+                    Text("\(memberCount.formatted(.number.notation(.compactName))) members")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let community {
+                Button { toggleJoin(community) } label: {
+                    Text(community.isSubscribed ? "Joined" : "Join")
+                }
+                .buttonStyle(.bordered)
+                .tint(community.isSubscribed ? .secondary : .accentColor)
+                .disabled(store.isSubscriptionSaving(communityID: community.id))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private func performVote(postID: String, value: Int) {
@@ -641,8 +660,6 @@ struct CommunityView: View {
     let router: OctonautFeatureRouter
     var onSelectPost: ((PostCardModel) -> Void)? = nil
 
-    private var community: CommunityCardModel? { store.communities.first { $0.name.caseInsensitiveCompare(name) == .orderedSame } }
-
     var body: some View {
         FeedView(
             descriptor: FeedDescriptorModel(kind: .community, name: name),
@@ -650,16 +667,6 @@ struct CommunityView: View {
             router: router,
             onSelectPost: onSelectPost
         )
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    if let community {
-                        Button { if dependencies.accounts.requireLogin() { store.toggleSubscribe(communityID: community.id) } } label: {
-                            Label(community.isSubscribed ? "Joined" : "Join", systemImage: community.isSubscribed ? "checkmark" : "person.badge.plus")
-                        }
-                        .disabled(store.isSubscriptionSaving(communityID: community.id))
-                    }
-                }
-            }
             .task(id: IDNormalization.community(name)) {
                 await store.recordCommunityVisit(name)
             }

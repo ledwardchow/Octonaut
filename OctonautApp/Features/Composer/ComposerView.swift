@@ -115,13 +115,13 @@ struct ComposerView: View {
                         if kind == .post, postType == "Link" {
                             Section("Link") { TextField("https://…", text: $link).keyboardType(.URL).textInputAutocapitalization(.never) }
                         }
-                        Section(kind == .post ? "Body" : isPostComment ? "Comment" : "Reply") {
+                        Section(kind == .post ? "Body" : kind == .message ? "Message" : isPostComment ? "Comment" : "Reply") {
                             TextEditor(text: $bodyText)
                                 .focused($isBodyFocused)
                                 .frame(minHeight: 180)
                                 .overlay(alignment: .topLeading) {
                                     if bodyText.isEmpty, !isBodyFocused {
-                                        Text(kind == .post ? "Write something useful…" : isPostComment ? "Write a comment…" : "Write your reply…")
+                                        Text(kind == .post ? "Write something useful…" : kind == .message ? "Write your message…" : isPostComment ? "Write a comment…" : "Write your reply…")
                                             .foregroundStyle(.tertiary)
                                             .padding(.top, 8)
                                             .allowsHitTesting(false)
