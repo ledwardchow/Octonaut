@@ -2244,6 +2244,25 @@ extension DomainTests {
     }
 
     @MainActor
+    func testBlockingClearsVisibleProfileAndPostDetailContent() {
+        let store = OctonautFeatureStore(reddit: nil)
+        store.detailPost = .sample
+        store.comments = CommentCardModel.samples
+        store.userProfilePosts = [.sample, .mediaSample]
+        store.userProfileComments = [
+            UserCommentCardModel(comment: UserComment(id: "t1_blocked", author: UserReference(username: "example_author"))),
+            UserCommentCardModel(comment: UserComment(id: "t1_visible", author: UserReference(username: "pixel_wrangler"))),
+        ]
+
+        store.applyBlock(true, username: "EXAMPLE_AUTHOR")
+
+        XCTAssertNil(store.detailPost)
+        XCTAssertTrue(store.comments.isEmpty)
+        XCTAssertEqual(store.userProfilePosts.map(\.author), ["pixel_wrangler"])
+        XCTAssertEqual(store.userProfileComments.map(\.author), ["pixel_wrangler"])
+    }
+
+    @MainActor
     func testFailedProfileActionPreservesRelationshipState() async {
         let account = AccountID()
         let client = FixtureRedditClient(actionResult: ActionResult(succeeded: false, message: "Action denied"))

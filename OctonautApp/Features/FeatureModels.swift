@@ -1248,6 +1248,12 @@ final class OctonautFeatureStore {
         posts.removeAll { isBlockedAuthor($0.author) }
         filteredPostCount += visibleCount - posts.count
         comments = withoutBlockedAuthors(comments)
+        userProfilePosts.removeAll { isBlockedAuthor($0.author) }
+        userProfileComments.removeAll { isBlockedAuthor($0.author) }
+        if let detailPost, isBlockedAuthor(detailPost.author) {
+            self.detailPost = nil
+            comments.removeAll()
+        }
         feedCache = feedCache.mapValues { entry in
             let kept = entry.posts.filter { !isBlockedAuthor($0.author) }
             return FeedCacheEntry(
@@ -1258,7 +1264,7 @@ final class OctonautFeatureStore {
                 storedAt: entry.storedAt
             )
         }
-        detailCache = detailCache.mapValues { entry in
+        detailCache = detailCache.filter { !isBlockedAuthor($0.value.post.author) }.mapValues { entry in
             DetailCacheEntry(post: entry.post, comments: withoutBlockedAuthors(entry.comments), storedAt: entry.storedAt)
         }
     }
@@ -1582,8 +1588,8 @@ final class OctonautFeatureStore {
                 loadedUserProfileUsername == normalizedUsername
             else { return }
             userProfile = profile
-            userProfilePosts = submitted.items.map(PostCardModel.init)
-            userProfileComments = comments.items.map(UserCommentCardModel.init)
+            userProfilePosts = submitted.items.map(PostCardModel.init).filter { !isBlockedAuthor($0.author) }
+            userProfileComments = comments.items.map(UserCommentCardModel.init).filter { !isBlockedAuthor($0.author) }
             userProfileState = .loaded
             await UserProfileCache.shared.store(
                 profile: profile,
@@ -1652,8 +1658,8 @@ final class OctonautFeatureStore {
 
     private func applyUserProfileCache(_ cached: UserProfileCache.Value) {
         userProfile = cached.profile
-        userProfilePosts = cached.posts.map(PostCardModel.init)
-        userProfileComments = cached.comments.map(UserCommentCardModel.init)
+        userProfilePosts = cached.posts.map(PostCardModel.init).filter { !isBlockedAuthor($0.author) }
+        userProfileComments = cached.comments.map(UserCommentCardModel.init).filter { !isBlockedAuthor($0.author) }
         userProfileState = .loaded
     }
 
