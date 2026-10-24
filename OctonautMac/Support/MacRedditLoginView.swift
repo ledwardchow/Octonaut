@@ -3,47 +3,57 @@ import WebKit
 
 @MainActor
 struct MacRedditLoginView: View {
+    let anonymousRequestsBlocked: Bool
     @Environment(\.dismiss) private var dismiss
     @AppStorage(LegalDocuments.acceptedVersionKey) private var acceptedConsentVersion = ""
     @State private var model: RedditLoginModel
+    @State private var hasStartedSignIn = false
 
-    init(accounts: AccountCoordinator) {
+    init(accounts: AccountCoordinator, anonymousRequestsBlocked: Bool = false) {
+        self.anonymousRequestsBlocked = anonymousRequestsBlocked
         _model = State(initialValue: RedditLoginModel(accounts: accounts))
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit")
-                    .font(.headline)
-                Spacer()
-                Button("Cancel") {
+            if !hasStartedSignIn {
+                RedditLoginWelcomeView(anonymousRequestsBlocked: anonymousRequestsBlocked, onSignIn: { hasStartedSignIn = true }) {
                     model.cancel()
                     dismiss()
                 }
-            }
-            .padding()
-
-            Divider()
-
-            if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
-                LoginConsentView { acceptedConsentVersion = LegalDocuments.consentVersion }
-            } else if case .succeeded(let username) = model.state {
-                ContentUnavailableView(
-                    "Signed in as u/\(username)",
-                    systemImage: "checkmark.circle.fill",
-                    description: Text("This Reddit session is stored in this Mac's Keychain.")
-                )
             } else {
-                MacRedditLoginWebView(model: model)
-            }
-
-            Divider()
-
-            Text("Sign-in happens on Reddit's website. Octonaut never asks for your Reddit password or developer API credentials.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                HStack {
+                    Text(LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit")
+                        .font(.headline)
+                    Spacer()
+                    Button("Cancel") {
+                        model.cancel()
+                        dismiss()
+                    }
+                }
                 .padding()
+
+                Divider()
+
+                if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
+                    LoginConsentView { acceptedConsentVersion = LegalDocuments.consentVersion }
+                } else if case .succeeded(let username) = model.state {
+                    ContentUnavailableView(
+                        "Signed in as u/\(username)",
+                        systemImage: "checkmark.circle.fill",
+                        description: Text("This Reddit session is stored in this Mac's Keychain.")
+                    )
+                } else {
+                    MacRedditLoginWebView(model: model)
+                }
+
+                Divider()
+
+                Text("Sign-in happens on Reddit's website. Octonaut never asks for your Reddit password or developer API credentials.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding()
+            }
         }
         .overlay {
             if case .validating = model.state {
@@ -84,6 +94,7 @@ private struct MacRedditLoginWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        RedditLoginPageCustomization.usernameAndPasswordOnly.install(on: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent =
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "

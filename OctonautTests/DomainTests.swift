@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import WebKit
 import XCTest
 
 @testable import Octonaut
@@ -197,26 +198,72 @@ final class DomainTests: XCTestCase {
         }
     }
 
-    func testBlockedAnonymousResponsesOfferLogin() throws {
+    func testConfirmedAnonymousBlockPagesOfferLogin() throws {
         for status in [401, 403, 200] {
             let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: status, httpVersion: nil, headerFields: nil)!
-            let data = Data((status == 200 ? "  <html>Blocked</html>" : "{}").utf8)
+            let data = Data("  <html>You’ve been blocked by network security.</html>".utf8)
             XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(data, response: response, isAnonymous: true)) { error in
                 XCTAssertEqual(error as? RedditClientError, .anonymousAccessBlocked)
                 XCTAssertEqual(OctonautLoadState.failure(error), .loginRequired)
             }
         }
+
+        let response = HTTPURLResponse(url: URL(string: "https://old.reddit.com/hot.json")!, statusCode: 403, httpVersion: nil, headerFields: nil)!
+        let data = Data("<html>Your request has been blocked due to a network policy.</html>".utf8)
+        XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(data, response: response, isAnonymous: true)) { error in
+            XCTAssertEqual(error as? RedditClientError, .anonymousAccessBlocked)
+        }
+    }
+
+    func testUnconfirmedAnonymousResponsesDoNotOfferLogin() throws {
+        let url = URL(string: "https://www.reddit.com/hot.json")!
+        for (status, body, expected) in [
+            (401, "{}", RedditClientError.authenticationRequired),
+            (403, "<html>Forbidden</html>", .accessDenied),
+            (200, "<html>Blocked</html>", .malformedResponse),
+            (200, "<html>Welcome to Reddit</html>", .malformedResponse),
+            (200, "<script>Blocked by network security</script><p>Welcome</p>", .malformedResponse),
+            (200, "<!-- Blocked by network security --><p>Welcome</p>", .malformedResponse),
+            (200, "<p title='Blocked by network security'>Welcome</p>", .malformedResponse)
+        ] {
+            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
+            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(Data(body.utf8), response: response, isAnonymous: true)) { error in
+                XCTAssertEqual(error as? RedditClientError, expected)
+                XCTAssertNotEqual(OctonautLoadState.failure(error), .loginRequired)
+            }
+        }
+
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        let post = Data(#"{"title":"You’ve been blocked by network security."}"#.utf8)
+        XCTAssertNoThrow(try URLSessionRedditClient.validateResponse(post, response: response, isAnonymous: true))
+        XCTAssertNoThrow(try URLSessionRedditClient.validateResponse(Data("{}".utf8), response: response, isAnonymous: true))
+    }
+
+    func testUntrustedBlockPageDoesNotOfferLogin() throws {
+        let page = Data("<html>Blocked by network security</html>".utf8)
+        for destination in ["http://www.reddit.com/hot.json", "https://example.com/hot.json", "https://reddit.com.evil.example/hot.json"] {
+            let response = HTTPURLResponse(url: URL(string: destination)!, statusCode: 403, httpVersion: nil, headerFields: nil)!
+            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(page, response: response, isAnonymous: true)) { error in
+                XCTAssertEqual(error as? RedditClientError, .accessDenied)
+                XCTAssertNotEqual(OctonautLoadState.failure(error), .loginRequired)
+            }
+        }
     }
 
     func testSignedInAndRateLimitErrorsDoNotOfferAnonymousLogin() throws {
+        let blockPage = Data("<html>Blocked by network security</html>".utf8)
         for (status, anonymous, expected) in [(403, false, RedditClientError.accessDenied), (401, false, .authenticationRequired), (429, true, .rateLimited(retryAfter: 10)), (404, true, .notFound), (500, true, .http(statusCode: 500, message: nil))] {
             let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: status, httpVersion: nil, headerFields: ["Retry-After": "10"])!
-            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(Data("{}".utf8), response: response, isAnonymous: anonymous)) { error in
+            XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(blockPage, response: response, isAnonymous: anonymous)) { error in
                 XCTAssertEqual(error as? RedditClientError, expected)
                 XCTAssertNotEqual(OctonautLoadState.failure(error), .loginRequired)
             }
         }
         let response = HTTPURLResponse(url: URL(string: "https://www.reddit.com/hot.json")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        XCTAssertThrowsError(try URLSessionRedditClient.validateResponse(blockPage, response: response, isAnonymous: false)) { error in
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+            XCTAssertNotEqual(OctonautLoadState.failure(error), .loginRequired)
+        }
         XCTAssertNoThrow(try URLSessionRedditClient.validateResponse(Data("{}".utf8), response: response, isAnonymous: true))
     }
 
@@ -1009,6 +1056,127 @@ final class DomainTests: XCTestCase {
             )
         )
     }
+
+    @MainActor
+    func testLoginPageHidesProvidersInsideLateShadowRoots() async throws {
+        let webView = try await loginPageFixture(host: "www.reddit.com")
+        try await webView.evaluateJavaScript(Self.defineLoginElement)
+        let initial = try await webView.evaluateJavaScript(Self.loginElementStyles) as? String
+        XCTAssertEqual(initial, "none|none|inline-block|inline|block|inline")
+
+        try await webView.evaluateJavaScript(#"""
+            (() => {
+                const root = document.querySelector('#outer').shadowRoot
+                    .querySelector('auth-flow-sso-buttons').shadowRoot;
+                const late = document.createElement('div');
+                late.id = 'late';
+                late.attachShadow({ mode: 'open' }).innerHTML =
+                    '<div id="google-sso-button-container">Google</div>' +
+                    '<div id="apple-sso-button-container">Apple</div>' +
+                    '<input id="password" type="password">';
+                root.append(late);
+            })();
+            """#)
+        let lateStyles = try await webView.evaluateJavaScript(#"""
+            (() => {
+                const root = document.querySelector('#outer').shadowRoot
+                    .querySelector('auth-flow-sso-buttons').shadowRoot.querySelector('#late').shadowRoot;
+                return ['google-sso-button-container', 'apple-sso-button-container', 'password']
+                    .map(id => getComputedStyle(root.getElementById(id)).display).join('|');
+            })();
+            """#) as? String
+        XCTAssertEqual(lateStyles, "none|none|inline-block")
+    }
+
+    @MainActor
+    func testLoginPageRemovesAlternativeMethodsAndTheirSpace() async throws {
+        let webView = try await loginPageFixture(host: "www.reddit.com")
+        try await webView.evaluateJavaScript(Self.defineLoginElement)
+        try await webView.evaluateJavaScript(#"""
+            (() => {
+                const root = document.querySelector('#outer').shadowRoot;
+                root.innerHTML = `
+                    <div id="alternatives" style="margin: 80px 0">
+                        <auth-flow-link step="phone_auth">Phone number</auth-flow-link>
+                        <div style="min-height: 80px">
+                            <auth-flow-sso-buttons auth-flow="login"></auth-flow-sso-buttons>
+                        </div>
+                        <auth-flow-link step="magic_link_login">Email link</auth-flow-link>
+                        <div id="divider"><hr>OR<hr></div>
+                    </div>
+                    <input id="username" autocomplete="username">
+                    <input id="password" type="password">
+                    <button id="submit">Log In</button>
+                    <a id="recovery" href="/password">Forgot password?</a>
+                    <a id="legal" href="/policies">Terms</a>
+                    <div id="captcha">CAPTCHA</div>`;
+            })();
+            """#)
+        let layout = try await webView.evaluateJavaScript(#"""
+            (() => {
+                const root = document.querySelector('#outer').shadowRoot;
+                const hidden = ['alternatives', 'divider'].every(id =>
+                    root.getElementById(id).getBoundingClientRect().height === 0);
+                const visible = ['username', 'password', 'submit', 'recovery', 'legal', 'captcha']
+                    .every(id => root.getElementById(id).getBoundingClientRect().height > 0);
+                return hidden && visible;
+            })();
+            """#) as? Bool
+        XCTAssertEqual(layout, true)
+    }
+
+    @MainActor
+    func testLoginPageCustomizationDoesNotRunOnOtherHosts() async throws {
+        let webView = try await loginPageFixture(host: "example.com")
+        try await webView.evaluateJavaScript(Self.defineLoginElement)
+        let styles = try await webView.evaluateJavaScript(Self.loginElementStyles) as? String
+        XCTAssertEqual(styles, "block|block|inline-block|inline|block|inline")
+    }
+
+    @MainActor
+    private func loginPageFixture(host: String) async throws -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        RedditLoginPageCustomization.usernameAndPasswordOnly.install(on: configuration)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let loaded = expectation(description: "Synthetic login page loaded")
+        let delegate = LoginFixtureNavigationDelegate(loaded: loaded)
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(#"""
+            <!doctype html><html><body><div id="outer"></div>
+            <script>
+                const outer = document.querySelector('#outer').attachShadow({ mode: 'open' });
+                outer.innerHTML = '<auth-flow-sso-buttons></auth-flow-sso-buttons>';
+            </script></body></html>
+            """#, baseURL: URL(string: "https://\(host)/login/")!)
+        await fulfillment(of: [loaded], timeout: 5)
+        return webView
+    }
+
+    private static let defineLoginElement = #"""
+        customElements.define('auth-flow-sso-buttons', class extends HTMLElement {
+            constructor() {
+                super();
+                this.attachShadow({ mode: 'open' }).innerHTML =
+                    '<div id="google-sso-button-container">Google</div>' +
+                    '<div id="apple-sso-button-container">Apple</div>' +
+                    '<input id="password" type="password">' +
+                    '<a id="recovery" href="/password">Forgot password?</a>' +
+                    '<div id="captcha">CAPTCHA</div>' +
+                    '<a id="legal" href="/policies">Terms</a>';
+            }
+        });
+        """#
+
+    private static let loginElementStyles = #"""
+        (() => {
+            const root = document.querySelector('#outer').shadowRoot
+                .querySelector('auth-flow-sso-buttons').shadowRoot;
+            return ['google-sso-button-container', 'apple-sso-button-container',
+                    'password', 'recovery', 'captcha', 'legal']
+                .map(id => getComputedStyle(root.getElementById(id)).display).join('|');
+        })();
+        """#
 
     @MainActor
     func testSubscribedCommunitiesLoadAndRestoreAccountFavorites() async throws {
@@ -2531,5 +2699,15 @@ extension DomainTests {
         XCTAssertTrue(follows("https://old.reddit.com/user/me/about.json"))
         XCTAssertFalse(follows("http://www.reddit.com/user/me/about.json"))
         XCTAssertFalse(follows("https://example.com/user/me/about.json"))
+    }
+}
+
+private final class LoginFixtureNavigationDelegate: NSObject, WKNavigationDelegate {
+    let loaded: XCTestExpectation
+
+    init(loaded: XCTestExpectation) { self.loaded = loaded }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        loaded.fulfill()
     }
 }

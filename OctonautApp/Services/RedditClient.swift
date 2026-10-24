@@ -633,7 +633,9 @@ actor URLSessionRedditClient: RedditClient {
             throw RedditClientError.http(statusCode: http.statusCode, message: message)
         }
         if http.statusCode == 401 || http.statusCode == 403 {
-            if isAnonymous { throw RedditClientError.anonymousAccessBlocked }
+            if isAnonymous, isConfirmedAnonymousBlock(data, response: http) {
+                throw RedditClientError.anonymousAccessBlocked
+            }
             if http.statusCode == 403 { throw RedditClientError.accessDenied }
             throw RedditClientError.authenticationRequired
         }
@@ -649,8 +651,26 @@ actor URLSessionRedditClient: RedditClient {
             byte != 0x20 && byte != 0x09 && byte != 0x0A && byte != 0x0D
         }
         if firstNonWhitespace == 0x3C { // '<' - an HTML login/error page
-            throw isAnonymous ? RedditClientError.anonymousAccessBlocked : RedditClientError.authenticationRequired
+            if isAnonymous, http.statusCode == 200,
+               isConfirmedAnonymousBlock(data, response: http) {
+                throw RedditClientError.anonymousAccessBlocked
+            }
+            throw isAnonymous ? RedditClientError.malformedResponse : RedditClientError.authenticationRequired
         }
+    }
+
+    private static func isConfirmedAnonymousBlock(_ data: Data, response http: HTTPURLResponse) -> Bool {
+        guard let url = http.url, RedditReportTarget.isRedditURL(url),
+              data.first(where: { ![0x20, 0x09, 0x0A, 0x0D].contains($0) }) == 0x3C,
+              let page = String(data: data, encoding: .utf8)?.lowercased() else { return false }
+        let visibleText = page
+            .replacingOccurrences(of: "<!--[\\s\\S]*?-->|<(script|style)\\b[^>]*>[\\s\\S]*?(?:</\\1\\s*>|$)", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;|&#160;|&#x0*a0;", with: " ", options: .regularExpression)
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        return visibleText.contains("blocked by network security")
+            || visibleText.contains("your request has been blocked due to a network policy")
     }
 
     static func communityUnavailableMessage(_ data: Data) -> String? {

@@ -1,4 +1,7 @@
 Changes in current build:
+Login warning explains why sign-in appears automatically.
+Login now shows only username and password, without gaps.
+Login opens only for confirmed Reddit browsing blocks.
 Comment headers collapse and expand again.
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
