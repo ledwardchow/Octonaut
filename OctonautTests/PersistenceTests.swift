@@ -104,6 +104,39 @@ final class PersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testLogoutDeletesSelectedSwiftDataAccountAndDrafts() async throws {
+        let store = SwiftDataPersistenceStore(container: try PersistenceSchema.makeContainer(inMemory: true))
+        let vault = InMemoryCredentialVault()
+        let coordinator = AccountCoordinator(persistence: store, secrets: CredentialVaultSecretStore(vault: vault))
+        let remaining = Account(username: "remaining", health: .healthy)
+        let selected = Account(username: "selected", health: .healthy)
+        let secret = SessionSecret(
+            cookieName: "reddit_session", cookieValue: "synthetic-session",
+            modhash: "synthetic-modhash", redditUser: "selected", validatedAt: .now
+        )
+        try await coordinator.add(remaining, secret: secret)
+        try await coordinator.add(selected, secret: secret)
+        try await store.saveDraft(FixtureData.draft(accountID: remaining.id))
+        try await store.saveDraft(FixtureData.draft(accountID: selected.id))
+
+        try await coordinator.logOut()
+        await coordinator.load()
+        let savedAccounts = try await store.loadAccounts()
+        let removedDrafts = try await store.loadDrafts(accountID: selected.id)
+        let remainingDrafts = try await store.loadDrafts(accountID: remaining.id)
+        let removedCredential = try await vault.credential(for: selected.id)
+        let remainingCredential = try await vault.credential(for: remaining.id)
+
+        XCTAssertNil(coordinator.selectedAccountID)
+        XCTAssertEqual(coordinator.accounts.map(\.id), [remaining.id])
+        XCTAssertEqual(savedAccounts.map(\.id), [remaining.id])
+        XCTAssertTrue(removedDrafts.isEmpty)
+        XCTAssertEqual(remainingDrafts.count, 1)
+        XCTAssertNil(removedCredential)
+        XCTAssertNotNil(remainingCredential)
+    }
+
+    @MainActor
     func testSwiftDataUsageStatisticsPersist() async throws {
         let container = try PersistenceSchema.makeContainer(inMemory: true)
         let store = SwiftDataPersistenceStore(container: container)

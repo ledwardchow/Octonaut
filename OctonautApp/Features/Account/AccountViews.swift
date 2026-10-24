@@ -27,6 +27,7 @@ struct AccountRootView: View {
                 AccountManagerView(store: store) { showingAddAccount = true }
             }
         }
+        .id(dependencies.accounts.selectedAccountID)
         .navigationTitle(navigationTitle)
         .toolbar {
             if dependencies.accounts.selectedAccount?.health != .healthy {
