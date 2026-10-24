@@ -43,6 +43,80 @@ enum RedditLoginNavigationPolicy {
     }
 }
 
+enum RedditLoginPageCustomization {
+    case usernameAndPasswordOnly
+
+    @MainActor
+    func install(on configuration: WKWebViewConfiguration) {
+        configuration.userContentController.addUserScript(
+            WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+    }
+
+    private var source: String {
+        switch self {
+        case .usernameAndPasswordOnly:
+            return #"""
+            (() => {
+                if (location.protocol !== 'https:' ||
+                    !(location.hostname === 'reddit.com' || location.hostname.endsWith('.reddit.com')) ||
+                    window !== window.top) return;
+
+                const css = `
+                    div:has(> div > auth-flow-sso-buttons[auth-flow="login"]),
+                    auth-flow-sso-buttons[auth-flow="login"],
+                    auth-flow-link[step="phone_auth"],
+                    auth-flow-link[step="magic_link_login"],
+                    #google-sso-button-container,
+                    #apple-sso-button-container { display: none !important; }
+                `;
+                const observed = new WeakSet();
+                const styled = new WeakMap();
+
+                function scan(root) {
+                    if (!observed.has(root)) {
+                        observed.add(root);
+                        new MutationObserver(mutations => {
+                            for (const mutation of mutations) {
+                                for (const node of mutation.addedNodes) {
+                                    if (node.nodeType === Node.ELEMENT_NODE) scanNode(node);
+                                }
+                            }
+                            addStyle(root);
+                        }).observe(root, { childList: true, subtree: true });
+                    }
+                    addStyle(root);
+                    for (const element of root.querySelectorAll('*')) {
+                        if (element.shadowRoot) scan(element.shadowRoot);
+                    }
+                }
+
+                function addStyle(root) {
+                    const existingStyle = styled.get(root);
+                    if (existingStyle && existingStyle.getRootNode() === root) return;
+                    const parent = root === document ? (document.head || document.documentElement) : root;
+                    if (!parent) return;
+                    const style = document.createElement('style');
+                    style.textContent = css;
+                    parent.appendChild(style);
+                    styled.set(root, style);
+                }
+
+                function scanNode(node) {
+                    if (node.shadowRoot) scan(node.shadowRoot);
+                    for (const element of node.querySelectorAll('*')) {
+                        if (element.shadowRoot) scan(element.shadowRoot);
+                    }
+                }
+
+                scan(document);
+                customElements.whenDefined('auth-flow-sso-buttons').then(() => scan(document));
+            })();
+            """#
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class RedditLoginModel {

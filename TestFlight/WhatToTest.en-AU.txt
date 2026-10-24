@@ -1,4 +1,7 @@
 Changes in current build:
+Login warning explains why sign-in appears automatically.
+Login now shows only username and password, without gaps.
+Login opens only for confirmed Reddit browsing blocks.
 Comment headers collapse and expand again.
 Fixed crash when saving media to Photos.
 Joining and leaving communities now saves reliably to Reddit.
@@ -15,6 +18,7 @@ Opening a read inbox item no longer marks it unread.
 Send errors now show Reddit's reason.
 Switch accounts from the account menu.
 Log out now asks for confirmation.
+Fixed a crash when logging out on iPad.
 Summaries now use Apple Intelligence by default.
 Hid settings that had no effect yet.
 Signed-in and signed-out browsing no longer share cookies.

@@ -3,19 +3,27 @@ import WebKit
 
 struct RedditLoginView: View {
     let accounts: AccountCoordinator
+    let anonymousRequestsBlocked: Bool
     @Environment(\.dismiss) private var dismiss
     @AppStorage(LegalDocuments.acceptedVersionKey) private var acceptedConsentVersion = ""
     @State private var model: RedditLoginModel
+    @State private var hasStartedSignIn = false
 
-    init(accounts: AccountCoordinator) {
+    init(accounts: AccountCoordinator, anonymousRequestsBlocked: Bool = false) {
         self.accounts = accounts
+        self.anonymousRequestsBlocked = anonymousRequestsBlocked
         _model = State(initialValue: RedditLoginModel(accounts: accounts))
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
+                if !hasStartedSignIn {
+                    RedditLoginWelcomeView(anonymousRequestsBlocked: anonymousRequestsBlocked, onSignIn: { hasStartedSignIn = true }) {
+                        model.cancel()
+                        dismiss()
+                    }
+                } else if LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) {
                     LoginConsentView { acceptedConsentVersion = LegalDocuments.consentVersion }
                 } else if case .succeeded(let username) = model.state {
                     ContentUnavailableView("Signed in as u/\(username)", systemImage: "checkmark.circle.fill", description: Text("This Reddit session is saved securely on this device."))
@@ -30,27 +38,32 @@ struct RedditLoginView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
                 }
             }
-            .navigationTitle(LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit")
+            .navigationTitle(hasStartedSignIn ? (LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) ? "Privacy and Terms" : "Sign in to Reddit") : "")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(hasStartedSignIn ? .visible : .hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        model.cancel()
-                        dismiss()
+                if hasStartedSignIn {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            model.cancel()
+                            dismiss()
+                        }
                     }
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Octonaut signs in through Reddit's website and stores the resulting session only in this device's Keychain.")
-                        .font(.footnote)
-                    Link("Reddit Terms and Privacy", destination: URL(string: "https://www.reddit.com/policies/privacy-policy")!)
-                        .font(.caption)
+                if hasStartedSignIn {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Octonaut signs in through Reddit's website and stores the resulting session only in this device's Keychain.")
+                            .font(.footnote)
+                        Link("Reddit Terms and Privacy", destination: URL(string: "https://www.reddit.com/policies/privacy-policy")!)
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+                    .padding(.vertical, 9)
+                    .background(.bar)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
-                .padding(.vertical, 9)
-                .background(.bar)
             }
             .alert("Reddit sign-in failed", isPresented: Binding(get: {
                 if case .failed = model.state { return true }
@@ -80,6 +93,7 @@ private struct RedditLoginWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        RedditLoginPageCustomization.usernameAndPasswordOnly.install(on: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
         webView.navigationDelegate = context.coordinator
