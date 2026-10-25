@@ -14,6 +14,13 @@ struct MacRedditLoginView: View {
         _model = State(initialValue: RedditLoginModel(accounts: accounts))
     }
 
+    private var showingWebLogin: Bool {
+        guard hasStartedSignIn,
+              !LegalDocuments.requiresConsent(acceptedVersion: acceptedConsentVersion) else { return false }
+        if case .succeeded = model.state { return false }
+        return true
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if !hasStartedSignIn {
@@ -49,10 +56,15 @@ struct MacRedditLoginView: View {
 
                 Divider()
 
-                Text("Sign-in happens on Reddit's website. Octonaut never asks for your Reddit password or developer API credentials.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding()
+                VStack(alignment: .leading, spacing: 8) {
+                    if showingWebLogin {
+                        RedditLoginAccountHelpView()
+                    }
+                    Text("Sign-in happens on Reddit's website. Octonaut never asks for your Reddit password or developer API credentials.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
             }
         }
         .overlay {
@@ -87,8 +99,8 @@ struct MacRedditLoginView: View {
 private struct MacRedditLoginWebView: NSViewRepresentable {
     let model: RedditLoginModel
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(model: model)
+    func makeCoordinator() -> RedditLoginWebCoordinator {
+        RedditLoginWebCoordinator(model: model)
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -100,6 +112,7 @@ private struct MacRedditLoginWebView: NSViewRepresentable {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
             + "(KHTML, like Gecko) Version/18.6 Safari/605.1.15"
         webView.navigationDelegate = context.coordinator
+        webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         context.coordinator.startMonitoring(webView)
         webView.load(URLRequest(url: Self.loginURL))
@@ -109,10 +122,11 @@ private struct MacRedditLoginWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {}
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ webView: WKWebView, coordinator: RedditLoginWebCoordinator) {
         coordinator.stopMonitoring(webView)
         webView.stopLoading()
         webView.navigationDelegate = nil
+        webView.uiDelegate = nil
     }
 
     private static let loginURL: URL = {
@@ -125,57 +139,4 @@ private struct MacRedditLoginWebView: NSViewRepresentable {
         ]
         return components.url!
     }()
-
-    final class Coordinator: NSObject, WKNavigationDelegate, WKHTTPCookieStoreObserver {
-        let model: RedditLoginModel
-        weak var webView: WKWebView?
-        var pollingTask: Task<Void, Never>?
-
-        init(model: RedditLoginModel) {
-            self.model = model
-        }
-
-        func startMonitoring(_ webView: WKWebView) {
-            self.webView = webView
-            webView.configuration.websiteDataStore.httpCookieStore.add(self)
-            pollingTask?.cancel()
-            pollingTask = Task { @MainActor [weak self, weak webView] in
-                while !Task.isCancelled {
-                    do {
-                        try await Task.sleep(for: .milliseconds(500))
-                    } catch {
-                        return
-                    }
-                    guard let self, let webView else { return }
-                    self.model.cookiesDidChange(in: webView)
-                }
-            }
-        }
-
-        func stopMonitoring(_ webView: WKWebView) {
-            pollingTask?.cancel()
-            pollingTask = nil
-            webView.configuration.websiteDataStore.httpCookieStore.remove(self)
-            self.webView = nil
-        }
-
-        func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
-            guard let webView else { return }
-            model.cookiesDidChange(in: webView)
-        }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            model.didFinishNavigation(webView)
-        }
-
-        func webView(
-            _ webView: WKWebView,
-            decidePolicyFor navigationAction: WKNavigationAction
-        ) async -> WKNavigationActionPolicy {
-            RedditLoginNavigationPolicy.allows(
-                navigationAction.request.url,
-                isMainFrame: navigationAction.targetFrame?.isMainFrame
-            ) ? .allow : .cancel
-        }
-    }
 }

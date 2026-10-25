@@ -2,6 +2,9 @@ Changes in current build:
 Added a welcome screen before Reddit sign-in.
 Login warning explains why sign-in appears automatically.
 Login now shows only username and password, without gaps.
+Removed extra login help and the welcome lock message.
+Native login recovery and sign-up open in your browser.
+Reddit's login close button no longer leaves Octonaut.
 Login opens only for confirmed Reddit browsing blocks.
 Comment headers collapse and expand again.
 Fixed crash when saving media to Photos.

@@ -1,5 +1,49 @@
 import SwiftUI
 
+enum RedditLoginAccountAction: CaseIterable {
+    case forgotPassword
+    case signUp
+
+    var title: String {
+        switch self {
+        case .forgotPassword: "Forgot password?"
+        case .signUp: "Sign up"
+        }
+    }
+
+    var url: URL {
+        switch self {
+        case .forgotPassword: URL(string: "https://www.reddit.com/password/")!
+        case .signUp: URL(string: "https://www.reddit.com/register/")!
+        }
+    }
+}
+
+struct RedditLoginAccountHelpView: View {
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                actionLinks
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                actionLinks
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var actionLinks: some View {
+        ForEach(RedditLoginAccountAction.allCases, id: \.self) { action in
+            Link(destination: action.url) {
+                Label(action.title, systemImage: "arrow.up.right")
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.bordered)
+        }
+    }
+}
+
 enum OctonautLoadState: Sendable, Equatable {
     case idle
     case loading
@@ -102,16 +146,6 @@ struct RedditLoginWelcomeView: View {
                     .foregroundStyle(actionColor)
                     .frame(maxWidth: .infinity, minHeight: 47)
                     .buttonStyle(.plain)
-
-                    HStack(alignment: .top, spacing: 7) {
-                        Image(systemName: "lock.fill")
-                            .accessibilityHidden(true)
-                        Text("You sign in on Reddit.\nYour session stays in this device’s Keychain.")
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.top, 15)
                     .padding(.bottom, 25)
                 }
                 .padding(.horizontal, 25)

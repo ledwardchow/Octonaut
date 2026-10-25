@@ -1007,24 +1007,48 @@ final class DomainTests: XCTestCase {
     }
 
     func testLoginNavigationPolicyKeepsMainFrameOnReddit() {
-        XCTAssertTrue(
-            RedditLoginNavigationPolicy.allows(
-                URL(string: "https://www.reddit.com/login/"),
-                isMainFrame: true
-            )
-        )
-        XCTAssertFalse(
-            RedditLoginNavigationPolicy.allows(
-                URL(string: "https://www.google.com/recaptcha/api2/anchor"),
-                isMainFrame: true
-            )
-        )
-        XCTAssertFalse(
-            RedditLoginNavigationPolicy.allows(
-                URL(string: "http://www.reddit.com/login/"),
-                isMainFrame: true
-            )
-        )
+        let source = URL(string: "https://www.reddit.com/login/")!
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: source), sourceURL: nil,
+            sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .embedded)
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(
+            URLRequest(url: URL(string: "https://www.google.com/recaptcha/api2/anchor")!),
+            sourceURL: source, sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .cancel)
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(
+            URLRequest(url: URL(string: "http://www.reddit.com/login/")!),
+            sourceURL: source, sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .cancel)
+    }
+
+    func testNativeLoginAccountHelpUsesFixedRedditPages() {
+        XCTAssertEqual(RedditLoginAccountAction.forgotPassword.url.absoluteString,
+                       "https://www.reddit.com/password/")
+        XCTAssertEqual(RedditLoginAccountAction.signUp.url.absoluteString,
+                       "https://www.reddit.com/register/")
+        for action in RedditLoginAccountAction.allCases {
+            let url = action.url
+            XCTAssertEqual(url.scheme, "https")
+            XCTAssertEqual(url.host, "www.reddit.com")
+            XCTAssertNil(url.query)
+            XCTAssertNil(url.fragment)
+            XCTAssertNil(url.user)
+            XCTAssertNil(url.password)
+        }
+    }
+
+    func testLoginNavigationPolicyStopsPageCloseLeavingSignIn() {
+        let source = URL(string: "https://www.reddit.com/login/")!
+        for address in ["https://www.reddit.com/", "https://reddit.com/"] {
+            XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: URL(string: address)!),
+                sourceURL: source, sourceIsMainFrame: true, isMainFrame: true,
+                isLinkOrNewWindow: true), .cancel, address)
+        }
+        let secondFactor = URL(string: "https://www.reddit.com/login/2fa/")!
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: secondFactor),
+            sourceURL: source, sourceIsMainFrame: true, isMainFrame: true,
+            isLinkOrNewWindow: false), .embedded)
+        let legal = URL(string: "https://www.reddit.com/policies/privacy-policy")!
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: legal),
+            sourceURL: source, sourceIsMainFrame: true, isMainFrame: true,
+            isLinkOrNewWindow: true), .browser(legal))
     }
 
     func testLoginNavigationPolicyAllowsRequiredEmbeddedFrames() {
@@ -1034,27 +1058,101 @@ final class DomainTests: XCTestCase {
             "https://accounts.google.com/gsi/fedcm/listaccounts",
             "about:blank",
         ] {
-            XCTAssertTrue(
-                RedditLoginNavigationPolicy.allows(
-                    URL(string: address),
-                    isMainFrame: false
-                ),
-                address
-            )
+            XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: URL(string: address)!),
+                sourceURL: nil, sourceIsMainFrame: false, isMainFrame: false, isLinkOrNewWindow: false),
+                .embedded, address)
         }
 
-        XCTAssertFalse(
-            RedditLoginNavigationPolicy.allows(
-                URL(string: "https://example.com/embedded"),
-                isMainFrame: false
-            )
-        )
-        XCTAssertFalse(
-            RedditLoginNavigationPolicy.allows(
-                URL(string: "https://www.google.com/search?q=reddit"),
-                isMainFrame: false
-            )
-        )
+        for address in ["https://example.com/embedded", "https://www.google.com/search?q=reddit"] {
+            XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: URL(string: address)!),
+                sourceURL: nil, sourceIsMainFrame: false, isMainFrame: false, isLinkOrNewWindow: false),
+                .cancel, address)
+        }
+    }
+
+    func testLoginSupportBrowserRoutesAndRejections() {
+        let source = URL(string: "https://www.reddit.com/login/")!
+        for address in ["https://www.reddit.com/password", "https://www.reddit.com/register/", "https://accounts.reddit.com/username",
+                        "https://www.reddit.com/help", "https://www.reddit.com/policies/privacy-policy",
+                        "https://www.reddit.com/r/help", "https://support.reddithelp.com/hc/en-us",
+                        "https://www.redditinc.com/policies/user-agreement"] {
+            let url = URL(string: address)!
+            XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: url), sourceURL: source,
+                sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: true), .browser(url), address)
+            XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: url), sourceURL: source,
+                sourceIsMainFrame: true, isMainFrame: nil, isLinkOrNewWindow: true), .browser(url), address)
+        }
+        for address in ["http://www.reddit.com/password", "https://user:pass@www.reddit.com/password",
+                        "https://www.reddit.com:444/password", "https://www.reddit.com/password?session=abc",
+                        "https://www.reddit.com/password?next=https://example.com",
+                        "https://www.reddit.com/password?email=person@example.com",
+                        "https://www.reddit.com/register?username=example",
+                        "https://www.reddit.com/password#token=abc", "https://www.reddit.com.evil.example/password",
+                        "https://support.reddithelp.com.evil.example/hc", "https://accounts.google.com/o/oauth2/auth",
+                        "https://www.reddit.com/api/v1/authorize", "https://oauth.reddit.com/password"] {
+            let url = URL(string: address)!
+            XCTAssertNotEqual(RedditLoginNavigationPolicy.route(URLRequest(url: url), sourceURL: source,
+                sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: true), .browser(url), address)
+        }
+        let recovery = URL(string: "https://www.reddit.com/password")!
+        var post = URLRequest(url: recovery)
+        post.httpMethod = "POST"
+        post.httpBody = Data("email=a".utf8)
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(post, sourceURL: source,
+            sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: true), .cancel)
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: recovery), sourceURL: source,
+            sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .cancel)
+        let registration = URL(string: "https://www.reddit.com/register/")!
+        XCTAssertEqual(RedditLoginNavigationPolicy.route(URLRequest(url: registration), sourceURL: source,
+            sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .cancel)
+        for untrusted in [nil, URL(string: "https://example.com/iframe")!, URL(string: "https://oauth.reddit.com/login")!] {
+            XCTAssertNotEqual(RedditLoginNavigationPolicy.route(URLRequest(url: recovery), sourceURL: untrusted,
+                sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: true), .browser(recovery))
+        }
+        XCTAssertNotEqual(RedditLoginNavigationPolicy.route(URLRequest(url: recovery), sourceURL: source,
+            sourceIsMainFrame: false, isMainFrame: true, isLinkOrNewWindow: true), .browser(recovery))
+        XCTAssertNotEqual(RedditLoginNavigationPolicy.route(URLRequest(url: recovery), sourceURL: source,
+            sourceIsMainFrame: true, isMainFrame: false, isLinkOrNewWindow: true), .browser(recovery))
+        XCTAssertNotEqual(RedditLoginNavigationPolicy.route(URLRequest(url: recovery), sourceURL: source,
+            sourceIsMainFrame: true, isMainFrame: true, isLinkOrNewWindow: false), .browser(recovery))
+    }
+
+    @MainActor
+    func testLoginSupportLinksOpenBrowserOnceAndKeepOriginalPage() async throws {
+        let help = "https://support.reddithelp.com/hc/en-us"
+        let recovery = "https://www.reddit.com/password"
+        for (destination, target, usesScript) in [
+            (help, "", false),
+            (help, "target='_blank'", false),
+            (help, "", true),
+            (recovery, "", false),
+            (recovery, "target='_blank'", false),
+            ("https://www.redditinc.com/policies/user-agreement", "target='_blank'", false)
+        ] {
+            let webView = try await loginPageFixture(host: "www.reddit.com")
+            let opened = expectation(description: "Support link opened once")
+            opened.assertForOverFulfill = true
+            var browserURLs: [URL] = []
+            let coordinator = RedditLoginWebCoordinator(openBrowser: { url in
+                browserURLs.append(url)
+                opened.fulfill()
+            })
+            try await webView.evaluateJavaScript("""
+                document.title = 'Login fixture';
+                document.body.innerHTML = "<a id='support' \(target) href='\(destination)'>Help</a>";
+                """)
+            webView.navigationDelegate = coordinator
+            webView.uiDelegate = coordinator
+            let script = usesScript
+                ? "window.open('\(destination)', '_blank'); void 0"
+                : "document.getElementById('support').click()"
+            try await webView.evaluateJavaScript(script)
+            await fulfillment(of: [opened], timeout: 5)
+            let retainedPage = try await webView.evaluateJavaScript("document.getElementById('support') !== null") as? Bool
+            XCTAssertEqual(browserURLs, [URL(string: destination)!])
+            XCTAssertEqual(webView.title, "Login fixture")
+            XCTAssertEqual(retainedPage, true)
+        }
     }
 
     @MainActor
@@ -1062,7 +1160,7 @@ final class DomainTests: XCTestCase {
         let webView = try await loginPageFixture(host: "www.reddit.com")
         try await webView.evaluateJavaScript(Self.defineLoginElement)
         let initial = try await webView.evaluateJavaScript(Self.loginElementStyles) as? String
-        XCTAssertEqual(initial, "none|none|inline-block|inline|block|inline")
+        XCTAssertEqual(initial, "none|none|inline-block|none|block|inline")
 
         try await webView.evaluateJavaScript(#"""
             (() => {
@@ -1117,12 +1215,54 @@ final class DomainTests: XCTestCase {
                 const root = document.querySelector('#outer').shadowRoot;
                 const hidden = ['alternatives', 'divider'].every(id =>
                     root.getElementById(id).getBoundingClientRect().height === 0);
-                const visible = ['username', 'password', 'submit', 'recovery', 'legal', 'captcha']
+                const visible = ['username', 'password', 'submit', 'legal', 'captcha']
                     .every(id => root.getElementById(id).getBoundingClientRect().height > 0);
-                return hidden && visible;
+                return hidden && visible &&
+                    root.getElementById('recovery').getBoundingClientRect().height === 0;
             })();
             """#) as? Bool
         XCTAssertEqual(layout, true)
+    }
+
+    @MainActor
+    func testLoginPageHidesCloseRecoveryAndSignUpAfterRedraw() async throws {
+        let webView = try await loginPageFixture(host: "www.reddit.com")
+        try await webView.evaluateJavaScript(Self.defineLoginElement)
+        for _ in 0..<2 {
+            try await webView.evaluateJavaScript(#"""
+                (() => {
+                    const root = document.querySelector('#outer').shadowRoot
+                        .querySelector('auth-flow-sso-buttons').shadowRoot;
+                    root.innerHTML = `
+                        <button id="close" aria-label="Close"><svg icon-name="close"></svg></button>
+                        <button id="nested-close"><span><span><svg icon-name="close-outline"></svg></span></span></button>
+                        <input id="username" autocomplete="username">
+                        <input id="password" type="password">
+                        <button id="login-password-visibility-toggle">Show password</button>
+                        <button id="back">Back</button>
+                        <div id="recovery-wrapper" style="margin: 80px 0"><auth-flow-link step="password"><faceplate-tracker noun="forgot_password">Forgot password?</faceplate-tracker></auth-flow-link></div>
+                        <div id="register-wrapper" style="margin: 80px 0">New to Reddit? <auth-flow-link step="register">Sign up</auth-flow-link></div>
+                        <a id="legal" href="/policies">Terms</a>
+                        <div id="captcha">CAPTCHA</div>`;
+                })();
+                """#)
+            let layout = try await webView.evaluateJavaScript(#"""
+                (() => {
+                    const root = document.querySelector('#outer').shadowRoot
+                        .querySelector('auth-flow-sso-buttons').shadowRoot;
+                    const hidden = ['close', 'nested-close', 'register-wrapper'].every(id =>
+                        root.getElementById(id).getBoundingClientRect().height === 0);
+                    const recovery = root.getElementById('recovery-wrapper');
+                    const recoveryLink = recovery.querySelector('auth-flow-link');
+                    const visible = ['username', 'password', 'login-password-visibility-toggle',
+                        'back', 'legal', 'captcha'].every(id =>
+                        root.getElementById(id).getBoundingClientRect().height > 0);
+                    return hidden && recoveryLink.getBoundingClientRect().height === 0 &&
+                        recovery.getBoundingClientRect().height === 0 && visible;
+                })();
+                """#) as? Bool
+            XCTAssertEqual(layout, true)
+        }
     }
 
     @MainActor
