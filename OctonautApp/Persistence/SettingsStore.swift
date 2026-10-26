@@ -161,6 +161,34 @@ final class SettingsStore {
     var compactThumbnailSide: CompactThumbnailSide { didSet { persist(compactThumbnailSide.rawValue, key: Keys.compactThumbnailSide) } }
     var useSplitViewOnIPad: Bool { didSet { persist(useSplitViewOnIPad, key: Keys.useSplitViewOnIPad) } }
     var showBottomNavigationOnLargeScreens: Bool { didSet { persist(showBottomNavigationOnLargeScreens, key: Keys.showBottomNavigationOnLargeScreens) } }
+    var feedOnLeftWhenViewingPosts: Bool { didSet { persist(feedOnLeftWhenViewingPosts, key: Keys.feedOnLeftWhenViewingPosts) } }
+    var duoFeedFraction: Double {
+        didSet {
+            let safe = Self.safeDuoFeedFraction(duoFeedFraction)
+            if duoFeedFraction != safe { duoFeedFraction = safe }
+            persist(safe, key: Keys.duoFeedFraction)
+        }
+    }
+
+    var duoCommunityWidth: Double {
+        didSet {
+            let safe = Self.safeDuoCommunityWidth(duoCommunityWidth)
+            if duoCommunityWidth != safe { duoCommunityWidth = safe }
+            persist(safe, key: Keys.duoCommunityWidth)
+        }
+    }
+
+    static let defaultDuoCommunityWidth = 240.0
+
+    static func safeDuoCommunityWidth(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 220), 360) : defaultDuoCommunityWidth
+    }
+
+    static let defaultDuoFeedFraction = 0.4
+
+    static func safeDuoFeedFraction(_ value: Double) -> Double {
+        value.isFinite ? min(max(value, 0.32), 0.6) : defaultDuoFeedFraction
+    }
     var showCommunityHeader: Bool { didSet { persist(showCommunityHeader, key: Keys.showCommunityHeader) } }
     var showCommunityIcons: Bool { didSet { persist(showCommunityIcons, key: Keys.showCommunityIcons) } }
     var selfTextPreviewLines: Int {
@@ -399,6 +427,9 @@ final class SettingsStore {
         compactThumbnailSide = CompactThumbnailSide(rawValue: defaults.string(forKey: Keys.compactThumbnailSide) ?? "left") ?? .left
         useSplitViewOnIPad = defaults.object(forKey: Keys.useSplitViewOnIPad) as? Bool ?? true
         showBottomNavigationOnLargeScreens = defaults.object(forKey: Keys.showBottomNavigationOnLargeScreens) as? Bool ?? false
+        feedOnLeftWhenViewingPosts = defaults.object(forKey: Keys.feedOnLeftWhenViewingPosts) as? Bool ?? true
+        duoCommunityWidth = Self.safeDuoCommunityWidth(defaults.object(forKey: Keys.duoCommunityWidth) as? Double ?? Self.defaultDuoCommunityWidth)
+        duoFeedFraction = Self.safeDuoFeedFraction(defaults.object(forKey: Keys.duoFeedFraction) as? Double ?? Self.defaultDuoFeedFraction)
         showCommunityHeader = defaults.object(forKey: Keys.showCommunityHeader) as? Bool ?? true
         showCommunityIcons = defaults.object(forKey: Keys.showCommunityIcons) as? Bool ?? true
         selfTextPreviewLines = defaults.object(forKey: Keys.selfTextPreviewLines) as? Int ?? 3
@@ -460,6 +491,9 @@ final class SettingsStore {
         compactThumbnailSide = fresh.compactThumbnailSide
         useSplitViewOnIPad = fresh.useSplitViewOnIPad
         showBottomNavigationOnLargeScreens = fresh.showBottomNavigationOnLargeScreens
+        feedOnLeftWhenViewingPosts = fresh.feedOnLeftWhenViewingPosts
+        duoFeedFraction = fresh.duoFeedFraction
+        duoCommunityWidth = fresh.duoCommunityWidth
         showCommunityHeader = fresh.showCommunityHeader
         showCommunityIcons = fresh.showCommunityIcons
         selfTextPreviewLines = fresh.selfTextPreviewLines
@@ -553,6 +587,9 @@ final class SettingsStore {
         static let compactThumbnailSide = "appearance.compactThumbnailSide"
         static let useSplitViewOnIPad = "appearance.useSplitViewOnIPad"
         static let showBottomNavigationOnLargeScreens = "appearance.showBottomNavigationOnLargeScreens"
+        static let feedOnLeftWhenViewingPosts = "appearance.feedOnLeftWhenViewingPosts"
+        static let duoFeedFraction = "appearance.duoFeedFraction"
+        static let duoCommunityWidth = "appearance.duoCommunityWidth"
         static let showCommunityHeader = "appearance.showCommunityHeader"
         static let showCommunityIcons = "appearance.showCommunityIcons"
         static let selfTextPreviewLines = "appearance.selfTextPreviewLines"

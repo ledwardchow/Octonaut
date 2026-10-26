@@ -1,8 +1,244 @@
 import XCTest
+import SwiftUI
 @testable import Octonaut
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testDuoSearchKeepsFocusWhenSoftwareKeyboardAppears() async throws {
+        let previousFixture = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"]
+        setenv("OCTONAUT_SCREENSHOT", "feeds", 1)
+        defer {
+            if let previousFixture { setenv("OCTONAUT_SCREENSHOT", previousFixture, 1) }
+            else { unsetenv("OCTONAUT_SCREENSHOT") }
+        }
+        let dependencies = AppDependencies.preview()
+        dependencies.settings.feedOnLeftWhenViewingPosts = true
+        dependencies.settings.showBottomNavigationOnLargeScreens = false
+        let host = UIHostingController(rootView: OctonautTabsView(store: .preview)
+            .environment(dependencies).environment(\.horizontalSizeClass, .regular))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        guard UIDevice.current.userInterfaceIdiom == .phone,
+              window.bounds.width >= 620, window.bounds.height >= 600 else {
+            throw XCTSkip("Requires an unfolded Duo simulator")
+        }
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .seconds(1))
+        var searches: [UITextField] = []
+        func inspect(_ view: UIView) {
+            if let field = view as? UITextField, field.accessibilityIdentifier == "duo-community-search" {
+                searches.append(field)
+            }
+            view.subviews.forEach(inspect)
+        }
+        inspect(host.view)
+        let search = try XCTUnwrap(searches.first, "Run this keyboard regression on an unfolded Duo simulator")
+        let keyboardShown = expectation(forNotification: UIResponder.keyboardDidShowNotification, object: nil) { notification in
+            guard let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return false }
+            return frame.height > 100
+        }
+        XCTAssertTrue(search.becomeFirstResponder())
+        await fulfillment(of: [keyboardShown], timeout: 5)
+        try await Task.sleep(for: .seconds(2))
+        XCTAssertTrue(search.isFirstResponder)
+        XCTAssertNotNil(search.window)
+        search.insertText("swift")
+        XCTAssertEqual(search.text, "swift")
+        let accessory = try XCTUnwrap(search.inputAccessoryView)
+        let done = try XCTUnwrap(accessory.subviews.compactMap { $0 as? UIButton }.first)
+        accessory.layoutIfNeeded()
+        XCTAssertEqual(accessory.bounds.width, window.bounds.width, accuracy: 1)
+        XCTAssertEqual(accessory.bounds.maxX - done.frame.maxX, 16, accuracy: 1)
+        XCTAssertEqual(done.frame.minY, 8, accuracy: 1)
+        XCTAssertEqual(accessory.bounds.maxY - done.frame.maxY, 8, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(done.bounds.height, 44)
+        done.sendActions(for: .touchUpInside)
+        XCTAssertFalse(search.isFirstResponder)
+        XCTAssertEqual(search.text, "swift")
+        XCTAssertTrue(search.becomeFirstResponder())
+        XCTAssertEqual(search.delegate?.textFieldShouldReturn?(search), true)
+        XCTAssertFalse(search.isFirstResponder)
+
+    }
+
+    func testOpeningPostDismissesCommunitySearchWithoutClearingQuery() async throws {
+        let router = OctonautFeatureRouter()
+        let host = UIHostingController(rootView: NavigationStack {
+            PostsRootView(store: .preview, router: router, usesDuoSidebar: true)
+        }.environment(AppDependencies.preview()))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .seconds(1))
+        func findSearch(_ view: UIView) -> UITextField? {
+            if let field = view as? UITextField, field.accessibilityIdentifier == "duo-community-search" { return field }
+            return view.subviews.lazy.compactMap(findSearch).first
+        }
+        let search = try XCTUnwrap(findSearch(host.view))
+        XCTAssertTrue(search.becomeFirstResponder())
+        search.insertText("swift")
+        router.push(.post(.screenshotCoast))
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertFalse(search.isFirstResponder)
+        XCTAssertEqual(search.text, "swift")
+        router.popToRoot()
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(search.text, "swift")
+        XCTAssertTrue(search.becomeFirstResponder())
+    }
+
+    func testDuoSidebarUsesColumnBounds() async throws {
+        let previousFixture = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"]
+        setenv("OCTONAUT_SCREENSHOT", "feeds", 1)
+        defer {
+            if let previousFixture { setenv("OCTONAUT_SCREENSHOT", previousFixture, 1) }
+            else { unsetenv("OCTONAUT_SCREENSHOT") }
+        }
+        let dependencies = AppDependencies.preview()
+        dependencies.settings.feedOnLeftWhenViewingPosts = true
+        dependencies.settings.showBottomNavigationOnLargeScreens = false
+        let host = UIHostingController(rootView: OctonautTabsView(store: .preview)
+            .environment(dependencies).environment(\.horizontalSizeClass, .regular))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 951, height: 669))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .seconds(1))
+        host.view.layoutIfNeeded()
+        var searches: [UITextField] = []
+        var sidebarLists: [UICollectionView] = []
+        func inspect(_ view: UIView) {
+            let frame = view.convert(view.bounds, to: window)
+            if let search = view as? UITextField, frame.maxX < 240 { searches.append(search) }
+            if let list = view as? UICollectionView, frame.minX == 0 { sidebarLists.append(list) }
+            for child in view.subviews { inspect(child) }
+        }
+        inspect(host.view)
+        let search = try XCTUnwrap(searches.first)
+        let searchFrame = search.convert(search.bounds, to: window)
+        XCTAssertGreaterThanOrEqual(searchFrame.maxX, 215)
+        XCTAssertTrue(search is UISearchTextField)
+        let list = try XCTUnwrap(sidebarLists.first)
+        let listFrame = list.convert(list.bounds, to: window)
+        XCTAssertEqual(listFrame.width, 240, accuracy: 0.5)
+        XCTAssertEqual(listFrame.maxY, window.bounds.maxY, accuracy: 0.5)
+        XCTAssertTrue(search.becomeFirstResponder())
+        search.text = "swift"
+        search.sendActions(for: .editingChanged)
+        try await Task.sleep(for: .seconds(1))
+        host.view.layoutIfNeeded()
+        XCTAssertTrue(search.isFirstResponder)
+        XCTAssertNotNil(search.window)
+    }
+
+    func testDuoInteriorColumnsDoNotReserveSideNavigationSpace() async throws {
+        let previousFixture = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"]
+        defer {
+            if let previousFixture { setenv("OCTONAUT_SCREENSHOT", previousFixture, 1) }
+            else { unsetenv("OCTONAUT_SCREENSHOT") }
+        }
+        for fixture in ["feeds", "detail"] {
+            setenv("OCTONAUT_SCREENSHOT", fixture, 1)
+            let dependencies = AppDependencies.preview()
+            dependencies.settings.feedOnLeftWhenViewingPosts = true
+            dependencies.settings.showBottomNavigationOnLargeScreens = false
+            let root = OctonautTabsView(store: .preview)
+                .environment(dependencies)
+                .environment(\.horizontalSizeClass, .regular)
+            let host = UIHostingController(rootView: root)
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 951, height: 669))
+            window.rootViewController = host
+            window.makeKeyAndVisible()
+            host.view.frame = window.bounds
+            try await Task.sleep(for: .seconds(1))
+            host.view.layoutIfNeeded()
+            var interiorLists: [UICollectionView] = []
+            func collect(_ view: UIView) {
+                let frame = view.convert(view.bounds, to: window)
+                if let list = view as? UICollectionView, frame.width > 1, frame.maxX < window.bounds.maxX - 1 {
+                    interiorLists.append(list)
+                }
+                for child in view.subviews { collect(child) }
+            }
+            collect(host.view)
+            XCTAssertFalse(interiorLists.isEmpty, fixture)
+            for list in interiorLists {
+                XCTAssertEqual(list.safeAreaInsets.right, 0, accuracy: 0.5, fixture)
+            }
+            window.isHidden = true
+        }
+    }
+
+    func testSelectingDifferentPostResetsDetailScroll() async throws {
+        let dependencies = AppDependencies.preview()
+        let store = OctonautFeatureStore(screenshotMode: true)
+        let router = OctonautFeatureRouter()
+        var first = post(id: "t3_first", isNSFW: false, isSpoiler: false)
+        first.hasMedia = false
+        first.body = Array(repeating: "Long post content for scrolling.", count: 100).joined(separator: "\n\n")
+        var second = post(id: "t3_second", isNSFW: false, isSpoiler: false)
+        second.hasMedia = false
+        second.body = first.body
+        func detail(_ post: PostCardModel) -> some View {
+            PostDetailView(post: post, store: store, router: router)
+                .environment(dependencies)
+                .environment(\.octonautDuoPostDetail, true)
+        }
+        let host = UIHostingController(rootView: detail(first))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        defer { window.isHidden = true }
+        func findScroll(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        let original = try XCTUnwrap(findScroll(host.view))
+        XCTAssertGreaterThan(original.contentSize.height, original.bounds.height + 300)
+        original.setContentOffset(CGPoint(x: 0, y: 250), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertGreaterThan(original.contentOffset.y, 200)
+
+        first.score += 1
+        host.rootView = detail(first)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertGreaterThan(try XCTUnwrap(findScroll(host.view)).contentOffset.y, 200)
+
+        host.rootView = detail(second)
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(store.detailPost?.id, second.id)
+        let updated = try XCTUnwrap(findScroll(host.view))
+        XCTAssertEqual(updated.contentOffset.y, -updated.adjustedContentInset.top, accuracy: 1)
+    }
+
+    func testPostRowFitsNarrowColumn() {
+        var post = PostCardModel.screenshotCoast
+        post.age = "6 hours ago"
+        post.hasMedia = false
+        post.community = "auscorp"
+        post.author = "The_Craftiest_Hobo"
+        post.title = "Deloitte strikes again with poor governance"
+        let view = OctonautPostRow(post: post, onUserOpen: { _ in }, onVote: { _ in }, onSave: {}, onComments: {})
+            .environment(AppDependencies.preview())
+        let host = UIHostingController(rootView: view)
+        for width in [280.0, 320.0, 350.0, 400.0] {
+            let size = host.sizeThatFits(in: CGSize(width: width, height: 1000))
+            print("FEED_FIT proposed=\(width) fitted=\(size)")
+            XCTAssertLessThanOrEqual(size.width, width + 0.5)
+        }
+    }
+
     func testConcurrentAnonymousRequestsShareCookieBootstrap() async throws {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200], delaySeed: true)
         let client = makeAnonymousBootstrapClient()
@@ -439,6 +675,102 @@ final class SettingsTests: XCTestCase {
         settings.showBottomNavigationOnLargeScreens = true
 
         XCTAssertTrue(SettingsStore(defaults: defaults).showBottomNavigationOnLargeScreens)
+    }
+
+    func testDuoLayoutEligibilityAndColumnBounds() {
+        XCTAssertTrue(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 669, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isPhone: false, isRegular: true, rootWidth: 1000, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: false, rootWidth: 669, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 619, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 956, rootHeight: 440))
+        XCTAssertEqual(DuoLayout.feedWidth(availableWidth: 669, fraction: .infinity), 280, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(669 - DuoLayout.dividerWidth - DuoLayout.feedWidth(availableWidth: 669, fraction: 1), 320)
+        XCTAssertEqual(SettingsStore.safeDuoFeedFraction(.nan), SettingsStore.defaultDuoFeedFraction)
+        XCTAssertEqual(DuoLayout.mode(for: []), .browsing)
+        XCTAssertEqual(DuoLayout.mode(for: [.post(.screenshotCoast)]), .reading)
+        XCTAssertEqual(DuoLayout.mode(for: [.postURL(URL(string: "https://www.reddit.com/comments/example")!)]), .reading)
+        XCTAssertEqual(DuoLayout.mode(for: [.gallery(.home)]), .otherDetail)
+        XCTAssertEqual(DuoLayout.mode(for: [.web(URL(string: "https://www.reddit.com")!)]), .otherDetail)
+        XCTAssertEqual(DuoLayout.feedWidth(availableWidth: 669,
+                                           fraction: DuoLayout.savedFraction(availableWidth: 669, desiredFeedWidth: 1000)),
+                       348, accuracy: 0.001)
+    }
+
+    func testDuoRoutesKeepFeedOriginAcrossFoldAndUnfold() {
+        let state = PostsSplitState()
+        let post = PostCardModel.screenshotCoast
+        let router = OctonautFeatureRouter(path: [.feed(.home), .post(post)])
+
+        state.consumeSelectionRoutes(in: router)
+        XCTAssertEqual(router.path, [.post(post)])
+        XCTAssertEqual(state.selectedFeed, .home)
+
+        state.restoreCompactFeedOrigin(in: router)
+        XCTAssertEqual(router.path, [.feed(.home), .post(post)])
+        state.consumeSelectionRoutes(in: router)
+        XCTAssertEqual(router.path, [.post(post)])
+
+        let community = FeedDescriptorModel(kind: .community, name: "swift")
+        state.selectFeed(community)
+        state.restoreCompactFeedOrigin(in: router)
+        XCTAssertEqual(router.path, [.feed(community), .post(post)])
+        state.consumeSelectionRoutes(in: router)
+        XCTAssertEqual(router.path, [.post(post)])
+        XCTAssertEqual(state.selectedFeed, community)
+
+        router.path = [.feed(community), .gallery(community)]
+        state.consumeSelectionRoutes(in: router)
+        XCTAssertEqual(router.path, [.gallery(community)])
+        XCTAssertEqual(DuoLayout.mode(for: router.path), .otherDetail)
+    }
+
+    func testDuoResizePreviewMatchesSavedWidthAndSwipeDirection() {
+        for width: CGFloat in [669, 951, 1100] {
+            for proposed: CGFloat in [100, 320, 590, 900] {
+                let preview = DuoLayout.feedWidth(availableWidth: width,
+                    fraction: Double(proposed / (width - DuoLayout.dividerWidth)))
+                let saved = DuoLayout.savedFraction(availableWidth: width, desiredFeedWidth: proposed)
+                XCTAssertEqual(DuoLayout.feedWidth(availableWidth: width, fraction: saved), preview, accuracy: 0.001)
+            }
+        }
+        XCTAssertEqual(DuoLayout.feedWidth(availableWidth: 951, fraction: 590 / 950), 570, accuracy: 0.001)
+        XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 669, storedWidth: 360), 360)
+        XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 620, storedWidth: 360), 339)
+        XCTAssertTrue(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 20), startX: 50, feedWidth: 320))
+        XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 100), startX: 50, feedWidth: 320))
+        XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: -100, height: 0), startX: 50, feedWidth: 320))
+        XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 0), startX: 310, feedWidth: 320))
+    }
+
+    func testDuoPreferencesPersistAndReset() {
+        let suite = "DuoLayout.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = SettingsStore(defaults: defaults)
+        XCTAssertTrue(settings.feedOnLeftWhenViewingPosts)
+        XCTAssertEqual(settings.duoCommunityWidth, SettingsStore.defaultDuoCommunityWidth)
+        settings.feedOnLeftWhenViewingPosts = false
+        settings.duoFeedFraction = 0.55
+        settings.duoCommunityWidth = 300
+        XCTAssertEqual(SettingsStore.safeDuoCommunityWidth(.infinity), 240)
+
+        settings.duoFeedFraction = .infinity
+        XCTAssertEqual(settings.duoFeedFraction, SettingsStore.defaultDuoFeedFraction)
+        XCTAssertEqual(defaults.double(forKey: "appearance.duoFeedFraction"), SettingsStore.defaultDuoFeedFraction)
+        settings.duoFeedFraction = 0.55
+
+        let restored = SettingsStore(defaults: defaults)
+        XCTAssertFalse(restored.feedOnLeftWhenViewingPosts)
+        XCTAssertEqual(restored.duoFeedFraction, 0.55, accuracy: 0.001)
+        XCTAssertEqual(restored.duoCommunityWidth, 300)
+        restored.resetToDefaults()
+        XCTAssertTrue(SettingsStore(defaults: defaults).feedOnLeftWhenViewingPosts)
+        XCTAssertEqual(SettingsStore(defaults: defaults).duoFeedFraction, SettingsStore.defaultDuoFeedFraction)
+        XCTAssertEqual(SettingsStore(defaults: defaults).duoCommunityWidth, SettingsStore.defaultDuoCommunityWidth)
+        defaults.set(Double.infinity, forKey: "appearance.duoCommunityWidth")
+        XCTAssertEqual(SettingsStore(defaults: defaults).duoCommunityWidth, SettingsStore.defaultDuoCommunityWidth)
+        defaults.set(900.0, forKey: "appearance.duoCommunityWidth")
+        XCTAssertEqual(SettingsStore(defaults: defaults).duoCommunityWidth, 360)
     }
 
     func testChangingFilterIncrementsFilterRevision() {

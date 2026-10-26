@@ -244,6 +244,7 @@ struct OctonautPostRow: View {
     var onCommunityOpen: (() -> Void)?
     var onCrosspost: (() -> Void)?
     var communityOpenAccessibilityHint = "Opens the post"
+    var onTitleBottomChange: ((CGFloat) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -263,7 +264,14 @@ struct OctonautPostRow: View {
             if let authorFlair = post.authorFlair, !post.author.isEmpty {
                 OctonautUserFlairPill(flair: authorFlair)
             }
-            postTitle
+            if let onTitleBottomChange {
+                postTitle
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.frame(in: .named(OctonautPostDetailSpace.viewport)).maxY
+                    } action: { onTitleBottomChange($0) }
+            } else {
+                postTitle
+            }
             if showsFlair, let flair = post.flair {
                 OctonautFlairPill(flair: flair)
             }
@@ -278,28 +286,28 @@ struct OctonautPostRow: View {
                     maximumHeight: mediaMaximumHeight
                 )
             }
-            HStack(spacing: 0) {
-                OctonautVoteControls(score: post.score, vote: post.vote, onVote: onVote)
-                Spacer(minLength: 8)
-                commentsControl
-                Spacer(minLength: 8)
-                OctonautIconLabel(
-                    systemImage: post.isSeen ? "eye.slash" : "eye", title: post.age,
-                    color: post.isSeen ? theme.seen : theme.secondaryText
-                )
-                .padding(.horizontal, 6)
-                .octonautActionPill(theme: theme)
-                if let onSave {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 0) {
+                    OctonautVoteControls(score: post.score, vote: post.vote, onVote: onVote)
                     Spacer(minLength: 8)
-                    Button(action: onSave) {
-                        Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
-                            .font(.system(size: 16))
-                            .frame(width: 34, height: 34)
-                            .contentShape(Rectangle())
+                    commentsControl
+                    Spacer(minLength: 8)
+                    ageControl
+                    if onSave != nil {
+                        Spacer(minLength: 8)
+                        saveControl
                     }
-                    .octonautActionPill(theme: theme)
-                    .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
-                    .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        voteAndComments
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: 8) {
+                        ageControl
+                        saveControl
+                        Spacer(minLength: 0)
+                    }
                 }
             }
             .font(.caption)
@@ -350,6 +358,36 @@ struct OctonautPostRow: View {
                 }
             }
             ShareLink(item: post.shareURL) { Label("Share Link", systemImage: "square.and.arrow.up") }
+        }
+    }
+
+    @ViewBuilder
+    private var voteAndComments: some View {
+        OctonautVoteControls(score: post.score, vote: post.vote, onVote: onVote)
+        commentsControl
+    }
+
+    private var ageControl: some View {
+        OctonautIconLabel(
+            systemImage: post.isSeen ? "eye.slash" : "eye", title: post.age,
+            color: post.isSeen ? theme.seen : theme.secondaryText
+        )
+        .padding(.horizontal, 6)
+        .octonautActionPill(theme: theme)
+    }
+
+    @ViewBuilder
+    private var saveControl: some View {
+        if let onSave {
+            Button(action: onSave) {
+                Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                    .font(.system(size: 16))
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .octonautActionPill(theme: theme)
+            .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
+            .accessibilityLabel(post.isSaved ? "Unsave post" : "Save post")
         }
     }
 

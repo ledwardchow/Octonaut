@@ -43,6 +43,9 @@ struct SettingsDetailView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautRootWidth) private var rootWidth
+    @Environment(\.octonautRootHeight) private var rootHeight
+    @Environment(\.octonautRootIsRegular) private var rootIsRegular
     @State private var showingReset = false
     @State private var showingAppReset = false
     @State private var showingSettingsReset = false
@@ -202,6 +205,22 @@ struct SettingsDetailView: View {
                         get: { dependencies.settings.showBottomNavigationOnLargeScreens },
                         set: { dependencies.settings.showBottomNavigationOnLargeScreens = $0 }
                     ))
+                }
+                if DuoLayout.isEligible(
+                    isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+                    isRegular: rootIsRegular,
+                    rootWidth: rootWidth, rootHeight: rootHeight
+                ) {
+                    Toggle("Feed on left when viewing posts", isOn: Binding(
+                        get: { dependencies.settings.feedOnLeftWhenViewingPosts },
+                        set: { dependencies.settings.feedOnLeftWhenViewingPosts = $0 }
+                    ))
+                    if dependencies.settings.feedOnLeftWhenViewingPosts {
+                        Button("Reset column widths") {
+                            dependencies.settings.duoFeedFraction = SettingsStore.defaultDuoFeedFraction
+                            dependencies.settings.duoCommunityWidth = SettingsStore.defaultDuoCommunityWidth
+                        }
+                    }
                 }
                 Text("Shows communities, the selected feed, and post details in separate columns on iPad and wide inner displays.")
                     .font(.footnote)

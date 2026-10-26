@@ -1,4 +1,12 @@
 Changes in current build:
+New posts now open at the top.
+Restored translucent feed headers in Duo reading view.
+Aligned Duo headers show post titles while scrolling.
+Duo feed-on-left defaults on, with both dividers resizable.
+Widened divider touch targets and fixed resize jumps.
+Adjusted touch feedback when swiping the Duo feed.
+Fixed Duo search focus and aligned keyboard dismissal controls.
+Removed the Posts heading on iPhone.
 Added a welcome screen before Reddit sign-in.
 Login warning explains why sign-in appears automatically.
 Login now shows only username and password, without gaps.
