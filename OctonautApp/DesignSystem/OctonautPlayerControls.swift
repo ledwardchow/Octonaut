@@ -138,6 +138,16 @@ struct OctonautPlayerControls: View {
             let time = player.currentTime().seconds
             if time.isFinite, time >= 0 { currentTime = time }
         }
+        // The viewer behind this is black whatever the system is set to, so
+        // the chrome on top of it is dark whatever the system is set to.
+        //
+        // Glass takes its material from the colour scheme rather than from
+        // what is behind it, so in light mode these capsules render pale --
+        // under symbols and time labels that are white for the black surface
+        // they sit on. Setting the scheme rather than tinting the glass: a
+        // tint on interactive glass reads as a button stuck in its pressed
+        // state, and the symbols would still be wrong on anything untinted.
+        .environment(\.colorScheme, .dark)
     }
 
     private var transportRow: some View {
