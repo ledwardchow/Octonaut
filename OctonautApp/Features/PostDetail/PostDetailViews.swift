@@ -1,12 +1,29 @@
 import SwiftUI
 import UIKit
 
+private struct OctonautDuoPostDetailKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var octonautDuoPostDetail: Bool {
+        get { self[OctonautDuoPostDetailKey.self] }
+        set { self[OctonautDuoPostDetailKey.self] = newValue }
+    }
+}
+
+enum OctonautPostDetailSpace: Hashable {
+    case viewport
+}
+
 @MainActor
 struct PostDetailView: View {
     let post: PostCardModel
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautDuoPostDetail) private var usesDuoPostDetail
+    @State private var titleHasScrolledPast = false
     @State private var commentSort = "Best"
     @State private var composerTarget: CommentComposerTarget?
     @State private var isMediaViewerPresented = false
@@ -58,7 +75,8 @@ struct PostDetailView: View {
                         isMediaViewerPresented = true
                     },
                     onCommunityOpen: { router.push(.community(currentPost.community)) },
-                    communityOpenAccessibilityHint: "Opens the subreddit"
+                    communityOpenAccessibilityHint: "Opens the subreddit",
+                    onTitleBottomChange: usesDuoPostDetail ? { titleHasScrolledPast = $0 <= DuoLayout.columnHeaderHeight } : nil
                 )
                 .padding(.top, 4)
 
@@ -190,6 +208,24 @@ struct PostDetailView: View {
                 }
             }
         }
+        .id(post.id)
+        .coordinateSpace(name: OctonautPostDetailSpace.viewport)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if usesDuoPostDetail && !store.isBlockedAuthor(currentPost.author) {
+                Text(titleHasScrolledPast ? currentPost.title : "Post")
+                    .font(.headline)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .frame(height: DuoLayout.columnHeaderHeight)
+                    .background(.regularMaterial)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("duo-post-header")
+                    .allowsHitTesting(false)
+            }
+        }
+        .ignoresSafeArea(.container, edges: usesDuoPostDetail ? .top : [])
+        .onChange(of: post.id) { _, _ in titleHasScrolledPast = false }
         .opacity(store.isBlockedAuthor(currentPost.author) ? 0 : 1)
         .allowsHitTesting(!store.isBlockedAuthor(currentPost.author))
         .accessibilityHidden(store.isBlockedAuthor(currentPost.author))
@@ -199,7 +235,7 @@ struct PostDetailView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
-        .navigationTitle("Post")
+        .navigationTitle(usesDuoPostDetail ? "" : "Post")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !store.isBlockedAuthor(currentPost.author) {

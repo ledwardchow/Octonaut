@@ -2,6 +2,85 @@ import SwiftUI
 import UIKit
 import Observation
 
+private struct OctonautRootWidthKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private struct OctonautRootHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+private struct OctonautRootRegularKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var octonautRootWidth: CGFloat {
+        get { self[OctonautRootWidthKey.self] }
+        set { self[OctonautRootWidthKey.self] = newValue }
+    }
+    var octonautRootHeight: CGFloat {
+        get { self[OctonautRootHeightKey.self] }
+        set { self[OctonautRootHeightKey.self] = newValue }
+    }
+    var octonautRootIsRegular: Bool {
+        get { self[OctonautRootRegularKey.self] }
+        set { self[OctonautRootRegularKey.self] = newValue }
+    }
+}
+
+@MainActor
+struct DuoLayout {
+    enum Mode: Equatable { case browsing, reading, otherDetail }
+    static let minimumWidth: CGFloat = 620
+    static let dividerWidth: CGFloat = 1
+    static let dividerHitWidth: CGFloat = 44
+    static let dividerSwipeExclusion = dividerHitWidth / 2 + 4
+    static let columnHeaderHeight: CGFloat = 60
+
+    static func isEligible(isPhone: Bool, isRegular: Bool, rootWidth: CGFloat, rootHeight: CGFloat) -> Bool {
+        isPhone && isRegular && rootWidth.isFinite && rootHeight.isFinite
+            && rootWidth >= minimumWidth && rootHeight >= 600
+    }
+
+    static func feedWidth(availableWidth: CGFloat, fraction: Double) -> CGFloat {
+        guard availableWidth.isFinite else { return 280 }
+        let space = max(0, availableWidth - dividerWidth)
+        let minimumFeed: CGFloat = availableWidth < 700 ? 280 : 320
+        let minimumDetail: CGFloat = availableWidth < 700 ? 320 : 360
+        let upper = max(minimumFeed, space - minimumDetail)
+        return min(upper, max(minimumFeed, space * SettingsStore.safeDuoFeedFraction(fraction)))
+    }
+
+    static func communityWidth(availableWidth: CGFloat, storedWidth: Double) -> CGFloat {
+        let minimumFeed: CGFloat = availableWidth < 700 ? 280 : 320
+        return min(CGFloat(SettingsStore.safeDuoCommunityWidth(storedWidth)),
+                   max(220, availableWidth - dividerWidth - minimumFeed))
+    }
+
+    static func shouldClosePost(translation: CGSize, startX: CGFloat, feedWidth: CGFloat) -> Bool {
+        startX < feedWidth - dividerSwipeExclusion && translation.width > 80
+            && translation.width > abs(translation.height) * 1.5
+    }
+
+    static func mode(for path: [FeatureRoute]) -> Mode {
+        guard let route = path.last else { return .browsing }
+        switch route {
+        case .post, .postURL: return .reading
+        default: return .otherDetail
+        }
+    }
+
+    static func savedFraction(availableWidth: CGFloat, desiredFeedWidth: CGFloat) -> Double {
+        guard availableWidth.isFinite, availableWidth > dividerWidth else {
+            return SettingsStore.defaultDuoFeedFraction
+        }
+        let clamped = feedWidth(availableWidth: availableWidth,
+                                fraction: Double(desiredFeedWidth / (availableWidth - dividerWidth)))
+        return Double(clamped / (availableWidth - dividerWidth))
+    }
+}
+
 @MainActor
 @Observable
 final class OctonautFeatureRouter {
@@ -86,6 +165,22 @@ final class PostsSplitState {
             sidebarCommunity = selectedFeed.kind == .community ? selectedFeed.name : nil
         }
     }
+
+    func consumeSelectionRoutes(in router: OctonautFeatureRouter) {
+        while let route = router.path.last, select(route) {
+            router.path.removeLast()
+        }
+        if case .feed(let descriptor)? = router.path.first {
+            selectFeed(descriptor)
+            router.path.removeFirst()
+        }
+        updateContext(for: router.path.last)
+    }
+
+    func restoreCompactFeedOrigin(in router: OctonautFeatureRouter) {
+        guard !router.path.contains(where: { if case .feed = $0 { return true }; return false }) else { return }
+        router.path.insert(.feed(selectedFeed), at: 0)
+    }
 }
 
 /// The app shell keeps a separate router for each tab. The App target can use
@@ -99,6 +194,7 @@ struct OctonautTabsView: View {
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var rootSize: CGSize = .zero
     @State private var selectedTab: AppTab
     @State private var postsRouter: OctonautFeatureRouter
     @State private var inboxRouter = OctonautFeatureRouter()
@@ -150,6 +246,18 @@ struct OctonautTabsView: View {
             }
         }
         .tint(.orange)
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onAppear { rootSize = geometry.size }
+                    .onChange(of: geometry.size) { _, size in rootSize = size }
+            }
+            // Keyboard avoidance must not switch layouts and remove the focused field.
+            .ignoresSafeArea(.keyboard)
+        }
+        .environment(\.octonautRootWidth, rootSize.width)
+        .environment(\.octonautRootHeight, rootSize.height)
+        .environment(\.octonautRootIsRegular, OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass))
         .background(Color(uiColor: .systemBackground))
         .loginRequiredModal(isPresented: Binding(
             get: { dependencies.accounts.showingLoginRequired },
@@ -260,15 +368,15 @@ struct OctonautTabsView: View {
     }
 
     private var usesFloatingTabBar: Bool {
-        OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
-            && (UIDevice.current.userInterfaceIdiom == .pad
-                || dependencies.settings.showBottomNavigationOnLargeScreens)
+        let regular = OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+        return regular && (UIDevice.current.userInterfaceIdiom == .pad
+            || dependencies.settings.showBottomNavigationOnLargeScreens)
     }
 
     private var usesSidebarTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
             && UIDevice.current.userInterfaceIdiom != .pad
-            && !dependencies.settings.showBottomNavigationOnLargeScreens
+            && !usesFloatingTabBar
     }
 
     private var tabSelection: Binding<AppTab> {
@@ -436,14 +544,33 @@ private struct AdaptivePostsTabView: View {
     let splitState: PostsSplitState
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.octonautRootWidth) private var rootWidth
+    @Environment(\.octonautRootHeight) private var rootHeight
+    @Environment(\.octonautRootIsRegular) private var rootIsRegular
+
+    private var usesDuoLayout: Bool {
+        dependencies.settings.useSplitViewOnIPad
+            && dependencies.settings.feedOnLeftWhenViewingPosts
+            && DuoLayout.isEligible(
+                isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+                isRegular: rootIsRegular,
+                rootWidth: rootWidth, rootHeight: rootHeight
+            )
+    }
+
+    @State private var splitWasShown = false
 
     var body: some View {
         @Bindable var router = router
 
-        if OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+        if usesDuoLayout {
+            DuoPostsView(store: store, router: router, state: splitState)
+                .onAppear { splitWasShown = true; consumeSelectionRoutes() }
+                .onChange(of: router.path) { _, _ in consumeSelectionRoutes() }
+        } else if OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
             && dependencies.settings.useSplitViewOnIPad {
             PostsSplitView(store: store, router: router, state: splitState)
-                .onAppear(perform: consumeSelectionRoutes)
+                .onAppear { splitWasShown = true; consumeSelectionRoutes() }
                 .onChange(of: router.path) { _, _ in consumeSelectionRoutes() }
         } else {
             NavigationStack(path: $router.path) {
@@ -452,14 +579,267 @@ private struct AdaptivePostsTabView: View {
                         OctonautDestinationView(route: route, store: store, router: router)
                     }
             }
+            .onAppear(perform: restoreCompactFeedOrigin)
         }
     }
 
     private func consumeSelectionRoutes() {
-        while let route = router.path.last, splitState.select(route) {
-            router.path.removeLast()
+        splitState.consumeSelectionRoutes(in: router)
+    }
+
+    private func restoreCompactFeedOrigin() {
+        guard splitWasShown else { return }
+        splitWasShown = false
+        splitState.restoreCompactFeedOrigin(in: router)
+    }
+}
+
+@MainActor
+private struct DuoPostsView: View {
+    let store: OctonautFeatureStore
+    let router: OctonautFeatureRouter
+    let state: PostsSplitState
+    @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @GestureState private var resizeGestureActive = false
+    @State private var resizeStartWidth: CGFloat?
+    @State private var proposedColumnWidth: CGFloat?
+
+    var body: some View {
+        @Bindable var router = router
+        let mode = DuoLayout.mode(for: router.path)
+
+        GeometryReader { geometry in
+            let width = geometry.size.width
+            let hasDetail = mode != .browsing
+            let divider: CGFloat = hasDetail ? DuoLayout.dividerWidth : 1
+            let storedWidth = DuoLayout.feedWidth(
+                availableWidth: width,
+                fraction: dependencies.settings.duoFeedFraction
+            )
+            let minimumFeed: CGFloat = width < 700 ? 280 : 320
+            let communityWidth = DuoLayout.communityWidth(availableWidth: width, storedWidth:
+                !hasDetail ? Double(proposedColumnWidth ?? CGFloat(dependencies.settings.duoCommunityWidth)) : dependencies.settings.duoCommunityWidth)
+            let feedWidth = hasDetail
+                ? DuoLayout.feedWidth(availableWidth: width, fraction: Double((proposedColumnWidth ?? storedWidth) / (width - divider)))
+                : max(minimumFeed, width - communityWidth - divider)
+
+            if width < DuoLayout.minimumWidth {
+                PostsSplitView(store: store, router: router, state: state)
+            } else {
+                HStack(spacing: 0) {
+                    NavigationStack {
+                        PostsRootView(
+                            store: store,
+                            router: router,
+                            onSelectFeed: selectFeed,
+                            selectedFeed: state.selectedFeed,
+                            usesDuoSidebar: true
+                        )
+                        .ignoresSafeArea(.container, edges: .horizontal)
+                    }
+                    .frame(width: hasDetail ? 0 : communityWidth)
+                    .clipped()
+                    .accessibilityHidden(hasDetail)
+
+                    if !hasDetail {
+                        dividerHandle(width: width, displayedWidth: communityWidth, isReading: false)
+                    }
+
+                    NavigationStack {
+                        selectedFeedView
+                            .ignoresSafeArea(.container, edges: hasDetail ? .horizontal : [])
+                    }
+                    .frame(width: feedWidth)
+                    .gesture(DuoFeedCloseGesture(isEnabled: mode == .reading && resizeStartWidth == nil,
+                                                 feedWidth: feedWidth) { router.popToRoot() })
+
+                    if hasDetail {
+                        dividerHandle(width: width, displayedWidth: feedWidth, isReading: true)
+                    }
+
+                    NavigationStack(path: $router.path) {
+                        Color.clear
+                            .navigationDestination(for: FeatureRoute.self) { route in
+                                OctonautDestinationView(route: route, store: store, router: router)
+                                    .environment(\.octonautDuoPostDetail, true)
+                            }
+                    }
+                    .frame(width: hasDetail ? max(0, width - feedWidth - divider) : 0)
+                    .clipped()
+                    .accessibilityHidden(!hasDetail)
+                }
+                .frame(width: width, alignment: .leading)
+                .coordinateSpace(name: "duo-columns")
+                .onChange(of: resizeGestureActive) { _, active in
+                    if !active {
+                        Task { @MainActor in
+                            await Task.yield()
+                            if !resizeGestureActive {
+                                resizeStartWidth = nil
+                                proposedColumnWidth = nil
+                            }
+                        }
+                    }
+                }
+                .onChange(of: mode) { _, _ in
+                    resizeStartWidth = nil
+                    proposedColumnWidth = nil
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: mode)
+            }
         }
-        splitState.updateContext(for: router.path.last)
+        .ignoresSafeArea(.container, edges: .bottom)
+    }
+
+    @ViewBuilder
+    private var selectedFeedView: some View {
+        if state.selectedFeed.kind == .community {
+            CommunityView(
+                name: state.selectedFeed.name,
+                store: store,
+                router: router,
+                onSelectPost: selectPost,
+                onShowCommunities: DuoLayout.mode(for: router.path) == .browsing ? nil : { router.popToRoot() }
+            )
+        } else {
+            FeedView(
+                descriptor: state.selectedFeed,
+                store: store,
+                router: router,
+                onSelectPost: selectPost,
+                onShowCommunities: DuoLayout.mode(for: router.path) == .browsing ? nil : { router.popToRoot() }
+            )
+        }
+    }
+
+    private func dividerHandle(width: CGFloat, displayedWidth: CGFloat, isReading: Bool) -> some View {
+        Rectangle()
+            .fill(Color(uiColor: .separator))
+            .frame(width: DuoLayout.dividerWidth)
+            .overlay {
+                Rectangle()
+                    .fill(.clear)
+                    .frame(width: DuoLayout.dividerHitWidth)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 2, coordinateSpace: .named("duo-columns"))
+                            .updating($resizeGestureActive) { _, active, _ in active = true }
+                            .onChanged { value in
+                                if resizeStartWidth == nil { resizeStartWidth = displayedWidth }
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    proposedColumnWidth = (resizeStartWidth ?? displayedWidth) + value.translation.width
+                                }
+                            }
+                            .onEnded { value in
+                                var transaction = Transaction()
+                                transaction.disablesAnimations = true
+                                withTransaction(transaction) {
+                                    saveColumnWidth((resizeStartWidth ?? displayedWidth) + value.translation.width,
+                                                    availableWidth: width, isReading: isReading)
+                                    proposedColumnWidth = nil
+                                    resizeStartWidth = nil
+                                }
+                            }
+                    )
+                    .accessibilityElement()
+                    .accessibilityLabel(isReading ? "Feed column width" : "Community column width")
+                    .accessibilityValue("\(Int(displayedWidth.rounded())) points")
+                    .accessibilityAdjustableAction { direction in
+                        saveColumnWidth(displayedWidth + (direction == .increment ? 20 : -20),
+                                        availableWidth: width, isReading: isReading)
+                    }
+            }
+            .zIndex(1)
+    }
+
+    private func saveColumnWidth(_ desiredWidth: CGFloat, availableWidth: CGFloat, isReading: Bool) {
+        if isReading {
+            dependencies.settings.duoFeedFraction = DuoLayout.savedFraction(
+                availableWidth: availableWidth, desiredFeedWidth: desiredWidth)
+        } else {
+            dependencies.settings.duoCommunityWidth = Double(DuoLayout.communityWidth(
+                availableWidth: availableWidth, storedWidth: Double(desiredWidth)))
+        }
+    }
+
+    private func selectFeed(_ descriptor: FeedDescriptorModel) {
+        if state.selectedFeed != descriptor { store.clearVisibleFeed() }
+        else { store.clearPostDetail() }
+        router.popToRoot()
+        state.selectFeed(descriptor)
+    }
+
+    private func selectPost(_ post: PostCardModel) {
+        state.selectPost(post)
+        router.path = [.post(post)]
+    }
+}
+
+private struct DuoFeedCloseGesture: UIGestureRecognizerRepresentable {
+    var isEnabled: Bool
+    var feedWidth: CGFloat
+    var closePost: () -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(converter: converter, feedWidth: feedWidth)
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.maximumNumberOfTouches = 1
+        recognizer.cancelsTouchesInView = true
+        recognizer.delaysTouchesBegan = true
+        recognizer.delegate = context.coordinator
+        recognizer.isEnabled = isEnabled
+        return recognizer
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        context.coordinator.feedWidth = feedWidth
+        recognizer.isEnabled = isEnabled
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        if recognizer.state == .cancelled || recognizer.state == .failed {
+            context.coordinator.startLocation = nil
+            return
+        }
+        guard recognizer.state == .ended, let start = context.coordinator.startLocation else { return }
+        defer { context.coordinator.startLocation = nil }
+        // Translation can reset when the recognizer begins, so retain the touch origin.
+        let end = context.converter.localLocation
+        if DuoLayout.shouldClosePost(translation: CGSize(width: end.x - start.x, height: end.y - start.y),
+                                     startX: start.x, feedWidth: feedWidth) {
+            closePost()
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        let converter: CoordinateSpaceConverter
+        var feedWidth: CGFloat
+        var startLocation: CGPoint?
+
+        init(converter: CoordinateSpaceConverter, feedWidth: CGFloat) {
+            self.converter = converter
+            self.feedWidth = feedWidth
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let velocity = converter.localVelocity, let translation = converter.localTranslation else { return false }
+            let start = CGPoint(x: converter.localLocation.x - translation.x,
+                                y: converter.localLocation.y - translation.y)
+            let accepted = start.x < feedWidth - DuoLayout.dividerSwipeExclusion && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
+            startLocation = accepted ? start : nil
+            return accepted
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            otherGestureRecognizer is UIPanGestureRecognizer
+        }
     }
 }
 

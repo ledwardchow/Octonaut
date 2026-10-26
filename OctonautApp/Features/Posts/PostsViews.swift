@@ -6,6 +6,7 @@ struct PostsRootView: View {
     let router: OctonautFeatureRouter
     var onSelectFeed: ((FeedDescriptorModel) -> Void)? = nil
     var selectedFeed: FeedDescriptorModel? = nil
+    var usesDuoSidebar = false
     @Environment(AppDependencies.self) private var dependencies
     @State private var communityQuery = ""
     @State private var editingFeed: CustomFeed?
@@ -20,6 +21,70 @@ struct PostsRootView: View {
     }
 
     var body: some View {
+        Group {
+            if usesDuoSidebar {
+                VStack(spacing: 0) {
+                    CommunitySearchField(text: $communityQuery, isPresented: DuoLayout.mode(for: router.path) == .browsing)
+                        .frame(height: 44)
+                        .padding(16)
+                    communityList
+                        .scrollDismissesKeyboard(.interactively)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    addMenu
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular, in: Circle())
+                        .padding(16)
+                        .accessibilityIdentifier("duo-community-add")
+                }
+                .toolbar(.hidden, for: .navigationBar)
+                .ignoresSafeArea(.container, edges: [.horizontal, .bottom])
+            } else {
+                communityList
+                    .navigationTitle(UIDevice.current.userInterfaceIdiom == .pad ? "Posts" : "")
+                    .searchable(text: $communityQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a community")
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { addMenu }
+                    }
+            }
+        }
+        .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in editingFeed = nil }
+        .confirmationDialog(
+            "Delete \"\(feedToDelete?.name ?? "")\"?",
+            isPresented: Binding(get: { feedToDelete != nil }, set: { if !$0 { feedToDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: feedToDelete
+        ) { feed in
+            Button("Delete Feed", role: .destructive) { deleteFeed(feed) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This also removes it from your other devices through iCloud.")
+        }
+        .sheet(item: $editingFeed) { feed in
+            CustomFeedEditorView(feed: feed, communities: store.communities) { saved in
+                if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
+                    dependencies.settings.customFeeds[index] = saved
+                } else {
+                    dependencies.settings.customFeeds.append(saved)
+                }
+                feedsExpanded = true
+                if let onSelectFeed { onSelectFeed(saved.descriptor) }
+                else {
+                    store.clearVisibleFeed()
+                    router.push(.feed(saved.descriptor))
+                }
+            }
+        }
+        .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
+            switch sheet {
+            case .composer(let kind, let community): ComposerView(kind: kind, store: store, community: community ?? "")
+            case .quickCommunitySearch: QuickCommunitySearchView(store: store, router: router, onSelectFeed: onSelectFeed)
+            case .quickAccountSwitcher: QuickAccountSwitcherView(store: store)
+            }
+        }
+    }
+
+    private var communityList: some View {
         List {
             Section {
                 if feedsExpanded {
@@ -74,56 +139,19 @@ struct PostsRootView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Posts")
-        .searchable(text: $communityQuery, placement: .navigationBarDrawer(displayMode: .always), prompt: "Find a community")
         .refreshable { await store.refreshCommunities(forceRefresh: true) }
         .task(id: store.accountContextKey) { await store.refreshCommunities() }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button("New Custom Feed", systemImage: "rectangle.stack.badge.plus") { editingFeed = CustomFeed(name: "", communities: []) }
-                    Button { router.presentedSheet = .composer(.post, community: nil) } label: { Label("New Post", systemImage: "square.and.pencil") }
-                    Button { router.push(.gallery(.home)) } label: { Label("Gallery Mode", systemImage: "square.grid.2x2") }
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .accessibilityLabel("Add")
-            }
+    }
+
+    private var addMenu: some View {
+        Menu {
+            Button("New Custom Feed", systemImage: "rectangle.stack.badge.plus") { editingFeed = CustomFeed(name: "", communities: []) }
+            Button { router.presentedSheet = .composer(.post, community: nil) } label: { Label("New Post", systemImage: "square.and.pencil") }
+        } label: {
+            Image(systemName: "plus")
+                .frame(width: usesDuoSidebar ? 44 : nil, height: usesDuoSidebar ? 44 : nil)
         }
-        .onChange(of: dependencies.accounts.selectionGeneration) { _, _ in editingFeed = nil }
-        .confirmationDialog(
-            "Delete \"\(feedToDelete?.name ?? "")\"?",
-            isPresented: Binding(get: { feedToDelete != nil }, set: { if !$0 { feedToDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: feedToDelete
-        ) { feed in
-            Button("Delete Feed", role: .destructive) { deleteFeed(feed) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("This also removes it from your other devices through iCloud.")
-        }
-        .sheet(item: $editingFeed) { feed in
-            CustomFeedEditorView(feed: feed, communities: store.communities) { saved in
-                if let index = dependencies.settings.customFeeds.firstIndex(where: { $0.id == saved.id }) {
-                    dependencies.settings.customFeeds[index] = saved
-                } else {
-                    dependencies.settings.customFeeds.append(saved)
-                }
-                feedsExpanded = true
-                if let onSelectFeed { onSelectFeed(saved.descriptor) }
-                else {
-                    store.clearVisibleFeed()
-                    router.push(.feed(saved.descriptor))
-                }
-            }
-        }
-        .sheet(item: Binding(get: { router.presentedSheet }, set: { router.presentedSheet = $0 })) { sheet in
-            switch sheet {
-            case .composer(let kind, let community): ComposerView(kind: kind, store: store, community: community ?? "")
-            case .quickCommunitySearch: QuickCommunitySearchView(store: store, router: router, onSelectFeed: onSelectFeed)
-            case .quickAccountSwitcher: QuickAccountSwitcherView(store: store)
-            }
-        }
+        .accessibilityLabel("Add")
     }
 
     @ViewBuilder
@@ -286,6 +314,7 @@ struct FeedView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     var onSelectPost: ((PostCardModel) -> Void)? = nil
+    var onShowCommunities: (() -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showingLogin = false
@@ -416,8 +445,37 @@ struct FeedView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarTitleMenu { sortMenuItems }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                feedMenu
+            if onShowCommunities == nil {
+                ToolbarItem(placement: .topBarTrailing) { feedMenu }
+            }
+        }
+        .toolbar(onShowCommunities == nil ? .visible : .hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let onShowCommunities {
+                HStack(spacing: 8) {
+                    Button("Communities", systemImage: "chevron.left", action: onShowCommunities)
+                        .labelStyle(.iconOnly)
+                        .frame(width: 44, height: 44)
+                        .glassEffect(.regular, in: Circle())
+                    Menu { sortMenuItems } label: {
+                        VStack(spacing: 2) {
+                            HStack(spacing: 4) {
+                                Text(descriptor.name).font(.headline).lineLimit(1)
+                                Image(systemName: "chevron.down").font(.caption2)
+                            }
+                            Text(sortSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityLabel("Sort \(descriptor.name)")
+                    feedMenu
+                        .glassEffect(.regular, in: Circle())
+                }
+                .padding(.horizontal, 16)
+                .frame(height: DuoLayout.columnHeaderHeight)
+                .background(.bar)
+                .accessibilityIdentifier("duo-feed-header")
             }
         }
         .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
@@ -544,6 +602,7 @@ struct FeedView: View {
             }
         } label: {
             Image(systemName: "ellipsis.circle")
+                .frame(width: onShowCommunities == nil ? nil : 44, height: onShowCommunities == nil ? nil : 44)
         }
         .accessibilityLabel("Feed options")
     }
@@ -659,13 +718,15 @@ struct CommunityView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     var onSelectPost: ((PostCardModel) -> Void)? = nil
+    var onShowCommunities: (() -> Void)? = nil
 
     var body: some View {
         FeedView(
             descriptor: FeedDescriptorModel(kind: .community, name: name),
             store: store,
             router: router,
-            onSelectPost: onSelectPost
+            onSelectPost: onSelectPost,
+            onShowCommunities: onShowCommunities
         )
             .task(id: IDNormalization.community(name)) {
                 await store.recordCommunityVisit(name)
@@ -823,5 +884,60 @@ private struct CustomFeedEditorView: View {
         if !feed.communities.contains(name) { feed.communities.append(name) }
         communityInput = ""
         inputError = nil
+    }
+}
+
+private struct CommunitySearchField: UIViewRepresentable {
+    @Binding var text: String
+    var isPresented: Bool
+
+    func makeUIView(context: Context) -> UISearchTextField {
+        let field = UISearchTextField()
+        field.placeholder = "Find a community"
+        field.autocapitalizationType = .none
+        field.autocorrectionType = .no
+        field.returnKeyType = .search
+        field.delegate = context.coordinator
+        let keyboardAccessory = UIView(frame: CGRect(x: 0, y: 0, width: 0, height: 60))
+        keyboardAccessory.autoresizingMask = .flexibleWidth
+        let done = UIButton(configuration: .glass())
+        done.setTitle("Done", for: .normal)
+        done.accessibilityIdentifier = "duo-search-keyboard-done"
+        done.translatesAutoresizingMaskIntoConstraints = false
+        done.addTarget(field, action: #selector(UIResponder.resignFirstResponder), for: .touchUpInside)
+        keyboardAccessory.addSubview(done)
+        NSLayoutConstraint.activate([
+            done.trailingAnchor.constraint(equalTo: keyboardAccessory.trailingAnchor, constant: -16),
+            done.topAnchor.constraint(equalTo: keyboardAccessory.topAnchor, constant: 8),
+            done.bottomAnchor.constraint(equalTo: keyboardAccessory.bottomAnchor, constant: -8),
+            done.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+        ])
+        field.inputAccessoryView = keyboardAccessory
+        field.accessibilityIdentifier = "duo-community-search"
+        field.addTarget(context.coordinator, action: #selector(Coordinator.textChanged(_:)), for: .editingChanged)
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateUIView(_ field: UISearchTextField, context: Context) {
+        context.coordinator.text = $text
+        if field.text != text { field.text = text }
+        if !isPresented, field.isFirstResponder { field.resignFirstResponder() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, UITextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) { self.text = text }
+
+        func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+            textField.resignFirstResponder()
+        }
+
+        @objc func textChanged(_ field: UISearchTextField) {
+            text.wrappedValue = field.text ?? ""
+        }
     }
 }
