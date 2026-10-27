@@ -1,27 +1,3 @@
-New posts now open at the top.
-Restored translucent feed headers in Duo reading view.
-Aligned Duo headers show post titles while scrolling.
-Duo feed-on-left defaults on, with both dividers resizable.
-Widened divider touch targets and fixed resize jumps.
-Adjusted touch feedback when swiping the Duo feed.
-Fixed Duo search focus and aligned keyboard dismissal controls.
-Removed the Posts heading on iPhone.
-Added a welcome screen before Reddit sign-in.
-Login warning explains why sign-in appears automatically.
-Login now shows only username and password, without gaps.
-Removed extra login help and the welcome lock message.
-Native login recovery and sign-up open in your browser.
-Reddit's login close button no longer leaves Octonaut.
-Login opens only for confirmed Reddit browsing blocks.
-Fixed a crash when logging out on iPad.
-Blocked authors stay hidden in profiles and post details.
-Quick repeated votes and saves stay in order.
-Switching accounts clears old search and profile posts.
-Blocks no longer carry over to other accounts.
-Seen posts stay marked after a refresh.
-Profiles no longer show another profile's error.
-Inbox badge shows unread before opening Inbox.
-Mac Refresh now reloads the Inbox.
-Login check only follows secure Reddit redirects.
-Mac lightbox caption links now open.
-Mac lightbox resizes smoothly.
+Added a swipeable three-column layout for Duo.
+Fixed scrolling snapping back below summaries.
+Removed extra space above the Feeds header.

@@ -139,6 +139,7 @@ struct PostsRootView: View {
             }
         }
         .listStyle(.plain)
+        .contentMargins(.top, 0, for: .scrollContent)
         .refreshable { await store.refreshCommunities(forceRefresh: true) }
         .task(id: store.accountContextKey) { await store.refreshCommunities() }
     }
