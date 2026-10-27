@@ -594,11 +594,12 @@ enum RedditJSONCodec {
                 ?? (index == 0 ? targetURL : nil)
 
             if let candidateURL, isDirectImageURL(candidateURL) {
+                let dimensions = previewImageDimensions(candidate)
                 return .image(
                     url: candidateURL,
                     thumbnailURL: thumbnail(candidate),
-                    width: nil,
-                    height: nil
+                    width: dimensions?.width,
+                    height: dimensions?.height
                 )
             }
         }

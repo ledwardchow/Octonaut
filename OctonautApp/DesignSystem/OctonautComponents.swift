@@ -256,6 +256,13 @@ struct OctonautPostRow: View {
                     Text("•").font(.caption).foregroundStyle(theme.secondaryText)
                     OctonautUsernameLink(username: post.author, onOpen: onUserOpen).font(.caption).foregroundStyle(theme.secondaryText)
                 }
+                if post.isSeen {
+                    Text("•").font(.caption).foregroundStyle(theme.secondaryText).accessibilityHidden(true)
+                    Image(systemName: "eye")
+                        .font(.caption)
+                        .foregroundStyle(theme.secondaryText)
+                        .accessibilityLabel("Seen post")
+                }
                 Spacer()
                 if post.isSticky { OctonautPill(title: "Pinned", color: theme.moderator) }
                 if post.isNSFW { OctonautPill(title: "18+", color: theme.destructive) }
@@ -314,7 +321,6 @@ struct OctonautPostRow: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 13)
-        .opacity(post.isSeen ? 0.62 : 1)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -369,8 +375,8 @@ struct OctonautPostRow: View {
 
     private var ageControl: some View {
         OctonautIconLabel(
-            systemImage: post.isSeen ? "eye.slash" : "eye", title: post.age,
-            color: post.isSeen ? theme.seen : theme.secondaryText
+            systemImage: "clock", title: post.age,
+            color: theme.secondaryText
         )
         .padding(.horizontal, 6)
         .octonautActionPill(theme: theme)
@@ -534,6 +540,13 @@ struct OctonautCompactPostRow: View {
                     OctonautUsernameLink(username: post.author, onOpen: onUserOpen)
                         .font(.caption)
                         .foregroundStyle(theme.secondaryText)
+                    if post.isSeen {
+                        Text("•").foregroundStyle(theme.secondaryText).accessibilityHidden(true)
+                        Image(systemName: "eye")
+                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText)
+                            .accessibilityLabel("Seen post")
+                    }
                 }
                 .lineLimit(1)
                 if let authorFlair = post.authorFlair, !post.author.isEmpty {
@@ -554,7 +567,6 @@ struct OctonautCompactPostRow: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 9)
-        .opacity(post.isSeen ? 0.62 : 1)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(

@@ -112,6 +112,18 @@ enum OctonautImageCache {
             defer {
                 inFlightDecodes[url] = nil
             }
+#if DEBUG
+            if url.scheme == "octonaut-screenshot", url.host == "delayed-portrait-sizing" {
+                try await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled else { throw CancellationError() }
+                guard let fixtureURL = URL(string: "octonaut-screenshot://portrait-sizing"),
+                      let image = cachedImage(for: fixtureURL) else {
+                    throw URLError(.cannotDecodeContentData)
+                }
+                decodedImages.setObject(image, forKey: url as NSURL, cost: image.decodedByteCount)
+                return image
+            }
+#endif
             let data = try await OctonautImageDataCache.shared.data(for: url)
             guard !Task.isCancelled else { throw CancellationError() }
             let image = try await decoded(data: data, maxPixelSize: defaultMaxPixelSize)
@@ -165,6 +177,23 @@ enum OctonautImageCache {
 
     static func cachedImage(for url: URL) -> UIImage? {
 #if DEBUG
+        if url.scheme == "octonaut-screenshot", ["portrait-sizing", "landscape-sizing"].contains(url.host ?? "") {
+            if let cached = decodedImages.object(forKey: url as NSURL) { return cached }
+            let size = url.host == "portrait-sizing" ? CGSize(width: 100, height: 400) : CGSize(width: 400, height: 100)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(origin: .zero, size: size))
+                UIColor.systemOrange.setFill()
+                context.fill(CGRect(x: size.width / 2, y: 0, width: size.width / 2, height: size.height))
+                UIColor.black.setStroke()
+                context.cgContext.setLineWidth(4)
+                context.cgContext.stroke(CGRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2))
+            }
+            decodedImages.setObject(image, forKey: url as NSURL)
+            return image
+        }
         if url.scheme == "octonaut-screenshot", let name = url.host,
            let path = Bundle.main.path(forResource: name, ofType: "png") {
             return UIImage(contentsOfFile: path)

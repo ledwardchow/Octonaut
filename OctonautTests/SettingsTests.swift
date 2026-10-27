@@ -4,6 +4,182 @@ import SwiftUI
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testAppendingFeedPostsAndUpdatingRowsKeepsScrollPosition() async throws {
+        let (store, host, window, list) = try await makeScrollableFeed()
+        defer { window.isHidden = true }
+        let offset = list.contentOffset.y
+
+        store.posts.append(contentsOf: (30..<40).map(syntheticFeedPost))
+        store.posts[4].score += 1
+        store.posts[8].isSeen = true
+        try await Task.sleep(for: .milliseconds(350))
+        host.view.layoutIfNeeded()
+
+        XCTAssertEqual(store.posts.count, 40)
+        XCTAssertEqual(list.contentOffset.y, offset, accuracy: 8)
+    }
+
+    func testRemovingFirstFeedPostDoesNotScrollBackToTop() async throws {
+        let (store, host, window, list) = try await makeScrollableFeed()
+        defer { window.isHidden = true }
+        let offset = list.contentOffset.y
+
+        store.posts.removeFirst()
+        try await Task.sleep(for: .milliseconds(350))
+        host.view.layoutIfNeeded()
+
+        XCTAssertEqual(store.posts.first?.id, "t3_scroll-1")
+        XCTAssertGreaterThan(list.contentOffset.y, offset * 0.5,
+                             "Removing an offscreen row must not return the reader to the top")
+    }
+
+    func testDelayedFeedImageLoadingKeepsVisibleRowsInPlace() async throws {
+        let (store, host, window, list) = try await makeScrollableFeed(includesDelayedImages: true)
+        defer { window.isHidden = true }
+        list.setContentOffset(CGPoint(x: 0, y: 100), animated: false)
+        try await Task.sleep(for: .milliseconds(50))
+        let imageURL = try XCTUnwrap(store.posts.first?.mediaURL)
+        XCTAssertNil(OctonautImageCache.cachedImage(for: imageURL))
+        let offset = list.contentOffset.y
+        let anchorPath = IndexPath(item: 1, section: 0)
+        let anchorY = try XCTUnwrap(list.layoutAttributesForItem(at: anchorPath)).frame.minY - offset
+
+        for _ in 0..<30 where OctonautImageCache.cachedImage(for: imageURL) == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.layoutIfNeeded()
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: imageURL))
+        XCTAssertEqual(list.contentOffset.y, offset, accuracy: 1)
+        let loadedY = try XCTUnwrap(list.layoutAttributesForItem(at: anchorPath)).frame.minY - list.contentOffset.y
+        XCTAssertEqual(loadedY, anchorY, accuracy: 1)
+    }
+
+    private func makeScrollableFeed(includesDelayedImages: Bool = false) async throws -> (OctonautFeatureStore, UIViewController, UIWindow, UICollectionView) {
+        let dependencies = AppDependencies.preview()
+        dependencies.settings.autoMarkSeenWhileScrolling = false
+        let store = OctonautFeatureStore(screenshotMode: true)
+        store.posts = (0..<30).map(syntheticFeedPost)
+        if includesDelayedImages {
+            store.posts[0].hasMedia = true
+            store.posts[0].mediaKind = "image"
+            store.posts[0].mediaAspectRatio = 0.25
+            store.posts[0].mediaURL = URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")
+        }
+        let host = UIHostingController(rootView: NavigationStack {
+            FeedView(descriptor: .popular, store: store, router: OctonautFeatureRouter())
+        }.environment(dependencies))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(includesDelayedImages ? 100 : 350))
+        host.view.layoutIfNeeded()
+        func findList(_ view: UIView) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            return view.subviews.lazy.compactMap(findList).first
+        }
+        let list = try XCTUnwrap(findList(host.view))
+        XCTAssertGreaterThan(list.contentSize.height, list.bounds.height + 1000)
+        list.setContentOffset(CGPoint(x: 0, y: 1200), animated: false)
+        try await Task.sleep(for: .milliseconds(includesDelayedImages ? 50 : 150))
+        XCTAssertGreaterThan(list.contentOffset.y, 1000)
+        return (store, host, window, list)
+    }
+
+    private func syntheticFeedPost(_ index: Int) -> PostCardModel {
+        PostCardModel(
+            id: "t3_scroll-\(index)", community: "swift", author: "fixture",
+            title: "Synthetic post \(index)", body: "Text only feed row \(index).",
+            score: index, comments: 0, age: "1h", vote: 0, isSaved: false,
+            isSeen: false, isNSFW: false, isSpoiler: false, isSticky: false,
+            isVideo: false, hasMedia: false, mediaTitle: "",
+            shareURL: URL(string: "https://www.reddit.com/r/swift/comments/scroll\(index)")!
+        )
+    }
+
+    func testInlinePortraitMediaFitsViewportHeight() async throws {
+        try await assertInlineMediaSize(image: "portrait-sizing", maximumHeight: 600, expectedHeight: 600)
+    }
+
+    func testInlineLandscapeMediaKeepsNaturalHeight() async throws {
+        try await assertInlineMediaSize(image: "landscape-sizing", maximumHeight: 600, expectedHeight: 100)
+    }
+
+    func testInlinePortraitMediaFitsShortViewport() async throws {
+        try await assertInlineMediaSize(image: "portrait-sizing", maximumHeight: 250, expectedHeight: 250)
+    }
+
+    func testInlineDetailMediaKeepsUncappedHeight() async throws {
+        try await assertInlineMediaSize(image: "portrait-sizing", maximumHeight: nil, expectedHeight: 1600)
+    }
+
+    func testInlineImageReservesItsLoadedHeightWhileRequestIsPending() async throws {
+        try await assertDelayedInlineImageHeight(aspectRatio: 0.25, expectedHeight: 600)
+    }
+
+    func testInlineImageWithoutDimensionsKeepsFallbackHeightAfterLoading() async throws {
+        try await assertDelayedInlineImageHeight(aspectRatio: nil, expectedHeight: 225)
+    }
+
+    private func assertDelayedInlineImageHeight(aspectRatio: CGFloat?, expectedHeight: CGFloat) async throws {
+        let url = URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")!
+        var post = PostCardModel.screenshotCat
+        post.mediaURL = url
+        post.mediaAspectRatio = aspectRatio
+        var height: CGFloat = 0
+        let content = OctonautInlineMediaView(post: post, maximumHeight: 600)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            .frame(width: 400)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .environment(AppDependencies.preview())
+        let host = UIHostingController(rootView: content)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        host.view.layoutIfNeeded()
+        let loadingHeight = height
+        XCTAssertNil(OctonautImageCache.cachedImage(for: url))
+        XCTAssertEqual(loadingHeight, expectedHeight, accuracy: 1)
+
+        for _ in 0..<30 where OctonautImageCache.cachedImage(for: url) == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        host.view.layoutIfNeeded()
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: url), "The delayed synthetic image should finish loading")
+        XCTAssertEqual(height, loadingHeight, accuracy: 1)
+        XCTAssertEqual(height, expectedHeight, accuracy: 1)
+    }
+
+    private func assertInlineMediaSize(image: String, maximumHeight: CGFloat?, expectedHeight: CGFloat) async throws {
+        var post = PostCardModel.screenshotCat
+        post.mediaURL = URL(string: "octonaut-screenshot://\(image)")
+        post.mediaAspectRatio = image == "portrait-sizing" ? 0.25 : 4
+        var measuredSize = CGSize.zero
+        let content = OctonautInlineMediaView(post: post, maximumHeight: maximumHeight)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { measuredSize = $0 }
+            .frame(width: 400)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .environment(AppDependencies.preview())
+        let host = UIHostingController(rootView: content)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(measuredSize.width, 400, accuracy: 1)
+        XCTAssertEqual(measuredSize.height, expectedHeight, accuracy: 1)
+    }
+
     func testDuoSearchKeepsFocusWhenSoftwareKeyboardAppears() async throws {
         let previousFixture = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"]
         setenv("OCTONAUT_SCREENSHOT", "feeds", 1)
@@ -773,12 +949,14 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(SettingsStore(defaults: defaults).duoCommunityWidth, 360)
     }
 
-    func testChangingFilterIncrementsFilterRevision() {
-        let defaults = UserDefaults(suiteName: "OctonautTests.\(UUID())")!
+    func testHideReadPostsPersistsWithoutInvalidatingFeedCache() {
+        let suite = "OctonautTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
         let settings = SettingsStore(defaults: defaults)
         let before = settings.filterRevision
         settings.hideSeenPosts.toggle()
-        XCTAssertEqual(settings.filterRevision, before &+ 1)
+        XCTAssertTrue(SettingsStore(defaults: UserDefaults(suiteName: suite)!).hideSeenPosts)
+        XCTAssertEqual(settings.filterRevision, before)
     }
 
     func testThemeRoundTripsThroughDefaults() {

@@ -8,7 +8,7 @@ struct AppRootView: View {
         if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "media" {
             OctonautMediaViewer(post: .screenshotGallery)
         } else if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
-            OctonautTabsView(store: OctonautFeatureStore(screenshotMode: true))
+            OctonautTabsView(store: OctonautFeatureStore(settings: dependencies.settings, screenshotMode: true))
         } else {
             liveTabs
         }

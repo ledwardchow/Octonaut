@@ -711,6 +711,51 @@ struct OctonautMuxWarningBadge: View {
     }
 }
 
+struct OctonautMediaHeightLayout: Layout {
+    var maximumHeight: CGFloat?
+    var reservedAspectRatio: CGFloat? = nil
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        if let width = proposal.width, let reservedSize = reservedSize(for: width) {
+            return CGSize(width: width, height: reservedSize.height)
+        }
+        let naturalSize = content.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        let fittedSize = fittedSize(for: naturalSize)
+        return CGSize(width: proposal.width ?? fittedSize.width, height: fittedSize.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let content = subviews.first else { return }
+        let contentSize: CGSize
+        if let reservedSize = reservedSize(for: bounds.width) {
+            contentSize = reservedSize
+        } else {
+            let naturalSize = content.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+            contentSize = fittedSize(for: naturalSize)
+        }
+        content.place(
+            at: CGPoint(x: bounds.midX, y: bounds.midY),
+            anchor: .center,
+            proposal: ProposedViewSize(contentSize)
+        )
+    }
+
+    private func reservedSize(for width: CGFloat) -> CGSize? {
+        guard maximumHeight != nil, let reservedAspectRatio,
+              reservedAspectRatio.isFinite, reservedAspectRatio > 0 else { return nil }
+        return fittedSize(for: CGSize(width: width, height: width / reservedAspectRatio))
+    }
+
+    private func fittedSize(for naturalSize: CGSize) -> CGSize {
+        guard let maximumHeight, naturalSize.height > maximumHeight, naturalSize.height > 0 else {
+            return naturalSize
+        }
+        let scale = max(maximumHeight, 1) / naturalSize.height
+        return CGSize(width: naturalSize.width * scale, height: naturalSize.height * scale)
+    }
+}
+
 struct OctonautInlineMediaView: View {
     @Environment(AppDependencies.self) private var dependencies
     let post: PostCardModel
@@ -722,7 +767,13 @@ struct OctonautInlineMediaView: View {
     @State private var networkStatus = OctonautNetworkStatus.shared
 
     private let gallerySpacing: CGFloat = 4
-    private let galleryHeight: CGFloat = 220
+    private var galleryHeight: CGFloat { min(220, maximumHeight ?? 220) }
+
+    private var reservedAspectRatio: CGFloat? {
+        guard maximumHeight != nil,
+              ["image", "video", "gif"].contains(post.mediaKind) else { return nil }
+        return post.mediaAspectRatio ?? 16 / 9
+    }
 
     private var isSensitiveMedia: Bool {
         post.isSensitive(
@@ -740,6 +791,23 @@ struct OctonautInlineMediaView: View {
     }
 
     var body: some View {
+        OctonautMediaHeightLayout(
+            maximumHeight: maximumHeight,
+            reservedAspectRatio: reservedAspectRatio
+        ) {
+            mediaContent
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .onScrollVisibilityChange(threshold: 0.01) { isVisible in
+            isVisibleInFeed = isVisible
+        }
+        .onDisappear {
+            isVisibleInFeed = false
+        }
+    }
+
+    @ViewBuilder
+    private var mediaContent: some View {
         Group {
             if post.mediaKind == "video" || post.mediaKind == "gif", let url = post.mediaURL {
                 ZStack {
@@ -797,8 +865,9 @@ struct OctonautInlineMediaView: View {
                         LazyHStack(spacing: gallerySpacing) {
                             ForEach(Array(inlineGalleryURLs.enumerated()), id: \.offset) { index, url in
                                 Button { openOrReveal(at: index) } label: {
-                                    OctonautAsyncImage(url: url, contentMode: .fill)
-                                        .frame(width: itemWidth, height: galleryHeight)
+                                    OctonautAsyncImage(url: url, contentMode: maximumHeight == nil ? .fill : .fit)
+                                        .frame(width: maximumHeight == nil ? itemWidth : nil, height: galleryHeight)
+                                        .fixedSize(horizontal: maximumHeight != nil, vertical: false)
                                         .clipped()
                                         .background(.black.opacity(0.04))
                                         .contentShape(Rectangle())
@@ -836,7 +905,6 @@ struct OctonautInlineMediaView: View {
                     ZStack {
                         OctonautAsyncImage(url: url, contentMode: .fit)
                             .frame(maxWidth: .infinity)
-                            .frame(height: maximumHeight)
                             .blur(radius: shouldBlurMedia ? 12 : 0)
                         if shouldBlurMedia { sensitiveOverlay }
                     }
@@ -881,13 +949,6 @@ struct OctonautInlineMediaView: View {
                     action: { openOrReveal(at: 0) }
                 )
             }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .onScrollVisibilityChange(threshold: 0.01) { isVisible in
-            isVisibleInFeed = isVisible
-        }
-        .onDisappear {
-            isVisibleInFeed = false
         }
     }
 

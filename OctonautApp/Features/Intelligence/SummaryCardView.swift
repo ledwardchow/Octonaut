@@ -23,6 +23,7 @@ struct SummaryCardView: View {
     @State private var state: SummaryCardState = .idle
     @State private var isExpanded = true
     @State private var hasRequested = false
+    @State private var preparedKey: SummaryCacheKey?
 
     enum SummaryInput: Sendable {
         case post(PostSummaryInput)
@@ -86,10 +87,23 @@ struct SummaryCardView: View {
         .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal)
         .padding(.top, 10)
-        .task(id: "\(input.id):\(modelFamily)") {
-            state = .idle
+        .task(id: input.cacheKey(modelFamily: modelFamily)) {
+            let key = input.cacheKey(modelFamily: modelFamily)
+            if preparedKey != key {
+                preparedKey = key
+                state = .idle
+            } else {
+                switch state {
+                case .summary, .excerpts, .unavailable, .failed:
+                    return
+                case .idle, .loading:
+                    break
+                }
+            }
             hasRequested = false
-            if let cached = await cache.value(for: input.cacheKey(modelFamily: modelFamily)) {
+            let cached = await cache.value(for: key)
+            guard !Task.isCancelled else { return }
+            if let cached {
                 state = .summary(cached)
                 hasRequested = true
                 return
@@ -172,10 +186,15 @@ struct SummaryCardView: View {
         if hasRequested && !force { return }
         hasRequested = true
         let key = input.cacheKey(modelFamily: modelFamily)
-        if !force, let cached = await cache.value(for: key) {
-            state = .summary(cached)
-            return
+        if !force {
+            let cached = await cache.value(for: key)
+            guard !Task.isCancelled, preparedKey == key else { return }
+            if let cached {
+                state = .summary(cached)
+                return
+            }
         }
+        guard preparedKey == key else { return }
         state = .loading
         do {
             let result: ContentSummary
@@ -183,11 +202,12 @@ struct SummaryCardView: View {
             case .post(let value): result = try await intelligence.summarizePost(value)
             case .comments(let value): result = try await intelligence.summarizeComments(value)
             }
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, preparedKey == key else { return }
             await cache.insert(result, for: key)
+            guard !Task.isCancelled, preparedKey == key else { return }
             state = .summary(result)
         } catch let error as IntelligenceError {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, preparedKey == key else { return }
             if case .unavailable(let availability) = error {
                 state = .unavailable(availability.userMessage)
             } else {
@@ -196,7 +216,7 @@ struct SummaryCardView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, preparedKey == key else { return }
             state = .failed(error.localizedDescription)
         }
     }

@@ -23,16 +23,15 @@ extension PostMedia {
         return nil
     }
 
-    /// The aspect ratio Reddit publishes alongside the video.
-    ///
-    /// Worth carrying because it removes the only reason a row has to read
-    /// the asset before it can lay out, and because an HLS playlist has no
-    /// asset tracks to read: `loadTracks(withMediaType: .video)` returns
-    /// nothing on one, so measuring it would letterbox every portrait video
-    /// into 16:9.
     fileprivate var aspectRatio: CGFloat? {
-        guard case .video(_, _, _, _, let width, let height) = self,
-              let width, let height, width > 0, height > 0 else { return nil }
+        let dimensions: (Int?, Int?)
+        switch self {
+        case .image(_, _, let width, let height): dimensions = (width, height)
+        case .video(_, _, _, _, let width, let height): dimensions = (width, height)
+        default: return nil
+        }
+        guard let width = dimensions.0, let height = dimensions.1,
+              width > 0, height > 0 else { return nil }
         return CGFloat(width) / CGFloat(height)
     }
 }
@@ -961,6 +960,7 @@ final class OctonautFeatureStore {
     private let screenshotMode: Bool
     private struct FeedCacheEntry {
         let posts: [PostCardModel]
+        let readPostIDsAtLoad: Set<String>
         let filteredPostCount: Int
         let nextPage: String?
         let filterRevision: Int
@@ -1086,6 +1086,14 @@ final class OctonautFeatureStore {
     var moreLoadingIDs: Set<String> = []
     var moreFailedIDs: Set<String> = []
     var filteredPostCount = 0
+    private var readPostIDsAtLoad: Set<String> = []
+    var visibleFeedPosts: [PostCardModel] {
+        guard settings?.hideSeenPosts == true else { return posts }
+        return posts.filter { !$0.isSeen || !readPostIDsAtLoad.contains($0.id) }
+    }
+    var visibleFeedFilteredPostCount: Int {
+        filteredPostCount + posts.count - visibleFeedPosts.count
+    }
     var userProfile: UserProfile?
     var userProfilePosts: [PostCardModel] = []
     var userProfileComments: [UserCommentCardModel] = []
@@ -1160,6 +1168,20 @@ final class OctonautFeatureStore {
         if screenshotMode {
 #if DEBUG
             posts = [.screenshotCat, .screenshotCoast, .sample]
+            if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "media-sizing" {
+                var portrait = PostCardModel.screenshotCat
+                portrait.title = "Portrait media, 1:4"
+                portrait.mediaURL = URL(string: "octonaut-screenshot://portrait-sizing")
+                var landscape = PostCardModel.screenshotCoast
+                landscape.title = "Landscape media, 4:1"
+                landscape.mediaURL = URL(string: "octonaut-screenshot://landscape-sizing")
+                var gallery = PostCardModel.sample
+                gallery.title = "Packed portrait gallery"
+                gallery.hasMedia = true
+                gallery.mediaKind = "gallery"
+                gallery.galleryURLs = Array(repeating: URL(string: "octonaut-screenshot://portrait-sizing")!, count: 5)
+                posts = [gallery, portrait, landscape]
+            }
             comments = [
                 CommentCardModel(
                     id: "t1_coast-1", author: "morning_light",
@@ -1176,6 +1198,7 @@ final class OctonautFeatureStore {
             ]
 #endif
         }
+        readPostIDsAtLoad = Set(posts.filter(\.isSeen).map(\.id))
     }
 
     /// Keeps the feature store aligned with the account coordinator. The
@@ -1258,6 +1281,7 @@ final class OctonautFeatureStore {
             let kept = entry.posts.filter { !isBlockedAuthor($0.author) }
             return FeedCacheEntry(
                 posts: kept,
+                readPostIDsAtLoad: entry.readPostIDsAtLoad,
                 filteredPostCount: entry.filteredPostCount + entry.posts.count - kept.count,
                 nextPage: entry.nextPage,
                 filterRevision: entry.filterRevision,
@@ -1304,7 +1328,12 @@ final class OctonautFeatureStore {
     }
 
     func refreshPosts(for descriptor: FeedDescriptorModel = .popular, forceRefresh: Bool = false) async {
-        if screenshotMode || Task.isCancelled { return }
+        if Task.isCancelled { return }
+        if screenshotMode {
+            if forceRefresh { readPostIDsAtLoad = Set(posts.filter(\.isSeen).map(\.id)) }
+            return
+        }
+        let locallyReadIDs = loadedFeed == descriptor ? Set(posts.filter(\.isSeen).map(\.id)) : []
         let requestID = UUID()
         feedRequestID = requestID
         nextPageError = nil
@@ -1323,6 +1352,7 @@ final class OctonautFeatureStore {
            let cached = feedCache[cacheKey],
            cached.filterRevision == filterRevision {
             posts = cached.posts
+            readPostIDsAtLoad = cached.readPostIDsAtLoad
             filteredPostCount = cached.filteredPostCount
             nextPage = cached.nextPage
             loadedFeed = descriptor
@@ -1362,13 +1392,15 @@ final class OctonautFeatureStore {
             let filtered = await applyFilters(to: listing.items)
             guard feedRequestID == requestID, !Task.isCancelled, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
-            posts = cardModels(for: filtered.posts, seenIDs: filtered.seenIDs)
+            posts = cardModels(for: filtered.posts, seenIDs: filtered.seenIDs.union(locallyReadIDs))
+            readPostIDsAtLoad = Set(posts.filter(\.isSeen).map(\.id))
             filteredPostCount = filtered.removedCount
             nextPage = listing.after
             loadedFeed = descriptor
             feedState = posts.isEmpty ? .empty : .loaded
             feedCache[cacheKey] = FeedCacheEntry(
                 posts: posts,
+                readPostIDsAtLoad: readPostIDsAtLoad,
                 filteredPostCount: filteredPostCount,
                 nextPage: nextPage,
                 filterRevision: filterRevision,
@@ -1917,16 +1949,18 @@ final class OctonautFeatureStore {
             guard feedRequestID == requestID, !Task.isCancelled, loadedFeed == descriptor, self.nextPage == nextPage, isCurrentAccount(selectedAccountID, generation: selectedGeneration)
             else { return }
             let existing = Set(posts.map(\.id))
-            posts.append(
-                contentsOf: cardModels(
-                    for: filtered.posts.filter { !existing.contains($0.id) },
-                    seenIDs: filtered.seenIDs
-                ))
+            let newPosts = cardModels(
+                for: filtered.posts.filter { !existing.contains($0.id) },
+                seenIDs: filtered.seenIDs
+            )
+            posts.append(contentsOf: newPosts)
+            readPostIDsAtLoad.formUnion(newPosts.filter(\.isSeen).map(\.id))
             filteredPostCount += filtered.removedCount
             self.nextPage = listing.after == nextPage ? nil : listing.after
             feedState = posts.isEmpty ? .empty : .loaded
             feedCache[feedCacheKey(for: descriptor)] = FeedCacheEntry(
                 posts: posts,
+                readPostIDsAtLoad: readPostIDsAtLoad,
                 filteredPostCount: filteredPostCount,
                 nextPage: self.nextPage,
                 filterRevision: Int(settings?.filterRevision ?? 0),
@@ -1946,7 +1980,6 @@ final class OctonautFeatureStore {
 
     private func applyFilters(to values: [Post]) async -> (posts: [Post], removedCount: Int, seenIDs: Set<String>) {
         var seenIDs = Set<String>()
-        let hideSeen = settings?.hideSeenPosts ?? false
         // Read even when seen posts stay visible, so rows keep their seen mark.
         if let persistence {
             seenIDs = Set((try? await persistence.loadSeenPostIDs()) ?? [])
@@ -1968,7 +2001,7 @@ final class OctonautFeatureStore {
                 blockedCommunities: blockedCommunities,
                 keywordRules: keywordTerms.isEmpty ? [] : [KeywordFilterRule(terms: keywordTerms)],
                 seenPostIDs: seenIDs,
-                hideSeen: hideSeen
+                hideSeen: false
             )
         )
 
@@ -2406,6 +2439,15 @@ final class OctonautFeatureStore {
         }
     }
 
+    func toggleReadPostVisibility() {
+        guard let settings else { return }
+        if !settings.hideSeenPosts {
+            readPostIDsAtLoad = Set(posts.filter(\.isSeen).map(\.id))
+            updateLoadedFeedCache()
+        }
+        settings.hideSeenPosts.toggle()
+    }
+
     func recordPostViewed() async {
         guard settings?.collectLocalUsageStatistics != false, let persistence else { return }
         try? await persistence.incrementStatistic(.postsViewed, by: 1)
@@ -2475,6 +2517,7 @@ final class OctonautFeatureStore {
         let key = feedCacheKey(for: loadedFeed)
         feedCache[key] = FeedCacheEntry(
             posts: posts,
+            readPostIDsAtLoad: readPostIDsAtLoad,
             filteredPostCount: filteredPostCount,
             nextPage: nextPage,
             filterRevision: Int(settings?.filterRevision ?? 0),
