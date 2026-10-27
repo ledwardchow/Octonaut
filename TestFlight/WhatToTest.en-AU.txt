@@ -1,4 +1,10 @@
 Added a swipeable three-column layout for Duo.
 Fixed scrolling snapping back below summaries.
 Removed extra space above the Feeds header.
+Added a feed button to hide read posts.
+Keep newly read posts visible until refreshing.
+Added a Gallery button beside feed controls.
+Read posts now use an eye marker.
+Feed media now fits within the screen height.
+Gallery pictures now sit together without side bars.
 Fixed feed jumps while media loads.

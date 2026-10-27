@@ -767,7 +767,7 @@ struct OctonautInlineMediaView: View {
     @State private var networkStatus = OctonautNetworkStatus.shared
 
     private let gallerySpacing: CGFloat = 4
-    private let galleryHeight: CGFloat = 220
+    private var galleryHeight: CGFloat { min(220, maximumHeight ?? 220) }
 
     private var reservedAspectRatio: CGFloat? {
         guard maximumHeight != nil,
@@ -865,8 +865,9 @@ struct OctonautInlineMediaView: View {
                         LazyHStack(spacing: gallerySpacing) {
                             ForEach(Array(inlineGalleryURLs.enumerated()), id: \.offset) { index, url in
                                 Button { openOrReveal(at: index) } label: {
-                                    OctonautAsyncImage(url: url, contentMode: .fill)
-                                        .frame(width: itemWidth, height: galleryHeight)
+                                    OctonautAsyncImage(url: url, contentMode: maximumHeight == nil ? .fill : .fit)
+                                        .frame(width: maximumHeight == nil ? itemWidth : nil, height: galleryHeight)
+                                        .fixedSize(horizontal: maximumHeight != nil, vertical: false)
                                         .clipped()
                                         .background(.black.opacity(0.04))
                                         .contentShape(Rectangle())

@@ -2772,9 +2772,14 @@ extension DomainTests {
         )
         let persistence = InMemoryPersistenceStore()
         try await persistence.markPostSeen("seen1", seenAt: .now)
+        let defaults = UserDefaults(suiteName: "FeedReadFilter.\(UUID())")!
+        let settings = SettingsStore(defaults: defaults)
+        settings.hideSeenPosts = true
+        let client = FixtureRedditClient(listingData: data)
         let store = OctonautFeatureStore(
-            reddit: FixtureRedditClient(listingData: data),
+            reddit: client,
             accountID: AccountID(),
+            settings: settings,
             persistence: persistence
         )
 
@@ -2782,6 +2787,50 @@ extension DomainTests {
 
         XCTAssertEqual(store.posts.map(\.id), ["seen1", "new1"])
         XCTAssertEqual(store.posts.map(\.isSeen), [true, false])
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["new1"])
+        XCTAssertEqual(store.visibleFeedFilteredPostCount, 1)
+
+        settings.hideSeenPosts = false
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["seen1", "new1"])
+        settings.hideSeenPosts = true
+        store.markSeen(postID: "new1", seen: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["new1"])
+        XCTAssertEqual(store.posts.map(\.isSeen), [true, true])
+        await store.refreshPosts(for: .home)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["new1"])
+        await store.refreshPosts(for: .home, forceRefresh: true)
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
+        XCTAssertEqual(store.posts.map(\.id), ["seen1", "new1"])
+        store.toggleReadPostVisibility()
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["seen1", "new1"])
+        let requestCount = await client.listingRequests()
+        XCTAssertEqual(requestCount, 2)
+    }
+
+    @MainActor
+    func testPaginationKeepsNewlyReadPostsVisibleUntilRefresh() async {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: "t3_a"))
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+
+        await store.refreshPosts(for: .home)
+        store.markSeen(postID: "a", seen: true)
+        await store.loadMorePosts(for: .home)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a"])
+        await store.refreshPosts(for: .home)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a"])
+
+        store.toggleReadPostVisibility()
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a"])
+        store.toggleReadPostVisibility()
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
+
+        store.toggleReadPostVisibility()
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a"])
+        settings.hideSeenPosts = true
+        await store.refreshPosts(for: .home, forceRefresh: true)
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
     }
 
     @MainActor

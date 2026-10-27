@@ -949,12 +949,14 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(SettingsStore(defaults: defaults).duoCommunityWidth, 360)
     }
 
-    func testChangingFilterIncrementsFilterRevision() {
-        let defaults = UserDefaults(suiteName: "OctonautTests.\(UUID())")!
+    func testHideReadPostsPersistsWithoutInvalidatingFeedCache() {
+        let suite = "OctonautTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
         let settings = SettingsStore(defaults: defaults)
         let before = settings.filterRevision
         settings.hideSeenPosts.toggle()
-        XCTAssertEqual(settings.filterRevision, before &+ 1)
+        XCTAssertTrue(SettingsStore(defaults: UserDefaults(suiteName: suite)!).hideSeenPosts)
+        XCTAssertEqual(settings.filterRevision, before)
     }
 
     func testThemeRoundTripsThroughDefaults() {

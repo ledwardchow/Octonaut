@@ -36,16 +36,16 @@ struct MacFeedListView: View {
                 )
             default:
                 List(selection: dependencies.settings.feedLayout == .full ? nil : $selectedPost) {
-                    if store.filteredPostCount > 0 {
+                    if store.visibleFeedFilteredPostCount > 0 {
                         Label(
-                            "\(store.filteredPostCount) posts hidden by filters",
+                            "\(store.visibleFeedFilteredPostCount) posts hidden by filters",
                             systemImage: "line.3.horizontal.decrease.circle"
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
 
-                    ForEach(store.posts) { post in
+                    ForEach(store.visibleFeedPosts) { post in
                         Group {
                             if dependencies.settings.feedLayout == .full {
                                 MacPostMediaCard(
@@ -146,6 +146,17 @@ struct MacFeedListView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("New Post (Command-N)")
+                        Button {
+                            store.toggleReadPostVisibility()
+                        } label: {
+                            Label(
+                                dependencies.settings.hideSeenPosts ? "Show read posts" : "Hide read posts",
+                                systemImage: dependencies.settings.hideSeenPosts ? "eye.slash" : "eye"
+                            )
+                            .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(dependencies.settings.hideSeenPosts ? "Show read posts" : "Hide read posts")
                         feedLayoutPicker
                         Button {
                             Task {
@@ -241,6 +252,14 @@ private struct MacPostMediaCard: View {
                     .foregroundStyle(.primary)
                 Text("•")
                 Text(post.age)
+                if !post.author.isEmpty {
+                    Text("•")
+                    Text("u/\(post.author)")
+                }
+                if post.isSeen {
+                    Text("•").accessibilityHidden(true)
+                    Image(systemName: "eye").accessibilityLabel("Seen post")
+                }
                 Spacer(minLength: 8)
                 if post.isSticky {
                     Label("Pinned", systemImage: "pin.fill")
@@ -294,10 +313,6 @@ private struct MacPostMediaCard: View {
                         .foregroundStyle(.orange)
                 }
                 Spacer()
-                if !post.author.isEmpty {
-                    Text("u/\(post.author)")
-                        .lineLimit(1)
-                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -305,7 +320,6 @@ private struct MacPostMediaCard: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 9)
         .contentShape(Rectangle())
-        .opacity(post.isSeen ? 0.68 : 1)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
             "r/\(post.community), \(post.title), \(post.score) points, \(post.comments) comments"
@@ -519,6 +533,10 @@ private struct MacPostRow: View {
                     Text(post.age)
                     if !post.author.isEmpty {
                         Text("• u/\(post.author)")
+                    }
+                    if post.isSeen {
+                        Text("•").accessibilityHidden(true)
+                        Image(systemName: "eye").accessibilityLabel("Seen post")
                     }
                 }
                 .foregroundStyle(.secondary)

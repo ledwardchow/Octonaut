@@ -334,9 +334,9 @@ struct FeedView: View {
     private var visiblePosts: [PostCardModel] {
         switch descriptor.kind {
         case .community:
-            return store.posts.filter { $0.community.caseInsensitiveCompare(descriptor.name) == .orderedSame }
+            return store.visibleFeedPosts.filter { $0.community.caseInsensitiveCompare(descriptor.name) == .orderedSame }
         default:
-            return store.posts
+            return store.visibleFeedPosts
         }
     }
 
@@ -344,7 +344,21 @@ struct FeedView: View {
         GeometryReader { viewport in
             OctonautStateView(state: store.feedState, retry: { Task { await store.refreshPosts(for: descriptor) } }) {
                 if visiblePosts.isEmpty {
-                    ContentUnavailableView("No posts", systemImage: "text.page.slash", description: Text("This feed is empty or your filters removed every post."))
+                    VStack(spacing: 12) {
+                        ContentUnavailableView("No posts", systemImage: "text.page.slash", description: Text("This feed is empty or your filters removed every post."))
+                        if let nextPageError = store.nextPageError {
+                            Text(nextPageError)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        if dependencies.settings.hideSeenPosts,
+                           store.galleryPageCursor(for: descriptor) != nil {
+                            Button(store.nextPageError == nil ? "Load more posts" : "Retry") {
+                                Task { await store.loadMorePosts(for: descriptor) }
+                            }
+                        }
+                    }
                 } else {
                     List {
                         if descriptor.kind == .community {
@@ -352,8 +366,8 @@ struct FeedView: View {
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                         }
-                        if store.filteredPostCount > 0, dependencies.settings.showFilterCount {
-                            Label("\(store.filteredPostCount) posts hidden by your filters", systemImage: "line.3.horizontal.decrease.circle")
+                        if store.visibleFeedFilteredPostCount > 0, dependencies.settings.showFilterCount {
+                            Label("\(store.visibleFeedFilteredPostCount) posts hidden by your filters", systemImage: "line.3.horizontal.decrease.circle")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .listRowSeparator(.hidden)
@@ -442,6 +456,8 @@ struct FeedView: View {
         .toolbar {
             if onShowCommunities == nil {
                 ToolbarItem(placement: .topBarTrailing) { feedMenu }
+                ToolbarItem(placement: .topBarTrailing) { hideReadButton }
+                ToolbarItem(placement: .topBarTrailing) { galleryButton }
             }
         }
         .toolbar(onShowCommunities == nil ? .visible : .hidden, for: .navigationBar)
@@ -464,6 +480,10 @@ struct FeedView: View {
                     }
                     .foregroundStyle(.primary)
                     .accessibilityLabel("Sort \(descriptor.name)")
+                    galleryButton
+                        .glassEffect(.regular, in: Circle())
+                    hideReadButton
+                        .glassEffect(.regular, in: Circle())
                     feedMenu
                         .glassEffect(.regular, in: Circle())
                 }
@@ -586,7 +606,7 @@ struct FeedView: View {
                 .disabled(store.isSubscriptionSaving(communityID: community.id))
             }
             Button {
-                store.posts.map(\.id).forEach { store.markSeen(postID: $0, seen: true) }
+                visiblePosts.map(\.id).forEach { store.markSeen(postID: $0, seen: true) }
             } label: {
                 Label("Mark Visible Seen", systemImage: "eye")
             }
@@ -600,6 +620,29 @@ struct FeedView: View {
                 .frame(width: onShowCommunities == nil ? nil : 44, height: onShowCommunities == nil ? nil : 44)
         }
         .accessibilityLabel("Feed options")
+    }
+
+    private var galleryButton: some View {
+        Button {
+            router.push(.gallery(descriptor))
+        } label: {
+            Image(systemName: "square.grid.2x2")
+                .frame(width: onShowCommunities == nil ? nil : 44, height: onShowCommunities == nil ? nil : 44)
+        }
+        .accessibilityLabel("Gallery")
+        .help("Gallery")
+    }
+
+    private var hideReadButton: some View {
+        let label = dependencies.settings.hideSeenPosts ? "Show read posts" : "Hide read posts"
+        return Button {
+            store.toggleReadPostVisibility()
+        } label: {
+            Image(systemName: dependencies.settings.hideSeenPosts ? "eye.slash" : "eye")
+                .frame(width: onShowCommunities == nil ? nil : 44, height: onShowCommunities == nil ? nil : 44)
+        }
+        .accessibilityLabel(label)
+        .help(label)
     }
 
     private var community: CommunityCardModel? {

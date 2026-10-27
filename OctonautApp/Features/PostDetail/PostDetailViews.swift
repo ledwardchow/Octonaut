@@ -451,7 +451,7 @@ struct GalleryView: View {
     }
 
     private var items: [GalleryMediaItem] {
-        GalleryMediaItem.items(from: store.posts.filter {
+        GalleryMediaItem.items(from: store.visibleFeedPosts.filter {
             descriptor.kind != .community || $0.community.caseInsensitiveCompare(descriptor.name) == .orderedSame
         })
     }
