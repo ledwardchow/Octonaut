@@ -1735,6 +1735,7 @@ final class DomainTests: XCTestCase {
         }
         XCTAssertEqual(imageURL.absoluteString, "https://i.redd.it/source-image.jpg")
         XCTAssertEqual(thumbnailURL?.host, "preview.redd.it")
+        XCTAssertEqual(PostCardModel(post: post).mediaAspectRatio, 1080.0 / 1350.0)
     }
 
     func testExternalLinkKeepsRedditPreviewImage() throws {
@@ -1922,6 +1923,7 @@ final class DomainTests: XCTestCase {
 
         XCTAssertEqual(card.mediaKind, "image")
         XCTAssertFalse(card.isVideo)
+        XCTAssertEqual(card.mediaAspectRatio, 1920.0 / 1080.0)
     }
 
     func testRedditHostedGIFVideoStillKeepsItsSilentTrack() throws {

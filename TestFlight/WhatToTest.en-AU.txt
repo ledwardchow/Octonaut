@@ -1,3 +1,4 @@
 Added a swipeable three-column layout for Duo.
 Fixed scrolling snapping back below summaries.
 Removed extra space above the Feeds header.
+Fixed feed jumps while media loads.

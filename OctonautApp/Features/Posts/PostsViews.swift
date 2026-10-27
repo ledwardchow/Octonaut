@@ -327,7 +327,6 @@ struct FeedView: View {
 
     private let mediaPreloadDistance = 20
 
-    @State private var availableHeight: CGFloat = 800
     private var layoutCommunity: String? { descriptor.kind == .community ? descriptor.name : nil }
     private var compactRows: Bool { dependencies.settings.feedLayout(for: layoutCommunity) == .compact }
     private var thumbnailOnRight: Bool { dependencies.settings.compactThumbnailSide == .right }
@@ -342,11 +341,11 @@ struct FeedView: View {
     }
 
     var body: some View {
-        OctonautStateView(state: store.feedState, retry: { Task { await store.refreshPosts(for: descriptor) } }) {
-            if visiblePosts.isEmpty {
-                ContentUnavailableView("No posts", systemImage: "text.page.slash", description: Text("This feed is empty or your filters removed every post."))
-            } else {
-                ScrollViewReader { proxy in
+        GeometryReader { viewport in
+            OctonautStateView(state: store.feedState, retry: { Task { await store.refreshPosts(for: descriptor) } }) {
+                if visiblePosts.isEmpty {
+                    ContentUnavailableView("No posts", systemImage: "text.page.slash", description: Text("This feed is empty or your filters removed every post."))
+                } else {
                     List {
                         if descriptor.kind == .community {
                             communityHeader
@@ -369,7 +368,7 @@ struct FeedView: View {
                                         onUserOpen: { router.push($0) },
                                         showsFlair: dependencies.settings.showPostFlair,
                                         mediaPreloader: mediaPreloader,
-                                        mediaMaximumHeight: usesWideInterface ? min(320, max(160, availableHeight * 0.45)) : nil,
+                                        mediaMaximumHeight: max(viewport.size.height, 1),
                                         onVote: { value in
                                             performVote(postID: post.id, value: value)
                                         },
@@ -422,10 +421,6 @@ struct FeedView: View {
                     .frame(maxWidth: usesWideInterface ? 680 : .infinity)
                     .frame(maxWidth: .infinity)
                     .refreshable { await store.refreshPosts(for: descriptor, forceRefresh: true) }
-                    .onChange(of: visiblePosts.first?.id) { _, firstID in
-                        guard let firstID else { return }
-                        proxy.scrollTo(firstID, anchor: .top)
-                    }
                     .onScrollGeometryChange(for: CGFloat.self) { geometry in
                         geometry.contentOffset.y + geometry.contentInsets.top
                     } action: { oldOffset, newOffset in
@@ -438,7 +433,6 @@ struct FeedView: View {
                 }
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { availableHeight = $0 }
         // The system title lays out and truncates long community names itself,
         // and the title menu keeps sorting one tap away from the name.
         .navigationTitle(descriptor.name)

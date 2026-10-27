@@ -23,16 +23,15 @@ extension PostMedia {
         return nil
     }
 
-    /// The aspect ratio Reddit publishes alongside the video.
-    ///
-    /// Worth carrying because it removes the only reason a row has to read
-    /// the asset before it can lay out, and because an HLS playlist has no
-    /// asset tracks to read: `loadTracks(withMediaType: .video)` returns
-    /// nothing on one, so measuring it would letterbox every portrait video
-    /// into 16:9.
     fileprivate var aspectRatio: CGFloat? {
-        guard case .video(_, _, _, _, let width, let height) = self,
-              let width, let height, width > 0, height > 0 else { return nil }
+        let dimensions: (Int?, Int?)
+        switch self {
+        case .image(_, _, let width, let height): dimensions = (width, height)
+        case .video(_, _, _, _, let width, let height): dimensions = (width, height)
+        default: return nil
+        }
+        guard let width = dimensions.0, let height = dimensions.1,
+              width > 0, height > 0 else { return nil }
         return CGFloat(width) / CGFloat(height)
     }
 }
