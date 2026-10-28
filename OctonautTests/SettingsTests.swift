@@ -489,7 +489,7 @@ final class SettingsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<3 {
                 group.addTask {
-                    _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+                    _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
                 }
             }
             try await group.waitForAll()
@@ -507,7 +507,7 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 1)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
@@ -517,7 +517,7 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [403, 200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
@@ -528,31 +528,20 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [nil, 200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
     }
 
-    func testAuthenticatedSearchDoesNotBootstrapAnonymousCookies() async throws {
+    func testAuthenticatedFeedDoesNotBootstrapAnonymousCookies() async throws {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200])
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: account)
         XCTAssertTrue(AnonymousBootstrapProtocol.seedRequests.isEmpty)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.first?.value(forHTTPHeaderField: "Cookie"),
                        "reddit_session=synthetic-session")
-    }
-
-    func testSearchQueryEncodesPlusSigns() async throws {
-        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
-        let client = makeAnonymousBootstrapClient()
-        _ = try await client.search(RedditSearchRequest(query: "C++ & a=b \(UUID().uuidString)"), account: nil)
-
-        let url = try XCTUnwrap(AnonymousBootstrapProtocol.jsonRequests.first?.url)
-        XCTAssertTrue(url.absoluteString.contains("q=C%2B%2B%20%26%20a%3Db"), url.absoluteString)
-        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
-        XCTAssertTrue(query?.first { $0.name == "q" }?.value?.hasPrefix("C++ & a=b") == true)
     }
 
     func testAnonymousCookiesAreNotSentWithAccountRequests() async throws {
@@ -560,9 +549,9 @@ final class SettingsTests: XCTestCase {
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
 
         let requests = AnonymousBootstrapProtocol.jsonRequests
         XCTAssertEqual(requests.count, 3)
@@ -1684,7 +1673,7 @@ private final class AnonymousBootstrapProtocol: URLProtocol, @unchecked Sendable
         let delaySeed = Self.storage.delaySeed
         Self.storage.lock.unlock()
         if isSeed && delaySeed {
-            // Keep the seed in flight while concurrent searches enter the actor.
+            // Keep the seed in flight while concurrent feed requests enter the actor.
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { self.respond(status: status, isSeed: true) }
         } else {
             respond(status: status, isSeed: isSeed)

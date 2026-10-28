@@ -1,5 +1,24 @@
 import Foundation
 import Security
+import CryptoKit
+
+public struct WebGraphQLToken: Codable, Sendable, Equatable {
+    public let value: String
+    public let sourceSessionDigest: String
+    public let expiresAt: Date
+
+    public init(value: String, sourceSessionDigest: String, expiresAt: Date) {
+        self.value = value
+        self.sourceSessionDigest = sourceSessionDigest
+        self.expiresAt = expiresAt
+    }
+}
+
+enum RedditSessionIdentity {
+    static func digest(_ session: String) -> String {
+        SHA256.hash(data: Data(session.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
 
 public struct RedditCredential: Codable, Sendable, Equatable {
     public var cookieName: String
@@ -7,19 +26,22 @@ public struct RedditCredential: Codable, Sendable, Equatable {
     public var modhash: String?
     public var redditUser: String?
     public var validatedAt: Date?
+    public var webGraphQLToken: WebGraphQLToken?
 
     public init(
         cookieName: String = "reddit_session",
         cookieValue: String,
         modhash: String? = nil,
         redditUser: String? = nil,
-        validatedAt: Date? = nil
+        validatedAt: Date? = nil,
+        webGraphQLToken: WebGraphQLToken? = nil
     ) {
         self.cookieName = cookieName
         self.cookieValue = cookieValue
         self.modhash = modhash
         self.redditUser = redditUser
         self.validatedAt = validatedAt
+        self.webGraphQLToken = webGraphQLToken
     }
 }
 
@@ -44,6 +66,10 @@ protocol AccountCredentialVault: Sendable {
     func save(_ credential: RedditCredential, for accountID: AccountID) async throws
     func removeCredential(for accountID: AccountID) async throws
     func removeAllCredentials() async throws
+    /// Saves a token only while the original account session still exists.
+    func saveWebGraphQLToken(_ token: WebGraphQLToken, for accountID: AccountID) async throws -> Bool
+    func replaceSessionCookie(_ newValue: String, expected oldValue: String, for accountID: AccountID) async throws -> Bool
+    func updateModhash(_ modhash: String, expectedSession: String, for accountID: AccountID) async throws -> Bool
 }
 
 /// Stores one credential per local account. The keychain item is device-only and
@@ -138,6 +164,70 @@ actor KeychainCredentialVault: AccountCredentialVault {
         }
     }
 
+    func saveWebGraphQLToken(_ token: WebGraphQLToken, for accountID: AccountID) async throws -> Bool {
+        var readQuery = baseQuery(accountID: accountID)
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        if readStatus == errSecItemNotFound { return false }
+        guard readStatus == errSecSuccess else { throw CredentialVaultError.keychain(readStatus) }
+        guard let data = result as? Data,
+              var credential = try? decoder.decode(RedditCredential.self, from: data) else {
+            throw CredentialVaultError.malformedCredential
+        }
+        guard RedditSessionIdentity.digest(credential.cookieValue) == token.sourceSessionDigest else { return false }
+        credential.webGraphQLToken = token
+        guard let updated = try? encoder.encode(credential) else { throw CredentialVaultError.malformedCredential }
+        let updateStatus = SecItemUpdate(baseQuery(accountID: accountID) as CFDictionary, [kSecValueData as String: updated] as CFDictionary)
+        if updateStatus == errSecItemNotFound { return false }
+        guard updateStatus == errSecSuccess else { throw CredentialVaultError.keychain(updateStatus) }
+        return true
+    }
+
+    func replaceSessionCookie(_ newValue: String, expected oldValue: String, for accountID: AccountID) async throws -> Bool {
+        var readQuery = baseQuery(accountID: accountID)
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        if readStatus == errSecItemNotFound { return false }
+        guard readStatus == errSecSuccess else { throw CredentialVaultError.keychain(readStatus) }
+        guard let data = result as? Data,
+              var credential = try? decoder.decode(RedditCredential.self, from: data) else {
+            throw CredentialVaultError.malformedCredential
+        }
+        guard credential.cookieName == "reddit_session", credential.cookieValue == oldValue else { return false }
+        credential.cookieValue = newValue
+        credential.webGraphQLToken = nil
+        guard let updated = try? encoder.encode(credential) else { throw CredentialVaultError.malformedCredential }
+        let updateStatus = SecItemUpdate(baseQuery(accountID: accountID) as CFDictionary, [kSecValueData as String: updated] as CFDictionary)
+        if updateStatus == errSecItemNotFound { return false }
+        guard updateStatus == errSecSuccess else { throw CredentialVaultError.keychain(updateStatus) }
+        return true
+    }
+
+    func updateModhash(_ modhash: String, expectedSession: String, for accountID: AccountID) async throws -> Bool {
+        var readQuery = baseQuery(accountID: accountID)
+        readQuery[kSecReturnData as String] = true
+        readQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let readStatus = SecItemCopyMatching(readQuery as CFDictionary, &result)
+        if readStatus == errSecItemNotFound { return false }
+        guard readStatus == errSecSuccess else { throw CredentialVaultError.keychain(readStatus) }
+        guard let data = result as? Data,
+              var credential = try? decoder.decode(RedditCredential.self, from: data) else {
+            throw CredentialVaultError.malformedCredential
+        }
+        guard credential.cookieName == "reddit_session", credential.cookieValue == expectedSession else { return false }
+        credential.modhash = modhash
+        guard let updated = try? encoder.encode(credential) else { throw CredentialVaultError.malformedCredential }
+        let updateStatus = SecItemUpdate(baseQuery(accountID: accountID) as CFDictionary, [kSecValueData as String: updated] as CFDictionary)
+        if updateStatus == errSecItemNotFound { return false }
+        guard updateStatus == errSecSuccess else { throw CredentialVaultError.keychain(updateStatus) }
+        return true
+    }
+
     private func baseQuery(accountID: AccountID) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -171,5 +261,30 @@ actor InMemoryCredentialVault: AccountCredentialVault {
 
     func removeAllCredentials() async throws {
         values.removeAll()
+    }
+
+    func saveWebGraphQLToken(_ token: WebGraphQLToken, for accountID: AccountID) async throws -> Bool {
+        guard var credential = values[accountID],
+              RedditSessionIdentity.digest(credential.cookieValue) == token.sourceSessionDigest else { return false }
+        credential.webGraphQLToken = token
+        values[accountID] = credential
+        return true
+    }
+
+    func replaceSessionCookie(_ newValue: String, expected oldValue: String, for accountID: AccountID) async throws -> Bool {
+        guard var credential = values[accountID], credential.cookieName == "reddit_session",
+              credential.cookieValue == oldValue else { return false }
+        credential.cookieValue = newValue
+        credential.webGraphQLToken = nil
+        values[accountID] = credential
+        return true
+    }
+
+    func updateModhash(_ modhash: String, expectedSession: String, for accountID: AccountID) async throws -> Bool {
+        guard var credential = values[accountID], credential.cookieName == "reddit_session",
+              credential.cookieValue == expectedSession else { return false }
+        credential.modhash = modhash
+        values[accountID] = credential
+        return true
     }
 }

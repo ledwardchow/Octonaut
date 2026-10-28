@@ -531,21 +531,6 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(replyRequest.fields["thing_id"], "t1_reply")
     }
 
-    func testUserSearchBuildsPublicWebsiteJSONRoute() {
-        let route = URLSessionRedditClient.userSearchRoute(
-            for: RedditUserSearchRequest(query: "swift reader", limit: 500)
-        )
-        let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
-            item.value.map { (item.name, $0) }
-        })
-
-        XCTAssertEqual(route.path, "/users/search.json")
-        XCTAssertEqual(query["q"], "swift reader")
-        XCTAssertEqual(query["sort"], "relevance")
-        XCTAssertEqual(query["limit"], "100")
-        XCTAssertEqual(query["raw_json"], "1")
-    }
-
     func testTrendingCommunitiesBuildsPublicWebsiteJSONRoute() {
         let route = URLSessionRedditClient.trendingCommunitiesRoute(limit: 500)
         let query = Dictionary(uniqueKeysWithValues: route.query.compactMap { item in
