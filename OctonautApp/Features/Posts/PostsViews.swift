@@ -318,6 +318,7 @@ struct FeedView: View {
     var onShowCommunities: (() -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.octonautRootHeight) private var rootHeight
     @State private var showingLogin = false
     @State private var selectedMediaPost: PostCardModel?
     @State private var selectedMediaPage = 0
@@ -382,7 +383,7 @@ struct FeedView: View {
                                         onUserOpen: { router.push($0) },
                                         showsFlair: dependencies.settings.showPostFlair,
                                         mediaPreloader: mediaPreloader,
-                                        mediaMaximumHeight: max(viewport.size.height, 1),
+                                        mediaMaximumHeight: max(rootHeight > 0 ? rootHeight : viewport.size.height, 1),
                                         onVote: { value in
                                             performVote(postID: post.id, value: value)
                                         },

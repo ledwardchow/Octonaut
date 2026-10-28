@@ -8,3 +8,4 @@ Read posts now use an eye marker.
 Feed media now fits within the screen height.
 Gallery pictures now sit together without side bars.
 Fixed feed jumps while media loads.
+Fixed feed images resizing while scrolling.
