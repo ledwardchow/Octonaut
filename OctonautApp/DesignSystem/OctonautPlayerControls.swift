@@ -50,6 +50,7 @@ struct OctonautPlayerControls: View {
     /// while a control is being used.
     var onInteraction: () -> Void = {}
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isPlaying: Bool
     @State private var currentTime: Double
     @State private var duration: Double
@@ -232,7 +233,7 @@ struct OctonautPlayerControls: View {
                     .fill(.white)
                     .frame(width: max(0, trackWidth * progress), height: 3)
                     .animation(
-                        isScrubbing || !isPlaying ? .none : .linear(duration: 0.25),
+                        reduceMotion || isScrubbing || !isPlaying ? nil : .linear(duration: 0.25),
                         value: progress
                     )
                 Circle()
@@ -240,9 +241,9 @@ struct OctonautPlayerControls: View {
                     .frame(width: isScrubbing ? 16 : 10, height: isScrubbing ? 16 : 10)
                     .offset(x: max(0, trackWidth * progress - (isScrubbing ? 8 : 5)))
                     .shadow(color: .black.opacity(0.25), radius: 2)
-                    .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isScrubbing)
+                    .animation(reduceMotion ? nil : .spring(response: 0.2, dampingFraction: 0.7), value: isScrubbing)
                     .animation(
-                        isScrubbing || !isPlaying ? .none : .linear(duration: 0.25),
+                        reduceMotion || isScrubbing || !isPlaying ? nil : .linear(duration: 0.25),
                         value: progress
                     )
             }

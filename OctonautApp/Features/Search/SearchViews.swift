@@ -5,6 +5,7 @@ struct SearchRootView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautTheme) private var theme
     @State private var query = ""
     @State private var scope: FeatureSearchScope = .posts
     @State private var submittedQuery = ""
@@ -105,10 +106,10 @@ struct SearchRootView: View {
                         Text(message)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Button("Try again") {
+                        Button("Try Again") {
                             Task { await model.loadTrendingCommunities(forceRefresh: true) }
                         }
-                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.borderedProminent)
                     }
                     .padding(.vertical, 8)
                 }
@@ -139,7 +140,16 @@ struct SearchRootView: View {
         case .loginRequired:
             RedditLoginRequiredView()
         case .failed(let message):
-            ContentUnavailableView("Search failed", systemImage: "wifi.exclamationmark", description: Text(message))
+            ContentUnavailableView {
+                Label("Search failed", systemImage: "wifi.exclamationmark")
+            } description: {
+                Text(message)
+            } actions: {
+                Button("Try Again") {
+                    Task { await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID) }
+                }
+                .buttonStyle(.borderedProminent)
+            }
         case .empty, .idle:
             ContentUnavailableView.search(text: submittedQuery)
         case .loaded:
@@ -237,7 +247,7 @@ struct SearchRootView: View {
                 } else {
                     Image(systemName: "person.crop.circle.fill")
                         .resizable()
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(theme.accent)
                 }
             }
             .frame(width: 38, height: 38)

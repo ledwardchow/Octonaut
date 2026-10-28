@@ -11,8 +11,8 @@ struct SettingsRootView: View {
         Form {
             Section {
                 NavigationLink(value: FeatureRoute.settings(.general)) { Label("General", systemImage: "slider.horizontal.3") }
-                // ponytail: Theme is hidden until the app applies it.
                 NavigationLink(value: FeatureRoute.settings(.appearance)) { Label("Appearance", systemImage: "rectangle.3.group") }
+                NavigationLink(value: FeatureRoute.settings(.theme)) { Label("Theme", systemImage: "paintpalette") }
                 NavigationLink(value: FeatureRoute.settings(.intelligence)) { Label("Intelligence", systemImage: "sparkles") }
             }
             Section {
@@ -167,8 +167,7 @@ struct SettingsDetailView: View {
                 Text("System").tag(ThemeChoice.system); Text("Light").tag(ThemeChoice.light); Text("Dark").tag(ThemeChoice.dark); Text("Midnight").tag(ThemeChoice.midnight); Text("Deep Ocean").tag(ThemeChoice.deepOcean); Text("Aurora").tag(ThemeChoice.aurora)
             }
             Toggle("Pure black background", isOn: Binding(get: { dependencies.settings.pureBlackBackground }, set: { dependencies.settings.pureBlackBackground = $0 }))
-            Toggle("Tint follows community", isOn: Binding(get: { dependencies.settings.tintFollowsCommunity }, set: { dependencies.settings.tintFollowsCommunity = $0 }))
-            Text("Custom themes are checked for readable text contrast before saving.")
+            Text("Scores and bookmarks use one color chosen to stay readable.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -200,14 +199,11 @@ struct SettingsDetailView: View {
                     get: { dependencies.settings.useSplitViewOnIPad },
                     set: { dependencies.settings.useSplitViewOnIPad = $0 }
                 ))
-                if UIDevice.current.userInterfaceIdiom != .pad {
-                    Toggle("Show navigation at bottom", isOn: Binding(
-                        get: { dependencies.settings.showBottomNavigationOnLargeScreens },
-                        set: { dependencies.settings.showBottomNavigationOnLargeScreens = $0 }
-                    ))
-                }
+                Toggle("Show navigation at bottom", isOn: Binding(
+                    get: { dependencies.settings.showBottomNavigationOnLargeScreens },
+                    set: { dependencies.settings.showBottomNavigationOnLargeScreens = $0 }
+                ))
                 if DuoLayout.isEligible(
-                    isPhone: UIDevice.current.userInterfaceIdiom == .phone,
                     isRegular: rootIsRegular,
                     rootWidth: rootWidth, rootHeight: rootHeight
                 ) {
@@ -222,14 +218,12 @@ struct SettingsDetailView: View {
                         }
                     }
                 }
-                Text("Shows communities, the selected feed, and post details in separate columns on iPad and wide inner displays.")
+                Text("Shows communities, the selected feed, and post details in separate columns on wide windows.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                if UIDevice.current.userInterfaceIdiom != .pad {
-                    Text("On wide phone displays, navigation starts at the top and can move to the side. Turn this on to use the floating bottom navigation instead.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Wide windows use a sidebar for navigation. Turn this on to keep it at the bottom.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -464,7 +458,7 @@ struct SettingsDetailView: View {
     private var about: some View {
         Section {
             VStack(spacing: 10) {
-                Image(systemName: "rectangle.stack.fill").font(.system(size: 52)).foregroundStyle(.orange)
+                Image(systemName: "rectangle.stack.fill").font(.system(size: 52)).foregroundStyle(Color.accentColor)
                 Text("Octonaut").font(.title2.weight(.bold))
                 Text("A native, local-first Reddit reader for Apple platforms.")
                     .font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)

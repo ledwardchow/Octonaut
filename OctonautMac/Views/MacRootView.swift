@@ -42,9 +42,8 @@ struct MacRootView: View {
             get: { dependencies.accounts.showingLoginRequired },
             set: { dependencies.accounts.showingLoginRequired = $0 }
         ))
-        .tint(.orange)
+        .tint(MacAccent.color)
         .background {
-            MacWindowTitleAccessory(title: "Octonaut")
             MacSplitViewPersistenceView(
                 sidebarWidth: $sidebarWidth,
                 contentWidth: $contentWidth
@@ -458,91 +457,12 @@ private struct MacSplitViewPersistenceView: NSViewRepresentable {
     }
 }
 
-private struct MacWindowTitleAccessory: NSViewRepresentable {
-    let title: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> WindowReaderView {
-        let view = WindowReaderView()
-        view.onWindowChange = { window in
-            context.coordinator.install(title: title, in: window)
-        }
-        return view
-    }
-
-    func updateNSView(_ view: WindowReaderView, context: Context) {
-        view.onWindowChange = { window in
-            context.coordinator.install(title: title, in: window)
-        }
-        context.coordinator.update(title: title)
-    }
-
-    static func dismantleNSView(_ view: WindowReaderView, coordinator: Coordinator) {
-        view.onWindowChange = nil
-        coordinator.remove()
-    }
-
-    @MainActor
-    final class Coordinator {
-        private weak var window: NSWindow?
-        private var accessory: NSTitlebarAccessoryViewController?
-        private weak var titleLabel: NSTextField?
-
-        func install(title: String, in window: NSWindow?) {
-            guard let window else { return }
-            guard self.window !== window else {
-                update(title: title)
-                return
-            }
-
-            remove()
-
-            let accessory = NSTitlebarAccessoryViewController()
-            accessory.layoutAttribute = .left
-            accessory.view = makeTitleView(title)
-            window.addTitlebarAccessoryViewController(accessory)
-
-            self.window = window
-            self.accessory = accessory
-        }
-
-        func update(title: String) {
-            guard let titleLabel, titleLabel.stringValue != title else { return }
-            titleLabel.stringValue = title
-        }
-
-        func remove() {
-            guard let window, let accessory else { return }
-            if let index = window.titlebarAccessoryViewControllers.firstIndex(of: accessory) {
-                window.removeTitlebarAccessoryViewController(at: index)
-            }
-            self.window = nil
-            self.accessory = nil
-            self.titleLabel = nil
-        }
-
-        private func makeTitleView(_ title: String) -> NSView {
-            let label = NSTextField(labelWithString: title)
-            label.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-            label.textColor = .secondaryLabelColor
-            label.setContentHuggingPriority(.required, for: .horizontal)
-
-            let container = NSView()
-            label.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(label)
-            NSLayoutConstraint.activate([
-                label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 6),
-                label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-                label.centerYAnchor.constraint(equalTo: container.centerYAnchor)
-            ])
-            container.frame.size = NSSize(width: label.intrinsicContentSize.width + 14, height: 28)
-            titleLabel = label
-            return container
-        }
-    }
+private enum MacAccent {
+    static let color = Color(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+        let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if dark { return .systemOrange }
+        return NSColor(srgbRed: 0.761, green: 0.255, blue: 0.047, alpha: 1)
+    }))
 }
 
 @MainActor

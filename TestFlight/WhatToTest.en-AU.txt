@@ -9,3 +9,11 @@ Feed media now fits within the screen height.
 Gallery pictures now sit together without side bars.
 Fixed feed jumps while media loads.
 Fixed feed images resizing while scrolling.
+iPhone now rotates to landscape.
+Wide screens use the system tab bar.
+Scores and bookmarks are easier to read.
+Compact posts use symbols instead of emoji.
+Larger text no longer clips feed controls.
+Empty screens offer Try Again or Sign In.
+Gallery uses more columns on wide screens.
+The app icon uses layered artwork.

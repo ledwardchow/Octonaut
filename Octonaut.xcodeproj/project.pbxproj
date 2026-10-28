@@ -843,8 +843,8 @@
 		3C4630828AED1703AFF08787 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Octonaut-Pearl-Blue Octonaut-Pearl-Plush Octonaut-Frosted-Pink";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Octonaut-Pearl-Blue Octonaut-Frosted-Pink";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Octonaut-Pearl-Plush";
 				CODE_SIGN_ENTITLEMENTS = OctonautApp/Octonaut.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 58;
@@ -855,7 +855,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1049,8 +1049,8 @@
 		ECEF38AEAA2C8A128AF86EEC /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Octonaut-Pearl-Blue Octonaut-Pearl-Plush Octonaut-Frosted-Pink";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "Octonaut-Pearl-Blue Octonaut-Frosted-Pink";
+				ASSETCATALOG_COMPILER_APPICON_NAME = "Octonaut-Pearl-Plush";
 				CODE_SIGN_ENTITLEMENTS = OctonautApp/Octonaut.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 58;
@@ -1061,7 +1061,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.news";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Octonaut saves Reddit images and videos to your Photos library when you choose Save to Photos.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

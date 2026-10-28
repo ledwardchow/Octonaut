@@ -6,6 +6,7 @@ struct InboxRootView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautTheme) private var theme
     @State private var filter = "All"
     @State private var showingMarkAllRead = false
     @State private var showingComposer = false
@@ -24,9 +25,23 @@ struct InboxRootView: View {
     var body: some View {
         Group {
             if dependencies.accounts.selectedAccount == nil {
-                ContentUnavailableView("Sign in to view Inbox", systemImage: "envelope.badge", description: Text("Replies and private messages will appear here when you sign in."))
+                ContentUnavailableView {
+                    Label("Sign in to view Inbox", systemImage: "envelope.badge")
+                } description: {
+                    Text("Replies and private messages will appear here when you sign in.")
+                } actions: {
+                    Button("Sign In") { _ = dependencies.accounts.requireLogin() }
+                        .buttonStyle(.borderedProminent)
+                }
             } else if dependencies.accounts.selectedAccount?.health == .needsLogin {
-                ContentUnavailableView("Sign in again", systemImage: "person.crop.circle.badge.exclamationmark", description: Text("This Reddit session has expired. Reauthenticate from the Account tab."))
+                ContentUnavailableView {
+                    Label("Sign in again", systemImage: "person.crop.circle.badge.exclamationmark")
+                } description: {
+                    Text("This Reddit session has expired.")
+                } actions: {
+                    Button("Sign In") { _ = dependencies.accounts.requireLogin() }
+                        .buttonStyle(.borderedProminent)
+                }
             } else {
                 List {
                     if isLoading && items.isEmpty {
@@ -49,7 +64,6 @@ struct InboxRootView: View {
                         .listRowInsets(EdgeInsets())
                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                             Button { markRead(item) } label: { Label(item.isUnread ? "Read" : "Unread", systemImage: item.isUnread ? "envelope.open" : "envelope.badge") }
-                                .tint(.blue)
                         }
                         .contextMenu {
                             Button { markRead(item) } label: { Label(item.isUnread ? "Mark Read" : "Mark Unread", systemImage: "envelope") }
@@ -232,7 +246,7 @@ struct InboxRootView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: item.kind == .message ? "envelope.fill" : item.kind == .mention ? "at" : "bubble.left.fill")
                 .font(.title3)
-                .foregroundStyle(item.isUnread ? .orange : .secondary)
+                .foregroundStyle(item.isUnread ? theme.accent : .secondary)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline) {
@@ -245,14 +259,14 @@ struct InboxRootView: View {
                 if let score = item.score { Label(score.formatted(), systemImage: "arrow.up") .font(.caption2).foregroundStyle(.secondary) }
             }
             if item.isUnread {
-                Circle().fill(.orange).frame(width: 8, height: 8).padding(.top, 5)
+                Circle().fill(theme.accent).frame(width: 8, height: 8).padding(.top, 5)
             }
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
         .padding(.horizontal)
         .padding(.vertical, 13)
         .contentShape(Rectangle())
-        .background(item.isUnread ? Color.orange.opacity(0.07) : .clear)
+        .background(item.isUnread ? theme.accent.opacity(0.12) : .clear)
         .overlay(alignment: .bottom) { Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.kind == .message ? "Message" : "Reply"), \(item.title), \(item.age)")
@@ -266,6 +280,7 @@ struct ConversationView: View {
     let router: OctonautFeatureRouter
     var initialItem: InboxCardModel? = nil
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautTheme) private var theme
     @State private var composer: ComposerKind?
     @State private var messages: [Message] = []
     @State private var isLoading = true
@@ -306,15 +321,10 @@ struct ConversationView: View {
         }
         .navigationTitle(initialItem?.title ?? "Conversation")
         .refreshable { await loadConversation() }
-        .safeAreaInset(edge: .bottom) {
-            Button { composer = .comment } label: {
-                Label("Reply", systemImage: "arrowshape.turn.up.left")
-                    .frame(maxWidth: .infinity)
+        .toolbar {
+            ToolbarItem(placement: .bottomBar) {
+                Button("Reply", systemImage: "arrowshape.turn.up.left") { composer = .comment }
             }
-            .buttonStyle(.borderedProminent)
-            .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(.bar)
         }
         .sheet(item: $composer) { kind in
             // Replying to a private message uses /api/comment with the t4_ fullname.
@@ -337,7 +347,7 @@ struct ConversationView: View {
                     .font(.body)
                     .foregroundStyle(isMine ? .white : .primary)
                     .padding(11)
-                    .background(isMine ? Color.orange : Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                    .background(isMine ? theme.accent : Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 Text(message.createdAt.formatted(.relative(presentation: .named))).font(.caption2).foregroundStyle(.tertiary)
             }
             if !isMine { Spacer(minLength: 35) }
