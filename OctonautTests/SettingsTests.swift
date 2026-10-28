@@ -2,6 +2,11 @@ import XCTest
 import SwiftUI
 @testable import Octonaut
 
+@Observable
+private final class FeedInsetFixture {
+    var top: CGFloat = 0
+}
+
 @MainActor
 final class SettingsTests: XCTestCase {
     func testAppendingFeedPostsAndUpdatingRowsKeepsScrollPosition() async throws {
@@ -53,6 +58,69 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(list.contentOffset.y, offset, accuracy: 1)
         let loadedY = try XCTUnwrap(list.layoutAttributesForItem(at: anchorPath)).frame.minY - list.contentOffset.y
         XCTAssertEqual(loadedY, anchorY, accuracy: 1)
+    }
+
+    func testTallFeedImageKeepsItsSizeWhenSafeAreaChanges() async throws {
+        let dependencies = AppDependencies.preview()
+        dependencies.settings.autoMarkSeenWhileScrolling = false
+        let store = OctonautFeatureStore(screenshotMode: true)
+        store.posts = (0..<6).map(syntheticFeedPost)
+        let imageURL = URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")!
+        store.posts[0].hasMedia = true
+        store.posts[0].mediaKind = "image"
+        store.posts[0].mediaAspectRatio = 0.25
+        store.posts[0].mediaURL = imageURL
+        let inset = FeedInsetFixture()
+        let host = UIHostingController(rootView: GeometryReader { root in
+            NavigationStack {
+                FeedView(descriptor: .popular, store: store, router: OctonautFeatureRouter())
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        Color.clear.frame(height: inset.top)
+                    }
+            }
+            .environment(\.octonautRootHeight, root.size.height)
+        }.environment(dependencies))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+
+        func findList(_ view: UIView) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            return view.subviews.lazy.compactMap(findList).first
+        }
+        func firstRowHeight(_ list: UICollectionView) throws -> CGFloat {
+            list.layoutIfNeeded()
+            return try XCTUnwrap(list.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame.height
+        }
+
+        let list = try XCTUnwrap(findList(host.view))
+        for _ in 0..<30 where OctonautImageCache.cachedImage(for: imageURL) == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: imageURL))
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        let initialViewportHeight = list.bounds.height
+        let initialRowHeight = try firstRowHeight(list)
+        XCTAssertGreaterThan(initialRowHeight, 500)
+
+        inset.top = 58
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(list.bounds.height, initialViewportHeight, accuracy: 1)
+        XCTAssertEqual(try firstRowHeight(list), initialRowHeight, accuracy: 2)
+
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(window.bounds.height, 700, accuracy: 1)
+        XCTAssertEqual(list.bounds.height, initialViewportHeight - 100, accuracy: 1)
+        XCTAssertLessThan(try firstRowHeight(list), initialRowHeight - 75)
     }
 
     private func makeScrollableFeed(includesDelayedImages: Bool = false) async throws -> (OctonautFeatureStore, UIViewController, UIWindow, UICollectionView) {
