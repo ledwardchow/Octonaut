@@ -87,6 +87,7 @@ struct AccountManagerView: View {
     let store: OctonautFeatureStore
     let onAdd: () -> Void
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautTheme) private var theme
     @State private var accountToRemove: Account?
 
     var body: some View {
@@ -96,7 +97,7 @@ struct AccountManagerView: View {
             Section {
                 ForEach(dependencies.accounts.accounts) { account in
                     HStack(spacing: 12) {
-                        Image(systemName: "person.crop.circle.fill").font(.title2).foregroundStyle(.orange)
+                        Image(systemName: "person.crop.circle.fill").font(.title2).foregroundStyle(theme.accent)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(account.username).font(.body.weight(.semibold))
                             Text(account.health == .needsLogin ? "Needs sign in" : (dependencies.accounts.selectedAccountID == account.id ? "Selected" : "Saved account")).font(.caption).foregroundStyle(account.health == .needsLogin ? .red : .secondary)
@@ -159,6 +160,7 @@ struct UserProfileView: View {
     var onAddAccount: (() -> Void)? = nil
     var onLogOut: (() -> Void)? = nil
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.octonautTheme) private var theme
     @Environment(\.openURL) private var openURL
     @State private var showingLogin = false
     @State private var messageRecipient: ProfileMessageRecipient?
@@ -298,7 +300,7 @@ struct UserProfileView: View {
                 } else {
                     Image(systemName: "person.crop.circle.fill")
                         .font(.system(size: 74))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(theme.accent)
                         .accessibilityHidden(true)
                 }
                 Text("u/\(profile?.reference.username ?? username)")
@@ -430,8 +432,7 @@ struct UserProfileView: View {
         switch selectedSection {
         case .posts:
             if store.userProfilePosts.isEmpty {
-                Text("No posts to show.")
-                    .foregroundStyle(.secondary)
+                ContentUnavailableView("No posts yet", systemImage: "text.bubble", description: Text("Posts from this account will appear here."))
             } else {
                 ForEach(store.userProfilePosts) { post in
                     NavigationLink(value: FeatureRoute.post(post)) {

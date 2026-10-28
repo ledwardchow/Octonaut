@@ -15,7 +15,7 @@ enum AppIconChoice: String, CaseIterable, Identifiable {
         case .liquidGlass: "Liquid Glass"
         case .pearlPlush: "Pearl Plush (A)"
         case .frostedPink: "Frosted Pink (B)"
-        case .original: "Original"
+        case .original: "Pearl Plush"
         }
     }
     // UIKit uses nil for the primary iOS icon.
@@ -65,13 +65,13 @@ struct AppIconPicker: View {
     var body: some View {
         Section("App icon") {
             Picker("Icon", selection: Binding(get: { currentChoice }, set: changeIcon)) {
-                ForEach(AppIconChoice.allCases) { choice in
+                ForEach(AppIconChoice.allCases.filter { $0 != .pearlPlush }) { choice in
                     Text(choice.title).tag(choice)
                 }
             }
             .disabled(isChanging || !supportsChanges)
             #if os(macOS)
-            Text("Changes the Dock icon while Octonaut is running. Finder uses the Original icon.")
+            Text("Changes the Dock icon while Octonaut is running. Finder uses the Pearl Plush icon.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             #endif

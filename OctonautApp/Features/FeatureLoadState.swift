@@ -123,17 +123,12 @@ struct RedditLoginWelcomeView: View {
                     Spacer(minLength: 36)
 
                     Button(action: onSignIn) {
-                        HStack(spacing: 8) {
-                            Text("Sign in to Reddit")
-                            Image(systemName: "arrow.right")
-                                .accessibilityHidden(true)
-                        }
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 54)
-                        .foregroundStyle(colorScheme == .dark ? Color(red: 40.0 / 255, green: 17.0 / 255, blue: 0) : .white)
-                        .background(actionColor, in: RoundedRectangle(cornerRadius: 17))
+                        Label("Sign in to Reddit", systemImage: "arrow.right")
+                            .labelStyle(.titleAndIcon)
+                            .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
 
                     Button("Not now") {
                         if anonymousRequestsBlocked {

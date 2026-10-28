@@ -37,16 +37,16 @@ struct OctonautTheme: Sendable {
         primaryText: Color(uiColor: .label),
         secondaryText: Color(uiColor: .secondaryLabel),
         tertiaryText: Color(uiColor: .tertiaryLabel),
-        accent: .orange,
+        accent: ReadableColor.accent,
         accentText: .white,
-        upvote: .orange,
-        downvote: .blue,
+        upvote: ReadableColor.accent,
+        downvote: ReadableColor.downvote,
         moderator: .green,
         reply: .purple,
-        saved: .yellow,
-        seen: .gray,
+        saved: ReadableColor.accent,
+        seen: Color(uiColor: .secondaryLabel),
         destructive: .red,
-        commentDepth: [.orange, .teal, .purple, .pink, .green, .indigo]
+        commentDepth: [ReadableColor.accent, .teal, .purple, .pink, .green, .indigo]
     )
 
     static let midnight = OctonautTheme(
@@ -57,17 +57,105 @@ struct OctonautTheme: Sendable {
         primaryText: .white,
         secondaryText: Color.white.opacity(0.72),
         tertiaryText: Color.white.opacity(0.48),
-        accent: .orange,
+        accent: ReadableColor.accent,
         accentText: .white,
-        upvote: .orange,
+        upvote: ReadableColor.accent,
         downvote: .cyan,
         moderator: .mint,
         reply: .purple,
-        saved: .yellow,
-        seen: .gray,
+        saved: ReadableColor.accent,
+        seen: Color.white.opacity(0.72),
         destructive: .red,
-        commentDepth: [.orange, .teal, .purple, .pink, .green, .indigo]
+        commentDepth: [ReadableColor.accent, .teal, .purple, .pink, .green, .indigo]
     )
+
+    static let deepOcean = OctonautTheme(
+        background: Color(red: 0.02, green: 0.07, blue: 0.12),
+        surface: Color(red: 0.05, green: 0.11, blue: 0.16),
+        elevatedSurface: Color(red: 0.08, green: 0.15, blue: 0.21),
+        divider: Color.white.opacity(0.14),
+        primaryText: .white,
+        secondaryText: Color.white.opacity(0.78),
+        tertiaryText: Color.white.opacity(0.55),
+        accent: ReadableColor.accent,
+        accentText: .white,
+        upvote: ReadableColor.accent,
+        downvote: .cyan,
+        moderator: .mint,
+        reply: .purple,
+        saved: ReadableColor.accent,
+        seen: Color.white.opacity(0.72),
+        destructive: .red,
+        commentDepth: [ReadableColor.accent, .teal, .purple, .pink, .green, .indigo]
+    )
+
+    static let aurora = OctonautTheme(
+        background: Color(red: 0.03, green: 0.08, blue: 0.06),
+        surface: Color(red: 0.06, green: 0.12, blue: 0.09),
+        elevatedSurface: Color(red: 0.09, green: 0.16, blue: 0.12),
+        divider: Color.white.opacity(0.14),
+        primaryText: .white,
+        secondaryText: Color.white.opacity(0.78),
+        tertiaryText: Color.white.opacity(0.55),
+        accent: ReadableColor.accent,
+        accentText: .white,
+        upvote: ReadableColor.accent,
+        downvote: .cyan,
+        moderator: .mint,
+        reply: .purple,
+        saved: ReadableColor.accent,
+        seen: Color.white.opacity(0.72),
+        destructive: .red,
+        commentDepth: [ReadableColor.accent, .teal, .purple, .pink, .green, .indigo]
+    )
+
+    static func preferredScheme(_ choice: ThemeChoice) -> ColorScheme? {
+        switch choice {
+        case .light: return .light
+        case .dark, .midnight, .deepOcean, .aurora: return .dark
+        default: return nil
+        }
+    }
+
+    static func resolved(_ choice: ThemeChoice, colorScheme: ColorScheme, pureBlack: Bool) -> OctonautTheme {
+        let forced = preferredScheme(choice)
+        let dark = forced == .dark || (forced == nil && colorScheme == .dark)
+        var theme: OctonautTheme
+        switch choice {
+        case .midnight, .dark: theme = .midnight
+        case .deepOcean: theme = .deepOcean
+        case .aurora: theme = .aurora
+        default: theme = dark ? .midnight : .system
+        }
+        if pureBlack, dark { theme.background = .black }
+        return theme
+    }
+}
+
+/// Light-mode orange and yellow fail contrast on white. These colors stay
+/// bright on dark backgrounds and clear about 4.5:1 on white.
+private enum ReadableColor {
+    static let accent = Color(uiColor: UIColor { traits in
+        let high = traits.accessibilityContrast == .high
+        if traits.userInterfaceStyle == .dark {
+            return high
+                ? UIColor(red: 1, green: 0.78, blue: 0.42, alpha: 1)
+                : .systemOrange
+        }
+        return high
+            ? UIColor(red: 0.604, green: 0.204, blue: 0.071, alpha: 1)
+            : UIColor(red: 0.761, green: 0.255, blue: 0.047, alpha: 1)
+    })
+
+    static let downvote = Color(uiColor: UIColor { traits in
+        let high = traits.accessibilityContrast == .high
+        if traits.userInterfaceStyle == .dark {
+            return high ? UIColor(red: 0.55, green: 0.82, blue: 1, alpha: 1) : .systemBlue
+        }
+        return high
+            ? UIColor(red: 0, green: 0.24, blue: 0.58, alpha: 1)
+            : UIColor(red: 0, green: 0.32, blue: 0.64, alpha: 1)
+    })
 }
 
 private struct OctonautThemeKey: EnvironmentKey {
@@ -104,7 +192,6 @@ struct OctonautSectionHeader: View {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(theme.secondaryText)
-                .textCase(.uppercase)
             Spacer()
             if let actionTitle, let action {
                 Button(actionTitle, action: action)
@@ -242,11 +329,10 @@ struct OctonautIconLabel: View {
     var body: some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .font(.system(size: 16))
-                .frame(width: 18, height: 18)
+                .font(.body)
             Text(title)
+                .font(.caption)
                 .lineLimit(1)
-                .minimumScaleFactor(0.85)
         }
             .foregroundStyle(color)
             .fixedSize(horizontal: true, vertical: false)

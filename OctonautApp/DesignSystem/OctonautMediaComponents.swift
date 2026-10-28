@@ -1460,6 +1460,7 @@ struct OctonautZoomableImage: View {
     let url: URL
     let accessibilityLabel: String
     var onZoomChange: ((Bool) -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var scale: CGFloat = 1
     @State private var baseScale: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -1593,7 +1594,7 @@ struct OctonautZoomableImage: View {
             viewportSize: viewportSize,
             imageSize: imageSize
         )
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.88)) {
+        withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.88)) {
             offset = clamped
             baseOffset = clamped
         }
@@ -1627,7 +1628,7 @@ struct OctonautZoomableImage: View {
     }
 
     private func resetPosition() {
-        withAnimation(.easeOut(duration: 0.2)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
             scale = 1
             baseScale = 1
             offset = .zero
@@ -1644,6 +1645,7 @@ struct OctonautMediaViewer: View {
     var onOpenPost: (() -> Void)?
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var page = 0
     @State private var showOverlay = true
     @State private var isRevealed = false
@@ -1786,7 +1788,10 @@ struct OctonautMediaViewer: View {
         }
         .contentShape(Rectangle())
         .simultaneousGesture(dismissalGesture, isEnabled: !isZoomed && !isDismissing)
-        .onTapGesture { withAnimation(.easeOut(duration: 0.2)) { showOverlay.toggle() } }
+        .onTapGesture {
+            if reduceMotion { showOverlay.toggle() }
+            else { withAnimation(.easeOut(duration: 0.2)) { showOverlay.toggle() } }
+        }
         .onChange(of: page) { _, _ in isZoomed = false }
         .onChange(of: activePlayer == nil) { _, hasNoPlayer in
             if hasNoPlayer {
@@ -1971,7 +1976,7 @@ struct OctonautMediaViewer: View {
                         : (projectedDistance < 0 ? -1 : 1)
                     finishInteractiveDismissal(direction: direction)
                 } else {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86)) {
                         dismissOffset = 0
                     }
                 }
@@ -1983,12 +1988,14 @@ struct OctonautMediaViewer: View {
     private func scheduleChromeHide() {
         chromeHideTask?.cancel()
         if !showOverlay {
-            withAnimation(.easeOut(duration: 0.2)) { showOverlay = true }
+            if reduceMotion { showOverlay = true }
+            else { withAnimation(.easeOut(duration: 0.2)) { showOverlay = true } }
         }
         chromeHideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.2)) { showOverlay = false }
+            if reduceMotion { showOverlay = false }
+            else { withAnimation(.easeOut(duration: 0.2)) { showOverlay = false } }
         }
     }
 
@@ -1999,7 +2006,7 @@ struct OctonautMediaViewer: View {
 
     private func finishInteractiveDismissal(direction: CGFloat) {
         isDismissing = true
-        withAnimation(.easeOut(duration: 0.18)) {
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
             dismissOffset = direction * 1_200
         }
         Task {

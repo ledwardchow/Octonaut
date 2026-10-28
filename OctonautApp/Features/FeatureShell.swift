@@ -38,8 +38,8 @@ struct DuoLayout {
     static let dividerSwipeExclusion = dividerHitWidth / 2 + 4
     static let columnHeaderHeight: CGFloat = 60
 
-    static func isEligible(isPhone: Bool, isRegular: Bool, rootWidth: CGFloat, rootHeight: CGFloat) -> Bool {
-        isPhone && isRegular && rootWidth.isFinite && rootHeight.isFinite
+    static func isEligible(isRegular: Bool, rootWidth: CGFloat, rootHeight: CGFloat) -> Bool {
+        isRegular && rootWidth.isFinite && rootHeight.isFinite
             && rootWidth >= minimumWidth && rootHeight >= 600
     }
 
@@ -194,6 +194,7 @@ struct OctonautTabsView: View {
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.colorScheme) private var colorScheme
     @State private var rootSize: CGSize = .zero
     @State private var selectedTab: AppTab
     @State private var postsRouter: OctonautFeatureRouter
@@ -226,39 +227,7 @@ struct OctonautTabsView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            if usesFloatingTabBar {
-                persistentTabContent
-                    .safeAreaPadding(.bottom, 82)
-
-                FloatingTabBar(
-                    selection: tabSelection,
-                    unreadCount: store.unreadCount,
-                    accountTitle: accountTabTitle(whenSignedOut: "Account")
-                )
-                .padding(.horizontal, 24)
-                .padding(.bottom, 14)
-            } else if usesSidebarTabBar {
-                compactTabs
-                    .tabViewStyle(.sidebarAdaptable)
-            } else {
-                compactTabs
-            }
-        }
-        .tint(.orange)
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear { rootSize = geometry.size }
-                    .onChange(of: geometry.size) { _, size in rootSize = size }
-            }
-            // Keyboard avoidance must not switch layouts and remove the focused field.
-            .ignoresSafeArea(.keyboard)
-        }
-        .environment(\.octonautRootWidth, rootSize.width)
-        .environment(\.octonautRootHeight, rootSize.height)
-        .environment(\.octonautRootIsRegular, OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass))
-        .background(Color(uiColor: .systemBackground))
+        chrome
         .loginRequiredModal(isPresented: Binding(
             get: { dependencies.accounts.showingLoginRequired },
             set: { dependencies.accounts.showingLoginRequired = $0 }
@@ -284,27 +253,7 @@ struct OctonautTabsView: View {
             handleIncomingURL(url)
         }
         .onChange(of: dependencies.settings.customFeeds) { _, feeds in
-            if let id = postsSplitState.selectedFeed.customFeedID {
-                let updated = feeds.first { $0.id == id }?.descriptor ?? .home
-                if updated != postsSplitState.selectedFeed {
-                    store.clearVisibleFeed()
-                    postsRouter.popToRoot()
-                    postsSplitState.selectFeed(updated)
-                }
-            }
-            for (index, route) in postsRouter.path.enumerated() {
-                guard case .feed(let descriptor) = route, let id = descriptor.customFeedID else { continue }
-                guard let updated = feeds.first(where: { $0.id == id })?.descriptor else {
-                    store.clearVisibleFeed(isLoading: false)
-                    postsRouter.path = Array(postsRouter.path.prefix(index))
-                    break
-                }
-                if updated != descriptor {
-                    store.clearVisibleFeed()
-                    postsRouter.path = Array(postsRouter.path.prefix(index)) + [.feed(updated)]
-                    break
-                }
-            }
+            syncCustomFeeds(feeds)
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -322,6 +271,35 @@ struct OctonautTabsView: View {
             handleIncomingURL(url)
             return .handled
         })
+    }
+
+    private var chrome: some View {
+        tabRoot
+            .tabBarMinimizeBehavior(.onScrollDown)
+            .tint(appliedTheme.accent)
+            .background {
+                GeometryReader { geometry in
+                    Color.clear
+                        .onAppear { rootSize = geometry.size }
+                        .onChange(of: geometry.size) { _, size in rootSize = size }
+                }
+                .ignoresSafeArea(.keyboard)
+            }
+            .environment(\.octonautRootWidth, rootSize.width)
+            .environment(\.octonautRootHeight, rootSize.height)
+            .environment(\.octonautRootIsRegular, OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass))
+            .octonautTheme(appliedTheme)
+            .preferredColorScheme(OctonautTheme.preferredScheme(dependencies.settings.theme))
+            .background(appliedTheme.background)
+    }
+
+    @ViewBuilder
+    private var tabRoot: some View {
+        if usesSidebarTabBar {
+            compactTabs.tabViewStyle(.sidebarAdaptable)
+        } else {
+            compactTabs
+        }
     }
 
     /// The signed-in username doubles as the Account tab's label, so it is
@@ -362,40 +340,65 @@ struct OctonautTabsView: View {
         }
     }
 
+    private func syncCustomFeeds(_ feeds: [CustomFeed]) {
+        if let id = postsSplitState.selectedFeed.customFeedID {
+            let updated = feeds.first { $0.id == id }?.descriptor ?? .home
+            if updated != postsSplitState.selectedFeed {
+                store.clearVisibleFeed()
+                postsRouter.popToRoot()
+                postsSplitState.selectFeed(updated)
+            }
+        }
+        for (index, route) in postsRouter.path.enumerated() {
+            guard case .feed(let descriptor) = route, let id = descriptor.customFeedID else { continue }
+            guard let updated = feeds.first(where: { $0.id == id })?.descriptor else {
+                store.clearVisibleFeed(isLoading: false)
+                postsRouter.path = Array(postsRouter.path.prefix(index))
+                break
+            }
+            if updated != descriptor {
+                store.clearVisibleFeed()
+                postsRouter.path = Array(postsRouter.path.prefix(index)) + [.feed(updated)]
+                break
+            }
+        }
+    }
+
     private var shouldUsePostsSplitView: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
             && dependencies.settings.useSplitViewOnIPad
     }
 
-    private var usesFloatingTabBar: Bool {
-        let regular = OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
-        return regular && (UIDevice.current.userInterfaceIdiom == .pad
-            || dependencies.settings.showBottomNavigationOnLargeScreens)
+    private var appliedTheme: OctonautTheme {
+        OctonautTheme.resolved(
+            dependencies.settings.theme,
+            colorScheme: colorScheme,
+            pureBlack: dependencies.settings.pureBlackBackground
+        )
     }
 
+    private var usesDuoLayout: Bool {
+        let regular = OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+        return dependencies.settings.useSplitViewOnIPad
+            && dependencies.settings.feedOnLeftWhenViewingPosts
+            && DuoLayout.isEligible(
+                isRegular: regular,
+                rootWidth: rootSize.width,
+                rootHeight: rootSize.height
+            )
+    }
+
+    /// Duo windows already show communities in their own column, so navigation stays in the system tab bar.
     private var usesSidebarTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
-            && UIDevice.current.userInterfaceIdiom != .pad
-            && !usesFloatingTabBar
+            && !dependencies.settings.showBottomNavigationOnLargeScreens
+            && !usesDuoLayout
     }
 
     private var tabSelection: Binding<AppTab> {
         Binding(get: { selectedTab }, set: { tab in
-            if (tab == .account || tab == .inbox), !dependencies.accounts.requireLogin() { return }
             selectedTab = tab
         })
-    }
-
-    private var persistentTabContent: some View {
-        ZStack {
-            ForEach(AppTab.allCases) { tab in
-                tabContent(for: tab)
-                    .opacity(selectedTab == tab ? 1 : 0)
-                    .allowsHitTesting(selectedTab == tab)
-                    .accessibilityHidden(selectedTab != tab)
-                    .zIndex(selectedTab == tab ? 1 : 0)
-            }
-        }
     }
 
     private var compactTabs: some View {
@@ -410,8 +413,10 @@ struct OctonautTabsView: View {
             Tab(accountTabTitle(whenSignedOut: "Accounts"), systemImage: "person.crop.circle", value: AppTab.account) {
                 tabContent(for: .account)
             }
-            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
+            Tab(value: AppTab.search, role: .search) {
                 tabContent(for: .search)
+            } label: {
+                Label("Search", systemImage: "magnifyingglass")
             }
             Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
                 tabContent(for: .settings)
@@ -463,81 +468,6 @@ private extension FeatureRoute {
 }
 
 @MainActor
-private struct FloatingTabBar: View {
-    @Binding var selection: AppTab
-    let unreadCount: Int
-    let accountTitle: String
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(AppTab.allCases) { tab in
-                Button {
-                    selection = tab
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: systemImage(for: tab))
-                            .font(.system(size: 18, weight: .semibold))
-                            .frame(height: 20)
-                            .overlay(alignment: .topTrailing) {
-                                if tab == .inbox, unreadCount > 0 {
-                                    Text(unreadCount > 99 ? "99+" : unreadCount.formatted())
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundStyle(.white)
-                                        .padding(.horizontal, 5)
-                                        .frame(minWidth: 18, minHeight: 18)
-                                        .background(.red, in: Capsule())
-                                        .offset(x: 14, y: -9)
-                                }
-                            }
-                        Text(title(for: tab))
-                            .font(.caption2.weight(selection == tab ? .semibold : .regular))
-                            .lineLimit(1)
-                    }
-                    .foregroundStyle(selection == tab ? Color.accentColor : Color.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 50)
-                    .padding(.horizontal, 6)
-                    .background {
-                        if selection == tab {
-                            Capsule()
-                                .fill(Color.accentColor.opacity(0.13))
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(title(for: tab))
-                .accessibilityAddTraits(selection == tab ? .isSelected : [])
-            }
-        }
-        .padding(6)
-        .frame(maxWidth: 520)
-        .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.primary.opacity(0.09), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
-    }
-
-    private func title(for tab: AppTab) -> String {
-        switch tab {
-        case .account: accountTitle
-        default: tab.title
-        }
-    }
-
-    private func systemImage(for tab: AppTab) -> String {
-        switch tab {
-        case .posts: "rectangle.stack"
-        case .inbox: "envelope"
-        case .account: "person.crop.circle"
-        case .search: "magnifyingglass"
-        case .settings: "gearshape"
-        }
-    }
-}
-
-@MainActor
 private struct AdaptivePostsTabView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
@@ -552,7 +482,6 @@ private struct AdaptivePostsTabView: View {
         dependencies.settings.useSplitViewOnIPad
             && dependencies.settings.feedOnLeftWhenViewingPosts
             && DuoLayout.isEligible(
-                isPhone: UIDevice.current.userInterfaceIdiom == .phone,
                 isRegular: rootIsRegular,
                 rootWidth: rootWidth, rootHeight: rootHeight
             )
@@ -849,12 +778,10 @@ private struct PostsSplitView: View {
     let router: OctonautFeatureRouter
     let state: PostsSplitState
 
-    @State private var sidebarVisible = true
-
     var body: some View {
         GeometryReader { geometry in
             if geometry.size.width >= 1100 {
-                threeColumnLayout(availableWidth: geometry.size.width)
+                threeColumnLayout
             } else {
                 twoColumnLayout
             }
@@ -883,31 +810,23 @@ private struct PostsSplitView: View {
         .navigationSplitViewStyle(.balanced)
     }
 
-    private func threeColumnLayout(availableWidth: CGFloat) -> some View {
+    private var threeColumnLayout: some View {
         @Bindable var router = router
-        let feedWidth = min(500, max(440, availableWidth * 0.38))
 
-        return HStack(spacing: 0) {
-            if sidebarVisible {
-                NavigationStack {
-                    PostsRootView(
-                        store: store,
-                        router: router,
-                        onSelectFeed: selectFeed,
-                        selectedFeed: state.selectedFeed
-                    )
-                }
-                .frame(width: 220)
-                Divider()
-            }
-
+        return NavigationSplitView {
+            PostsRootView(
+                store: store,
+                router: router,
+                onSelectFeed: selectFeed,
+                selectedFeed: state.selectedFeed
+            )
+            .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        } content: {
             NavigationStack {
                 selectedFeedView
-                    .toolbar { sidebarButton }
             }
-            .frame(width: feedWidth)
-            Divider()
-
+            .navigationSplitViewColumnWidth(min: 320, ideal: 440, max: 560)
+        } detail: {
             NavigationStack(path: $router.path) {
                 Group {
                     if store.feedState == .loading {
@@ -925,20 +844,8 @@ private struct PostsSplitView: View {
                     OctonautDestinationView(route: route, store: store, router: router)
                 }
             }
-            .frame(maxWidth: .infinity)
         }
-    }
-
-    @ToolbarContentBuilder
-    private var sidebarButton: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            Button {
-                sidebarVisible.toggle()
-            } label: {
-                Image(systemName: "sidebar.left")
-            }
-            .accessibilityLabel("Show or hide communities")
-        }
+        .navigationSplitViewStyle(.balanced)
     }
 
     @ViewBuilder
@@ -1051,7 +958,7 @@ private struct SubredditSidebarView: View {
                     OctonautAsyncImage(url: iconURL)
                 } else {
                     Circle()
-                        .fill(Color.orange.gradient)
+                        .fill(Color.accentColor)
                         .overlay {
                             Text(String(name.prefix(1)).uppercased())
                                 .font(.title2.weight(.bold))

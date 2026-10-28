@@ -6,7 +6,15 @@ struct OctonautMacApp: App {
     @State private var dependencies: AppDependencies
 
     init() {
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
+            _dependencies = State(initialValue: AppDependencies.preview())
+        } else {
+            _dependencies = State(initialValue: AppDependencies.live())
+        }
+        #else
         _dependencies = State(initialValue: AppDependencies.live())
+        #endif
     }
 
     var body: some Scene {
@@ -19,8 +27,8 @@ struct OctonautMacApp: App {
                 .frame(minWidth: 900, minHeight: 620)
         }
         .defaultSize(width: 1240, height: 780)
-        .windowStyle(.hiddenTitleBar)
-        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .windowStyle(.automatic)
+        .windowToolbarStyle(.unified)
         .commands {
             SidebarCommands()
             CommandMenu("Posts") {

@@ -8,6 +8,7 @@ struct PostsRootView: View {
     var selectedFeed: FeedDescriptorModel? = nil
     var usesDuoSidebar = false
     @Environment(AppDependencies.self) private var dependencies
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var communityQuery = ""
     @State private var editingFeed: CustomFeed?
     @State private var feedToDelete: CustomFeed?
@@ -99,7 +100,7 @@ struct PostsRootView: View {
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button("Delete", role: .destructive) { feedToDelete = feed }
-                                Button("Edit") { editingFeed = feed }.tint(.orange)
+                                Button("Edit") { editingFeed = feed }
                             }
                     }
                     Button {
@@ -196,7 +197,7 @@ struct PostsRootView: View {
 
     private func collapsibleHeader(_ title: String, count: Int, systemImage: String, isExpanded: Binding<Bool>) -> some View {
         Button {
-            withAnimation(.snappy(duration: 0.2)) {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
                 isExpanded.wrappedValue.toggle()
             }
         } label: {
@@ -455,45 +456,18 @@ struct FeedView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbarTitleMenu { sortMenuItems }
         .toolbar {
-            if onShowCommunities == nil {
-                ToolbarItem(placement: .topBarTrailing) { feedMenu }
-                ToolbarItem(placement: .topBarTrailing) { hideReadButton }
-                ToolbarItem(placement: .topBarTrailing) { galleryButton }
-            }
-        }
-        .toolbar(onShowCommunities == nil ? .visible : .hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top, spacing: 0) {
             if let onShowCommunities {
-                HStack(spacing: 8) {
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Communities", systemImage: "chevron.left", action: onShowCommunities)
                         .labelStyle(.iconOnly)
-                        .frame(width: 44, height: 44)
-                        .glassEffect(.regular, in: Circle())
-                    Menu { sortMenuItems } label: {
-                        VStack(spacing: 2) {
-                            HStack(spacing: 4) {
-                                Text(descriptor.name).font(.headline).lineLimit(1)
-                                Image(systemName: "chevron.down").font(.caption2)
-                            }
-                            Text(sortSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .foregroundStyle(.primary)
-                    .accessibilityLabel("Sort \(descriptor.name)")
-                    galleryButton
-                        .glassEffect(.regular, in: Circle())
-                    hideReadButton
-                        .glassEffect(.regular, in: Circle())
-                    feedMenu
-                        .glassEffect(.regular, in: Circle())
+                        .accessibilityLabel("Communities")
                 }
-                .padding(.horizontal, 16)
-                .frame(height: DuoLayout.columnHeaderHeight)
-                .background(.bar)
-                .accessibilityIdentifier("duo-feed-header")
             }
+            ToolbarItem(placement: .topBarTrailing) { feedMenu }
+            ToolbarItem(placement: .topBarTrailing) { hideReadButton }
+            ToolbarItem(placement: .topBarTrailing) { galleryButton }
         }
+        .toolbar(.visible, for: .navigationBar)
         .task(id: FeedLoadIdentity(descriptor: descriptor, account: store.accountContextKey)) {
             await store.refreshPosts(for: descriptor)
         }
@@ -586,8 +560,8 @@ struct FeedView: View {
                     get: { dependencies.settings.feedLayout(for: layoutCommunity) },
                     set: { dependencies.settings.setFeedLayout($0, for: layoutCommunity) }
                 )) {
-                    Label("Compact", systemImage: "list.bullet").tag(FeedLayout.compact)
-                    Label("Cards", systemImage: "rectangle").tag(FeedLayout.full)
+                    Label("Compact rows", systemImage: "list.bullet").tag(FeedLayout.compact)
+                    Label("Media cards", systemImage: "rectangle").tag(FeedLayout.full)
                 }
                 Button { router.push(.gallery(descriptor)) } label: {
                     Label("Gallery", systemImage: "square.grid.2x2")

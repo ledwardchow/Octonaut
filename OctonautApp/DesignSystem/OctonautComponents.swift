@@ -161,8 +161,8 @@ struct OctonautVoteControls: View {
                     onVote(vote == 1 ? 0 : 1)
                 } label: {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 16))
-                        .frame(width: 22, height: 30)
+                        .font(.body)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .foregroundStyle(vote == 1 ? theme.upvote : theme.secondaryText)
                 .accessibilityLabel(vote == 1 ? "Remove upvote" : "Upvote")
@@ -182,8 +182,8 @@ struct OctonautVoteControls: View {
                     onVote(vote == -1 ? 0 : -1)
                 } label: {
                     Image(systemName: "arrow.down")
-                        .font(.system(size: 16))
-                        .frame(width: 22, height: 30)
+                        .font(.body)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .foregroundStyle(vote == -1 ? theme.downvote : theme.secondaryText)
                 .accessibilityLabel(vote == -1 ? "Remove downvote" : "Downvote")
@@ -226,6 +226,7 @@ struct OctonautUsernameLink: View {
 
 struct OctonautPostRow: View {
     @Environment(\.octonautTheme) private var theme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.openURL) private var openURL
     @Environment(AppDependencies.self) private var dependencies
     @State private var reportTarget: RedditReportTarget?
@@ -267,7 +268,7 @@ struct OctonautPostRow: View {
                 if post.isSticky { OctonautPill(title: "Pinned", color: theme.moderator) }
                 if post.isNSFW { OctonautPill(title: "18+", color: theme.destructive) }
             }
-            .lineLimit(1)
+            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
             if let authorFlair = post.authorFlair, !post.author.isEmpty {
                 OctonautUserFlairPill(flair: authorFlair)
             }
@@ -321,6 +322,7 @@ struct OctonautPostRow: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 13)
+        .opacity(post.isSeen ? 0.58 : 1)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -387,8 +389,8 @@ struct OctonautPostRow: View {
         if let onSave {
             Button(action: onSave) {
                 Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
-                    .font(.system(size: 16))
-                    .frame(width: 34, height: 34)
+                    .font(.body)
+                    .frame(minWidth: 44, minHeight: 44)
                     .contentShape(Rectangle())
             }
             .octonautActionPill(theme: theme)
@@ -501,7 +503,7 @@ struct OctonautPostRow: View {
 
 private extension View {
     func octonautActionPill(theme: OctonautTheme) -> some View {
-        frame(height: 34)
+        frame(minHeight: 44)
             .background(theme.elevatedSurface, in: Capsule())
             .overlay {
                 Capsule()
@@ -512,7 +514,9 @@ private extension View {
 
 struct OctonautCompactPostRow: View {
     @Environment(\.octonautTheme) private var theme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(AppDependencies.self) private var dependencies
+    @ScaledMetric(relativeTo: .body) private var thumbnailSide: CGFloat = 70
     @State private var reportTarget: RedditReportTarget?
     let post: PostCardModel
     let onUserOpen: (FeatureRoute) -> Void
@@ -548,25 +552,32 @@ struct OctonautCompactPostRow: View {
                             .accessibilityLabel("Seen post")
                     }
                 }
-                .lineLimit(1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 1)
                 if let authorFlair = post.authorFlair, !post.author.isEmpty {
                     OctonautUserFlairPill(flair: authorFlair)
                 }
-                HStack(spacing: 10) {
-                    Text("↑ \(post.score.formatted())")
-                    Text("💬 \(post.comments.formatted())")
-                    Text(post.age)
-                    Spacer()
+                HStack(spacing: 4) {
+                    Label(post.score.formatted(), systemImage: "arrow.up")
+                        .foregroundStyle(post.vote == 1 ? theme.upvote : post.vote == -1 ? theme.downvote : theme.secondaryText)
+                        .frame(minHeight: 44)
+                    Label(post.comments.formatted(), systemImage: "bubble")
+                        .foregroundStyle(theme.secondaryText)
+                    Label(post.age, systemImage: "clock")
+                        .foregroundStyle(theme.secondaryText)
+                    Spacer(minLength: 0)
                     Image(systemName: post.isSaved ? "bookmark.fill" : "bookmark")
+                        .foregroundStyle(post.isSaved ? theme.saved : theme.secondaryText)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
-                .font(.caption2)
-                .foregroundStyle(post.isSaved ? theme.saved : theme.tertiaryText)
+                .font(.caption)
+                .labelStyle(.titleAndIcon)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             if thumbnailOnRight { thumbnail }
         }
         .padding(.horizontal)
         .padding(.vertical, 9)
+        .opacity(post.isSeen ? 0.58 : 1)
         .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
@@ -667,7 +678,7 @@ struct OctonautCompactPostRow: View {
                     .black.opacity(0.6), in: Circle())
             }
         }
-        .frame(width: 70, height: 70)
+        .frame(width: min(thumbnailSide, 120), height: min(thumbnailSide, 120))
         .clipShape(RoundedRectangle(cornerRadius: 7))
         .accessibilityHidden(true)
     }
@@ -709,7 +720,8 @@ struct OctonautCommunityRow: View {
                     onFavorite?()
                 } label: {
                     Image(systemName: community.isFavorite ? "star.fill" : "star")
-                        .frame(width: 24, height: 30)
+                        .font(.body)
+                        .frame(minWidth: 44, minHeight: 44)
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(community.isFavorite ? theme.saved : theme.secondaryText)
@@ -777,12 +789,18 @@ struct OctonautCommentRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             Button(action: { onCollapse?() }) {
-                Rectangle()
-                    .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
-                    .frame(width: 3)
+                HStack(spacing: 4) {
+                    Text("\(comment.depth + 1)")
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(theme.secondaryText)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(theme.commentDepth[comment.depth % max(theme.commentDepth.count, 1)])
+                        .frame(width: 4)
+                }
+                .frame(minWidth: 44)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel(comment.isCollapsed ? "Expand comment" : "Collapse comment")
+            .accessibilityLabel("Depth \(comment.depth + 1). \(comment.isCollapsed ? "Expand comment" : "Collapse comment")")
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
                     Button(action: { onCollapse?() }) {

@@ -922,11 +922,11 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDuoLayoutEligibilityAndColumnBounds() {
-        XCTAssertTrue(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 669, rootHeight: 669))
-        XCTAssertFalse(DuoLayout.isEligible(isPhone: false, isRegular: true, rootWidth: 1000, rootHeight: 669))
-        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: false, rootWidth: 669, rootHeight: 669))
-        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 619, rootHeight: 669))
-        XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 956, rootHeight: 440))
+        XCTAssertTrue(DuoLayout.isEligible(isRegular: true, rootWidth: 669, rootHeight: 669))
+        XCTAssertTrue(DuoLayout.isEligible(isRegular: true, rootWidth: 1000, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isRegular: false, rootWidth: 669, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isRegular: true, rootWidth: 619, rootHeight: 669))
+        XCTAssertFalse(DuoLayout.isEligible(isRegular: true, rootWidth: 956, rootHeight: 440))
         XCTAssertEqual(DuoLayout.feedWidth(availableWidth: 669, fraction: .infinity), 280, accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(669 - DuoLayout.dividerWidth - DuoLayout.feedWidth(availableWidth: 669, fraction: 1), 320)
         XCTAssertEqual(SettingsStore.safeDuoFeedFraction(.nan), SettingsStore.defaultDuoFeedFraction)

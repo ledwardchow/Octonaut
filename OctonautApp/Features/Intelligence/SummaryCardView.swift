@@ -20,6 +20,7 @@ struct SummaryCardView: View {
     let automatic: Bool
     let useFallback: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var state: SummaryCardState = .idle
     @State private var isExpanded = true
     @State private var hasRequested = false
@@ -65,7 +66,7 @@ struct SummaryCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button {
-                withAnimation(.snappy) { isExpanded.toggle() }
+                withAnimation(reduceMotion ? nil : .snappy) { isExpanded.toggle() }
                 if isExpanded, !hasRequested, automatic { Task { await requestSummary() } }
             } label: {
                 HStack(spacing: 8) {
@@ -156,8 +157,8 @@ struct SummaryCardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-            Button("Try again") { Task { await requestSummary(force: true) } }
-                .font(.caption)
+            Button("Try Again") { Task { await requestSummary(force: true) } }
+                .buttonStyle(.bordered)
         case .failed(let message):
             Text(message)
                 .font(.footnote)
@@ -167,8 +168,8 @@ struct SummaryCardView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
             }
-            Button("Retry") { Task { await requestSummary(force: true) } }
-                .font(.caption)
+            Button("Try Again") { Task { await requestSummary(force: true) } }
+                .buttonStyle(.bordered)
         }
     }
 

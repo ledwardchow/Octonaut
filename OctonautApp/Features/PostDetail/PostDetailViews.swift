@@ -22,8 +22,7 @@ struct PostDetailView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
-    @Environment(\.octonautDuoPostDetail) private var usesDuoPostDetail
-    @State private var titleHasScrolledPast = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var commentSort = "Best"
     @State private var composerTarget: CommentComposerTarget?
     @State private var isMediaViewerPresented = false
@@ -76,7 +75,7 @@ struct PostDetailView: View {
                     },
                     onCommunityOpen: { router.push(.community(currentPost.community)) },
                     communityOpenAccessibilityHint: "Opens the subreddit",
-                    onTitleBottomChange: usesDuoPostDetail ? { titleHasScrolledPast = $0 <= DuoLayout.columnHeaderHeight } : nil
+                    onTitleBottomChange: nil
                 )
                 .padding(.top, 4)
 
@@ -98,10 +97,10 @@ struct PostDetailView: View {
                         VStack(alignment: .leading, spacing: 5) {
                             Text("Comments could not be loaded").font(.subheadline.weight(.semibold))
                             Text(message).font(.caption).foregroundStyle(.secondary)
-                            Button("Retry") {
+                            Button("Try Again") {
                                 Task { await store.loadPostDetail(for: currentPost, sort: commentSort, forceRefresh: true) }
                             }
-                            .font(.caption.weight(.semibold))
+                            .buttonStyle(.borderedProminent)
                         }
                         Spacer()
                     }
@@ -183,7 +182,7 @@ struct PostDetailView: View {
                             comment: comment,
                             postAuthor: currentPost.author,
                             onCollapse: {
-                                withAnimation(.snappy(duration: 0.2)) {
+                                withAnimation(reduceMotion ? nil : .snappy(duration: 0.2)) {
                                     store.toggleComment(id: comment.id)
                                 }
                             }, onVote: { performCommentVote(commentID: comment.id, value: $0) },
@@ -210,22 +209,6 @@ struct PostDetailView: View {
         }
         .id(post.id)
         .coordinateSpace(name: OctonautPostDetailSpace.viewport)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if usesDuoPostDetail && !store.isBlockedAuthor(currentPost.author) {
-                Text(titleHasScrolledPast ? currentPost.title : "Post")
-                    .font(.headline)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .frame(height: DuoLayout.columnHeaderHeight)
-                    .background(.regularMaterial)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("duo-post-header")
-                    .allowsHitTesting(false)
-            }
-        }
-        .ignoresSafeArea(.container, edges: usesDuoPostDetail ? .top : [])
-        .onChange(of: post.id) { _, _ in titleHasScrolledPast = false }
         .opacity(store.isBlockedAuthor(currentPost.author) ? 0 : 1)
         .allowsHitTesting(!store.isBlockedAuthor(currentPost.author))
         .accessibilityHidden(store.isBlockedAuthor(currentPost.author))
@@ -235,7 +218,7 @@ struct PostDetailView: View {
             }
         }
         .background(Color(uiColor: .systemBackground))
-        .navigationTitle(usesDuoPostDetail ? "" : "Post")
+        .navigationTitle("Post")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if !store.isBlockedAuthor(currentPost.author) {
@@ -445,6 +428,13 @@ struct GalleryView: View {
     /// A per-visit override of the blur preferences, so the toolbar button can
     /// unblur this grid without changing the saved setting.
     @State private var revealsSensitiveMedia = false
+    @State private var galleryWidth: CGFloat = 390
+
+    private var columnCount: Int {
+        if galleryWidth >= 1100 { return 4 }
+        if galleryWidth >= 440 { return 3 }
+        return 2
+    }
 
     private var blursSensitiveMedia: Bool {
         dependencies.settings.blurNSFWMedia || dependencies.settings.blurSpoilers
@@ -460,9 +450,9 @@ struct GalleryView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 4) {
-                    ForEach(0..<2) { column in
+                    ForEach(0..<columnCount, id: \.self) { column in
                         LazyVStack(spacing: 4) {
-                            ForEach(Array(items.enumerated()).filter { $0.offset % 2 == column }.map(\.element)) { item in
+                            ForEach(Array(items.enumerated()).filter { $0.offset % columnCount == column }.map(\.element)) { item in
                                 GalleryMediaTile(
                                     item: item,
                                     blursNSFW: dependencies.settings.blurNSFWMedia && !revealsSensitiveMedia,
@@ -474,20 +464,22 @@ struct GalleryView: View {
                     }
                 }
                 .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity)
 
                 if case .failed(let message) = store.feedState {
                     VStack(spacing: 12) {
                         Text(message).font(.callout).foregroundStyle(.secondary)
-                        Button("Try again") {
+                        Button("Try Again") {
                             Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                         }
+                        .buttonStyle(.borderedProminent)
                     }
                     .padding()
                 } else if store.feedState == .loading || store.feedState == .idle {
                     ProgressView("Loading gallery").padding()
                 } else if store.nextPageError != nil, store.galleryPageCursor(for: descriptor) != nil {
-                    Button("Couldn't load more. Retry") { Task { await store.loadMorePosts(for: descriptor) } }
-                        .buttonStyle(.bordered)
+                    Button("Try Again") { Task { await store.loadMorePosts(for: descriptor) } }
+                        .buttonStyle(.borderedProminent)
                         .padding()
                 } else if store.galleryPageCursor(for: descriptor) != nil {
                     ProgressView("Loading more")
@@ -505,6 +497,7 @@ struct GalleryView: View {
                 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { galleryWidth = $0 }
         .navigationTitle("Gallery")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
