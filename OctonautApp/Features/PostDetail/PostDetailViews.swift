@@ -431,8 +431,8 @@ struct GalleryView: View {
     @State private var galleryWidth: CGFloat = 390
 
     private var columnCount: Int {
-        if galleryWidth >= 980 { return 4 }
-        if galleryWidth >= 680 { return 3 }
+        if galleryWidth >= 1100 { return 4 }
+        if galleryWidth >= 440 { return 3 }
         return 2
     }
 
@@ -464,6 +464,7 @@ struct GalleryView: View {
                     }
                 }
                 .padding(.horizontal, 4)
+                .frame(maxWidth: .infinity)
 
                 if case .failed(let message) = store.feedState {
                     VStack(spacing: 12) {

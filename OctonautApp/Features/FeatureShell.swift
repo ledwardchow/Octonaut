@@ -377,9 +377,22 @@ struct OctonautTabsView: View {
         )
     }
 
+    private var usesDuoLayout: Bool {
+        let regular = OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
+        return dependencies.settings.useSplitViewOnIPad
+            && dependencies.settings.feedOnLeftWhenViewingPosts
+            && DuoLayout.isEligible(
+                isRegular: regular,
+                rootWidth: rootSize.width,
+                rootHeight: rootSize.height
+            )
+    }
+
+    /// Duo windows already show communities in their own column, so navigation stays in the system tab bar.
     private var usesSidebarTabBar: Bool {
         OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
             && !dependencies.settings.showBottomNavigationOnLargeScreens
+            && !usesDuoLayout
     }
 
     private var tabSelection: Binding<AppTab> {
