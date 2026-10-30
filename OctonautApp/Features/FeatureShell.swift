@@ -59,8 +59,11 @@ struct DuoLayout {
     }
 
     static func shouldClosePost(translation: CGSize, startX: CGFloat, feedWidth: CGFloat) -> Bool {
-        startX < feedWidth - dividerSwipeExclusion && translation.width > 80
-            && translation.width > abs(translation.height) * 1.5
+        abs(startX - feedWidth) > dividerSwipeExclusion && shouldClosePost(translation: translation)
+    }
+
+    static func shouldClosePost(translation: CGSize) -> Bool {
+        translation.width > 80 && translation.width > abs(translation.height) * 1.5
     }
 
     static func mode(for path: [FeatureRoute]) -> Mode {
@@ -604,10 +607,12 @@ private struct DuoPostsView: View {
     @GestureState private var resizeGestureActive = false
     @State private var resizeStartWidth: CGFloat?
     @State private var proposedColumnWidth: CGFloat?
+    @State private var navigationDrag: CGFloat = 0
 
     var body: some View {
         @Bindable var router = router
         let mode = DuoLayout.mode(for: router.path)
+        let showsGallery: Bool = if case .gallery = router.path.last { true } else { false }
 
         GeometryReader { geometry in
             let width = geometry.size.width
@@ -638,11 +643,11 @@ private struct DuoPostsView: View {
                         )
                         .ignoresSafeArea(.container, edges: .horizontal)
                     }
-                    .frame(width: hasDetail ? 0 : communityWidth)
+                    .frame(width: showsGallery ? 0 : communityWidth)
                     .clipped()
-                    .accessibilityHidden(hasDetail)
+                    .accessibilityHidden(showsGallery || (hasDetail && navigationDrag == 0))
 
-                    if !hasDetail {
+                    if !showsGallery {
                         dividerHandle(width: width, displayedWidth: communityWidth, isReading: false)
                     }
 
@@ -650,26 +655,35 @@ private struct DuoPostsView: View {
                         selectedFeedView
                             .ignoresSafeArea(.container, edges: hasDetail ? .horizontal : [])
                     }
-                    .frame(width: feedWidth)
-                    .gesture(DuoFeedCloseGesture(isEnabled: mode == .reading && resizeStartWidth == nil,
-                                                 feedWidth: feedWidth) { router.popToRoot() })
+                    .frame(width: showsGallery ? 0 : feedWidth)
+                    .clipped()
+                    .accessibilityHidden(showsGallery)
+                    .simultaneousGesture(revealCommunitiesGesture(
+                        dividerX: feedWidth, maximumDrag: communityWidth + divider,
+                        isEnabled: mode == .reading && resizeStartWidth == nil))
 
-                    if hasDetail {
+                    if hasDetail && !showsGallery {
                         dividerHandle(width: width, displayedWidth: feedWidth, isReading: true)
                     }
 
                     NavigationStack(path: $router.path) {
                         Color.clear
                             .navigationDestination(for: FeatureRoute.self) { route in
-                                OctonautDestinationView(route: route, store: store, router: router)
+                                OctonautDestinationView(route: route, store: store, router: router, usesDuoGallery: true)
                                     .environment(\.octonautDuoPostDetail, true)
+                                    .background(DuoPostNavigationGestures(isDisabled: mode == .reading))
                             }
                     }
-                    .frame(width: hasDetail ? max(0, width - feedWidth - divider) : 0)
+                    .frame(width: showsGallery ? width : (hasDetail ? max(0, width - feedWidth - divider) : 0))
                     .clipped()
                     .accessibilityHidden(!hasDetail)
+                    .simultaneousGesture(revealCommunitiesGesture(
+                        dividerX: feedWidth, maximumDrag: communityWidth + divider,
+                        isEnabled: mode == .reading && resizeStartWidth == nil))
                 }
+                .offset(x: hasDetail && !showsGallery ? -(communityWidth + divider) + navigationDrag : 0)
                 .frame(width: width, alignment: .leading)
+                .clipped()
                 .coordinateSpace(name: "duo-columns")
                 .onChange(of: resizeGestureActive) { _, active in
                     if !active {
@@ -685,11 +699,40 @@ private struct DuoPostsView: View {
                 .onChange(of: mode) { _, _ in
                     resizeStartWidth = nil
                     proposedColumnWidth = nil
+                    navigationDrag = 0
                 }
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: mode)
             }
         }
         .ignoresSafeArea(.container, edges: .bottom)
+    }
+
+    private func revealCommunitiesGesture(dividerX: CGFloat, maximumDrag: CGFloat, isEnabled: Bool) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .named("duo-columns"))
+            .onChanged { value in
+                guard isEnabled,
+                      abs(value.startLocation.x - dividerX) > DuoLayout.dividerSwipeExclusion,
+                      value.translation.width > abs(value.translation.height) * 1.5 else { return }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    navigationDrag = min(value.translation.width, maximumDrag)
+                }
+            }
+            .onEnded { value in
+                guard isEnabled else { return }
+                finishCommunitySwipe(DuoLayout.shouldClosePost(
+                    translation: value.translation,
+                    startX: value.startLocation.x,
+                    feedWidth: dividerX))
+            }
+    }
+
+    private func finishCommunitySwipe(_ shouldClose: Bool) {
+        if shouldClose { router.popToRoot() }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+            navigationDrag = 0
+        }
     }
 
     @ViewBuilder
@@ -778,67 +821,58 @@ private struct DuoPostsView: View {
     }
 }
 
-private struct DuoFeedCloseGesture: UIGestureRecognizerRepresentable {
-    var isEnabled: Bool
-    var feedWidth: CGFloat
-    var closePost: () -> Void
+/// The Duo column group owns the back swipe while reading a post.
+struct DuoPostNavigationGestures: UIViewControllerRepresentable {
+    let isDisabled: Bool
 
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator(converter: converter, feedWidth: feedWidth)
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.isDisabled = isDisabled
+        controller.updateGestures()
     }
 
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let recognizer = UIPanGestureRecognizer()
-        recognizer.maximumNumberOfTouches = 1
-        recognizer.cancelsTouchesInView = true
-        recognizer.delaysTouchesBegan = true
-        recognizer.delegate = context.coordinator
-        recognizer.isEnabled = isEnabled
-        return recognizer
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        controller.restoreGestures()
     }
 
-    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        context.coordinator.feedWidth = feedWidth
-        recognizer.isEnabled = isEnabled
-    }
+    final class Controller: UIViewController {
+        var isDisabled = false
+        private var savedGestures: [(UIGestureRecognizer, Bool)] = []
 
-    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        if recognizer.state == .cancelled || recognizer.state == .failed {
-            context.coordinator.startLocation = nil
-            return
-        }
-        guard recognizer.state == .ended, let start = context.coordinator.startLocation else { return }
-        defer { context.coordinator.startLocation = nil }
-        // Translation can reset when the recognizer begins, so retain the touch origin.
-        let end = context.converter.localLocation
-        if DuoLayout.shouldClosePost(translation: CGSize(width: end.x - start.x, height: end.y - start.y),
-                                     startX: start.x, feedWidth: feedWidth) {
-            closePost()
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        let converter: CoordinateSpaceConverter
-        var feedWidth: CGFloat
-        var startLocation: CGPoint?
-
-        init(converter: CoordinateSpaceConverter, feedWidth: CGFloat) {
-            self.converter = converter
-            self.feedWidth = feedWidth
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            updateGestures()
         }
 
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let velocity = converter.localVelocity, let translation = converter.localTranslation else { return false }
-            let start = CGPoint(x: converter.localLocation.x - translation.x,
-                                y: converter.localLocation.y - translation.y)
-            let accepted = start.x < feedWidth - DuoLayout.dividerSwipeExclusion && velocity.x > 0 && velocity.x > abs(velocity.y) * 1.5
-            startLocation = accepted ? start : nil
-            return accepted
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            updateGestures()
         }
 
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            otherGestureRecognizer is UIPanGestureRecognizer
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            updateGestures()
+        }
+
+        func updateGestures() {
+            guard isDisabled else {
+                restoreGestures()
+                return
+            }
+            guard let navigationController else { return }
+            if savedGestures.isEmpty {
+                savedGestures = [navigationController.interactivePopGestureRecognizer,
+                                 navigationController.interactiveContentPopGestureRecognizer]
+                    .compactMap { $0 }
+                    .map { ($0, $0.isEnabled) }
+            }
+            for (gesture, _) in savedGestures { gesture.isEnabled = false }
+        }
+
+        func restoreGestures() {
+            for (gesture, wasEnabled) in savedGestures { gesture.isEnabled = wasEnabled }
+            savedGestures.removeAll()
         }
     }
 }
@@ -1181,6 +1215,7 @@ struct OctonautDestinationView: View {
     let route: FeatureRoute
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var usesDuoGallery = false
     @Environment(AppDependencies.self) private var dependencies
 
     var body: some View {
@@ -1206,7 +1241,9 @@ struct OctonautDestinationView: View {
         case .composer(let kind):
             ComposerView(kind: kind, store: store)
         case .gallery(let descriptor):
-            GalleryView(descriptor: descriptor, store: store, router: router)
+            GalleryView(descriptor: descriptor, store: store, router: router,
+                        columnCount: usesDuoGallery ? 4 : 2,
+                        onClose: usesDuoGallery ? { router.pop() } : nil)
         case .mediaURL(let url):
             MediaURLView(url: url)
         case .web(let url):

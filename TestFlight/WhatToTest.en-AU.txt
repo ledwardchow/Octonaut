@@ -15,3 +15,5 @@ Updated comment loading and pagination.
 Added loading more comments on Mac.
 Updated profile and subscription loading.
 Added recommended communities to Search.
+Smoothly swipe right on posts to reveal communities.
+Gallery now fills Duo with four columns.

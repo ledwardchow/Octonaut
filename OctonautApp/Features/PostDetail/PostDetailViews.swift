@@ -437,6 +437,8 @@ struct GalleryView: View {
     let descriptor: FeedDescriptorModel
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    var columnCount = 2
+    var onClose: (() -> Void)?
 
     @Environment(AppDependencies.self) private var dependencies
     @State private var selectedItem: GalleryMediaItem?
@@ -458,9 +460,9 @@ struct GalleryView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 HStack(alignment: .top, spacing: 4) {
-                    ForEach(0..<2) { column in
+                    ForEach(0..<columnCount, id: \.self) { column in
                         LazyVStack(spacing: 4) {
-                            ForEach(Array(items.enumerated()).filter { $0.offset % 2 == column }.map(\.element)) { item in
+                            ForEach(Array(items.enumerated()).filter { $0.offset % columnCount == column }.map(\.element)) { item in
                                 GalleryMediaTile(
                                     item: item,
                                     blursNSFW: dependencies.settings.blurNSFWMedia && !revealsSensitiveMedia,
@@ -505,7 +507,15 @@ struct GalleryView: View {
         }
         .navigationTitle("Gallery")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(onClose != nil)
         .toolbar {
+            if let onClose {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Back to feed", systemImage: "chevron.left", action: onClose)
+                        .labelStyle(.iconOnly)
+                        .accessibilityIdentifier("duo-gallery-back")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 if blursSensitiveMedia {
                     Button {

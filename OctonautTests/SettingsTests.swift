@@ -9,6 +9,28 @@ private final class FeedInsetFixture {
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testDuoPostDisablesBothNativeBackGesturesAndRestoresThem() async throws {
+        let host = UIHostingController(rootView: Color.clear.background(DuoPostNavigationGestures(isDisabled: true)))
+        let navigation = UINavigationController(rootViewController: UIViewController())
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = navigation
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        navigation.pushViewController(host, animated: false)
+        try await Task.sleep(for: .milliseconds(200))
+
+        let edge = try XCTUnwrap(navigation.interactivePopGestureRecognizer)
+        let content = try XCTUnwrap(navigation.interactiveContentPopGestureRecognizer)
+        XCTAssertFalse(edge.isEnabled)
+        XCTAssertFalse(content.isEnabled)
+
+        host.rootView = Color.clear.background(DuoPostNavigationGestures(isDisabled: false))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(edge.isEnabled)
+        XCTAssertTrue(content.isEnabled)
+    }
+
     func testAppendingFeedPostsAndUpdatingRowsKeepsScrollPosition() async throws {
         let (store, host, window, list) = try await makeScrollableFeed()
         defer { window.isHidden = true }
@@ -970,6 +992,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 669, storedWidth: 360), 360)
         XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 620, storedWidth: 360), 339)
         XCTAssertTrue(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 20), startX: 50, feedWidth: 320))
+        XCTAssertTrue(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 20), startX: 500, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 100), startX: 50, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: -100, height: 0), startX: 50, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 0), startX: 310, feedWidth: 320))
