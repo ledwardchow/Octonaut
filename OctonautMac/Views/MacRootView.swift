@@ -24,10 +24,19 @@ struct MacRootView: View {
                 authenticated: dependencies.authenticated,
                 intelligence: dependencies.intelligence,
                 settings: dependencies.settings,
-                persistence: dependencies.persistence
+                persistence: dependencies.persistence,
+                screenshotMode: Self.usesFixtures
             )
         )
         _search = State(initialValue: SearchFeatureModel(reddit: dependencies.reddit))
+    }
+
+    private static var usesFixtures: Bool {
+#if DEBUG
+        ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil
+#else
+        false
+#endif
     }
 
     var body: some View {

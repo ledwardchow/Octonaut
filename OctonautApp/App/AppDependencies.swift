@@ -33,7 +33,8 @@ final class AppDependencies {
         intelligence: any IntelligenceService,
         summaryAPIKeyStore: any SummaryAPIKeyStore,
         links: any LinkRouter,
-        settings: SettingsStore
+        settings: SettingsStore,
+        graphQL: RedditGraphQLClient? = nil
     ) {
         self.router = router
         self.accounts = accounts
@@ -47,6 +48,7 @@ final class AppDependencies {
         self.settings = settings
         accounts.accountSelectionDidChange = { [weak settings] account in
             settings?.setCustomFeedUser(account?.health == .healthy ? account?.username : nil)
+            graphQL?.invalidateContinuations()
         }
         settings.setCustomFeedUser(accounts.selectedAccount?.health == .healthy ? accounts.selectedAccount?.username : nil)
     }
@@ -96,7 +98,8 @@ final class AppDependencies {
         }
         let vault = KeychainCredentialVault()
         let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault), selectionDefaults: .standard)
-        let reddit = URLSessionRedditClient(credentialVault: vault)
+        let graphQL = RedditGraphQLClient(credentialVault: vault)
+        let reddit = URLSessionRedditClient(credentialVault: vault, graphQL: graphQL)
         let authenticated = LiveAuthenticatedRedditService(credentialVault: vault, reddit: reddit)
         let onDeviceIntelligence: any IntelligenceService
         if #available(iOS 27.0, macOS 26.0, *) {
@@ -129,7 +132,8 @@ final class AppDependencies {
             intelligence: intelligence,
             summaryAPIKeyStore: summaryAPIKeyStore,
             links: DefaultLinkRouter(),
-            settings: settings
+            settings: settings,
+            graphQL: graphQL
         )
         Task {
             let modelAvailable = await intelligence.summaryAvailability == .available
@@ -144,7 +148,14 @@ final class AppDependencies {
         let persistence = InMemoryPersistenceStore()
         let vault = InMemoryCredentialVault()
         let accounts = AccountCoordinator(persistence: persistence, secrets: CredentialVaultSecretStore(vault: vault))
-        let reddit = FixtureRedditClient(blockedUsers: ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "blocked-users" ? ["example_spammer", "unwanted_replies"] : [])
+        let usesFixtures = ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil
+        let reddit = FixtureRedditClient(
+            blockedUsers: ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "blocked-users" ? ["example_spammer", "unwanted_replies"] : [],
+            moreCommentsData: ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "comments-pagination" ? FixtureData.commentPaginationResponse : nil,
+            searchData: usesFixtures ? FixtureData.searchResponse : nil,
+            communitiesData: usesFixtures ? FixtureData.communitiesResponse : nil,
+            usersData: usesFixtures ? FixtureData.usersResponse : nil
+        )
         let summaryAPIKeyStore = InMemorySummaryAPIKeyStore()
         return AppDependencies(
             router: AppRouter(),

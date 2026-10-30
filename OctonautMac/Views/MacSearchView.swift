@@ -96,12 +96,15 @@ struct MacSearchView: View {
                     }
                 }
 
-                Button("Load More") {
-                    Task { await model.loadMore() }
+                if model.hasMoreResults {
+                    Button(model.paginationError == nil ? "Load More" : "Retry loading more") {
+                        Task { await model.loadMore() }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(model.isLoadingMore)
                 }
-                .frame(maxWidth: .infinity)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
             }
             .listStyle(.inset)
         }

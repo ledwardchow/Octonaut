@@ -2,8 +2,35 @@ import XCTest
 import SwiftUI
 @testable import Octonaut
 
+@Observable
+private final class FeedInsetFixture {
+    var top: CGFloat = 0
+}
+
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testDuoPostDisablesBothNativeBackGesturesAndRestoresThem() async throws {
+        let host = UIHostingController(rootView: Color.clear.background(DuoPostNavigationGestures(isDisabled: true)))
+        let navigation = UINavigationController(rootViewController: UIViewController())
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = navigation
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        navigation.pushViewController(host, animated: false)
+        try await Task.sleep(for: .milliseconds(200))
+
+        let edge = try XCTUnwrap(navigation.interactivePopGestureRecognizer)
+        let content = try XCTUnwrap(navigation.interactiveContentPopGestureRecognizer)
+        XCTAssertFalse(edge.isEnabled)
+        XCTAssertFalse(content.isEnabled)
+
+        host.rootView = Color.clear.background(DuoPostNavigationGestures(isDisabled: false))
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertTrue(edge.isEnabled)
+        XCTAssertTrue(content.isEnabled)
+    }
+
     func testAppendingFeedPostsAndUpdatingRowsKeepsScrollPosition() async throws {
         let (store, host, window, list) = try await makeScrollableFeed()
         defer { window.isHidden = true }
@@ -53,6 +80,69 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(list.contentOffset.y, offset, accuracy: 1)
         let loadedY = try XCTUnwrap(list.layoutAttributesForItem(at: anchorPath)).frame.minY - list.contentOffset.y
         XCTAssertEqual(loadedY, anchorY, accuracy: 1)
+    }
+
+    func testTallFeedImageKeepsItsSizeWhenSafeAreaChanges() async throws {
+        let dependencies = AppDependencies.preview()
+        dependencies.settings.autoMarkSeenWhileScrolling = false
+        let store = OctonautFeatureStore(screenshotMode: true)
+        store.posts = (0..<6).map(syntheticFeedPost)
+        let imageURL = URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")!
+        store.posts[0].hasMedia = true
+        store.posts[0].mediaKind = "image"
+        store.posts[0].mediaAspectRatio = 0.25
+        store.posts[0].mediaURL = imageURL
+        let inset = FeedInsetFixture()
+        let host = UIHostingController(rootView: GeometryReader { root in
+            NavigationStack {
+                FeedView(descriptor: .popular, store: store, router: OctonautFeatureRouter())
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        Color.clear.frame(height: inset.top)
+                    }
+            }
+            .environment(\.octonautRootHeight, root.size.height)
+        }.environment(dependencies))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+
+        func findList(_ view: UIView) -> UICollectionView? {
+            if let list = view as? UICollectionView { return list }
+            return view.subviews.lazy.compactMap(findList).first
+        }
+        func firstRowHeight(_ list: UICollectionView) throws -> CGFloat {
+            list.layoutIfNeeded()
+            return try XCTUnwrap(list.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame.height
+        }
+
+        let list = try XCTUnwrap(findList(host.view))
+        for _ in 0..<30 where OctonautImageCache.cachedImage(for: imageURL) == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: imageURL))
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        let initialViewportHeight = list.bounds.height
+        let initialRowHeight = try firstRowHeight(list)
+        XCTAssertGreaterThan(initialRowHeight, 500)
+
+        inset.top = 58
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(list.bounds.height, initialViewportHeight, accuracy: 1)
+        XCTAssertEqual(try firstRowHeight(list), initialRowHeight, accuracy: 2)
+
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(300))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(window.bounds.height, 700, accuracy: 1)
+        XCTAssertEqual(list.bounds.height, initialViewportHeight - 100, accuracy: 1)
+        XCTAssertLessThan(try firstRowHeight(list), initialRowHeight - 75)
     }
 
     private func makeScrollableFeed(includesDelayedImages: Bool = false) async throws -> (OctonautFeatureStore, UIViewController, UIWindow, UICollectionView) {
@@ -421,7 +511,7 @@ final class SettingsTests: XCTestCase {
         try await withThrowingTaskGroup(of: Void.self) { group in
             for _ in 0..<3 {
                 group.addTask {
-                    _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+                    _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
                 }
             }
             try await group.waitForAll()
@@ -439,7 +529,7 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 1)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
@@ -449,7 +539,7 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [403, 200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.count, 3)
@@ -460,31 +550,20 @@ final class SettingsTests: XCTestCase {
         AnonymousBootstrapProtocol.reset(seedStatuses: [nil, 200])
         let client = makeAnonymousBootstrapClient()
         for _ in 0..<3 {
-            _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+            _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
         }
         XCTAssertEqual(AnonymousBootstrapProtocol.seedRequests.count, 2)
     }
 
-    func testAuthenticatedSearchDoesNotBootstrapAnonymousCookies() async throws {
+    func testAuthenticatedFeedDoesNotBootstrapAnonymousCookies() async throws {
         AnonymousBootstrapProtocol.reset(seedStatuses: [200])
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
         XCTAssertTrue(AnonymousBootstrapProtocol.seedRequests.isEmpty)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.first?.value(forHTTPHeaderField: "Cookie"),
                        "reddit_session=synthetic-session")
-    }
-
-    func testSearchQueryEncodesPlusSigns() async throws {
-        AnonymousBootstrapProtocol.reset(seedStatuses: [200])
-        let client = makeAnonymousBootstrapClient()
-        _ = try await client.search(RedditSearchRequest(query: "C++ & a=b \(UUID().uuidString)"), account: nil)
-
-        let url = try XCTUnwrap(AnonymousBootstrapProtocol.jsonRequests.first?.url)
-        XCTAssertTrue(url.absoluteString.contains("q=C%2B%2B%20%26%20a%3Db"), url.absoluteString)
-        let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
-        XCTAssertTrue(query?.first { $0.name == "q" }?.value?.hasPrefix("C++ & a=b") == true)
     }
 
     func testAnonymousCookiesAreNotSentWithAccountRequests() async throws {
@@ -492,9 +571,9 @@ final class SettingsTests: XCTestCase {
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: account)
-        _ = try await client.search(RedditSearchRequest(query: UUID().uuidString), account: nil)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
 
         let requests = AnonymousBootstrapProtocol.jsonRequests
         XCTAssertEqual(requests.count, 3)
@@ -696,8 +775,8 @@ final class SettingsTests: XCTestCase {
         }
     }
 
-    func testCombinedFeedDoesNotRetryAccessDeniedAndSingleFeedDoesNotFallBack() async throws {
-        for (destination, expectedError) in [(FeedDestination.combined(["denied", "swift"]), RedditClientError.accessDenied), (.community("missing"), .notFound)] {
+    func testCombinedFeedAndWebsiteURLDoNotRetryErrors() async throws {
+        for (destination, expectedError) in [(FeedDestination.combined(["denied", "swift"]), RedditClientError.accessDenied), (.url(URL(string: "https://www.reddit.com/r/missing")!), .notFound)] {
             GamesRouteProtocol.reset()
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [GamesRouteProtocol.self]
@@ -913,6 +992,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 669, storedWidth: 360), 360)
         XCTAssertEqual(DuoLayout.communityWidth(availableWidth: 620, storedWidth: 360), 339)
         XCTAssertTrue(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 20), startX: 50, feedWidth: 320))
+        XCTAssertTrue(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 20), startX: 500, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 100), startX: 50, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: -100, height: 0), startX: 50, feedWidth: 320))
         XCTAssertFalse(DuoLayout.shouldClosePost(translation: CGSize(width: 100, height: 0), startX: 310, feedWidth: 320))
@@ -1298,7 +1378,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
-    func testUserSectionListingUsesTheSectionRouteWithoutASortPathSegment() async throws {
+    func testAnonymousUserOverviewUsesWebsiteSectionRoute() async throws {
         UserSectionRouteProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [UserSectionRouteProtocol.self]
@@ -1309,28 +1389,28 @@ final class SettingsTests: XCTestCase {
         let page = try await client.listing(
             ListingRequest(
                 feed: FeedDescriptor(
-                    destination: .user(username: "Example_Author", section: .saved),
+                    destination: .user(username: "Example_Author", section: .overview),
                     sort: .new
                 ),
                 limit: 35,
-                accountScope: .account(account),
+                accountScope: .anonymous,
                 responseCachePolicy: .reloadIgnoringCache
             ),
-            account: account
+            account: nil
         )
 
         XCTAssertEqual(page.items.map(\.id), ["saved"])
-        let request = try XCTUnwrap(UserSectionRouteProtocol.requests.first)
+        let request = try XCTUnwrap(UserSectionRouteProtocol.requests.last)
         let url = try XCTUnwrap(request.url)
-        XCTAssertEqual(url.path, "/user/Example_Author/saved.json")
+        XCTAssertEqual(url.path, "/user/Example_Author/overview.json")
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertTrue(query.contains(URLQueryItem(name: "sort", value: "new")))
         // A mixed listing is narrowed to posts, since `listing` only returns posts.
         XCTAssertTrue(query.contains(URLQueryItem(name: "type", value: "links")))
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-test-session")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
-    func testSavedCommentsUseTheSameRouteNarrowedToComments() async throws {
+    func testAnonymousUserOverviewNarrowsWebsiteRouteToComments() async throws {
         UserSectionRouteProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [UserSectionRouteProtocol.self]
@@ -1338,11 +1418,11 @@ final class SettingsTests: XCTestCase {
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-test-session")])
         let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
 
-        let page = try await client.userComments("Example_Author", section: .saved, after: nil, account: account)
+        let page = try await client.userComments("Example_Author", section: .overview, after: nil, account: nil)
 
         XCTAssertEqual(page.items.map(\.id), ["savedcomment"])
-        let url = try XCTUnwrap(UserSectionRouteProtocol.requests.first?.url)
-        XCTAssertEqual(url.path, "/user/Example_Author/saved.json")
+        let url = try XCTUnwrap(UserSectionRouteProtocol.requests.last?.url)
+        XCTAssertEqual(url.path, "/user/Example_Author/overview.json")
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertTrue(query.contains(URLQueryItem(name: "type", value: "comments")))
     }
@@ -1616,7 +1696,7 @@ private final class AnonymousBootstrapProtocol: URLProtocol, @unchecked Sendable
         let delaySeed = Self.storage.delaySeed
         Self.storage.lock.unlock()
         if isSeed && delaySeed {
-            // Keep the seed in flight while concurrent searches enter the actor.
+            // Keep the seed in flight while concurrent feed requests enter the actor.
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { self.respond(status: status, isSeed: true) }
         } else {
             respond(status: status, isSeed: isSeed)

@@ -8,3 +8,12 @@ Read posts now use an eye marker.
 Feed media now fits within the screen height.
 Gallery pictures now sit together without side bars.
 Fixed feed jumps while media loads.
+Fixed feed images resizing while scrolling.
+Restored r/all and search for signed-in accounts.
+Updated signed-in feed and community loading.
+Updated comment loading and pagination.
+Added loading more comments on Mac.
+Updated profile and subscription loading.
+Added recommended communities to Search.
+Smoothly swipe right on posts to reveal communities.
+Gallery now fills Duo with four columns.

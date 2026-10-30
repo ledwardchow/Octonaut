@@ -23,13 +23,26 @@ final class SearchFeatureModel {
     var activeScope: FeatureSearchScope = .posts
     var activeQuery = ""
     var paginationError: String?
+    private(set) var isLoadingMore = false
+
+    var hasMoreResults: Bool {
+        switch activeScope {
+        case .posts: postsAfter != nil
+        case .communities: communitiesAfter != nil
+        case .users: false
+        }
+    }
 
     init(reddit: any RedditClient) {
         self.reddit = reddit
     }
 
     func invalidateForAccountChange() {
+        isLoadingMore = false
         requestGeneration &+= 1
+        trendingGeneration &+= 1
+        trendingCommunities.removeAll()
+        trendingState = .idle
         postsAfter = nil
         communitiesAfter = nil
         posts.removeAll()
@@ -65,6 +78,7 @@ final class SearchFeatureModel {
         activeScope = scope
         requestGeneration &+= 1
         let generation = requestGeneration
+        isLoadingMore = false
         postsAfter = nil
         communitiesAfter = nil
         paginationError = nil
@@ -86,7 +100,7 @@ final class SearchFeatureModel {
                 postsAfter = listing.after
                 communities = []
                 users = []
-                state = posts.isEmpty ? .empty : .loaded
+                state = posts.isEmpty && listing.after == nil ? .empty : .loaded
             case .communities:
                 let listing = try await reddit.communities(RedditCommunitySearchRequest(query: query), account: accountID)
                 guard generation == requestGeneration else { return }
@@ -95,7 +109,7 @@ final class SearchFeatureModel {
                 communitiesAfter = listing.after
                 posts = []
                 users = []
-                state = communities.isEmpty ? .empty : .loaded
+                state = communities.isEmpty && listing.after == nil ? .empty : .loaded
             case .users:
                 let listing = try await reddit.users(RedditUserSearchRequest(query: query), account: accountID)
                 guard generation == requestGeneration else { return }
@@ -114,8 +128,11 @@ final class SearchFeatureModel {
     }
 
     func loadMore() async {
-        guard state == .loaded, activeQuery.count >= 2 else { return }
+        guard state == .loaded, activeQuery.count >= 2, hasMoreResults, !isLoadingMore else { return }
         let generation = requestGeneration
+        isLoadingMore = true
+        paginationError = nil
+        defer { if generation == requestGeneration { isLoadingMore = false } }
         do {
             switch activeScope {
             case .posts:
@@ -127,7 +144,8 @@ final class SearchFeatureModel {
                 guard generation == requestGeneration else { return }
                 let existing = Set(posts.map(\.id))
                 posts.append(contentsOf: listing.items.filter { !existing.contains($0.id) }.map(PostCardModel.init))
-                self.postsAfter = listing.after
+                self.postsAfter = listing.after == postsAfter ? nil : listing.after
+                state = posts.isEmpty && self.postsAfter == nil ? .empty : .loaded
             case .communities:
                 guard let communitiesAfter else { return }
                 let listing = try await reddit.communities(
@@ -137,7 +155,8 @@ final class SearchFeatureModel {
                 guard generation == requestGeneration else { return }
                 let existing = Set(communities.map(\.id))
                 communities.append(contentsOf: listing.items.filter { !existing.contains($0.id) }.map(CommunityCardModel.init))
-                self.communitiesAfter = listing.after
+                self.communitiesAfter = listing.after == communitiesAfter ? nil : listing.after
+                state = communities.isEmpty && self.communitiesAfter == nil ? .empty : .loaded
             case .users:
                 return
             }

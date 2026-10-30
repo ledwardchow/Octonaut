@@ -36,7 +36,7 @@ protocol RedditClient: Sendable {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID?
     ) async throws -> [CommentTreeNode]
@@ -125,6 +125,7 @@ actor URLSessionRedditClient: RedditClient {
     /// cache, so one account's cookies never reach another account or the
     /// anonymous path, and private responses are never written to disk.
     private let authenticatedSession: URLSession
+    let graphQL: RedditGraphQLClient
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
@@ -136,11 +137,17 @@ actor URLSessionRedditClient: RedditClient {
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
         userAgent: String = URLSessionRedditClient.browserUserAgent,
-        sessionConfiguration: URLSessionConfiguration? = nil
+        sessionConfiguration: URLSessionConfiguration? = nil,
+        graphQL: RedditGraphQLClient? = nil
     ) {
         self.baseURL = baseURL
         self.credentialVault = credentialVault
         self.userAgent = userAgent
+        self.graphQL = graphQL ?? RedditGraphQLClient(
+            credentialVault: credentialVault,
+            userAgent: userAgent,
+            sessionConfiguration: sessionConfiguration
+        )
 
         let configuration = sessionConfiguration ?? URLSessionConfiguration.ephemeral
         let authenticatedConfiguration = configuration.copy() as! URLSessionConfiguration
@@ -170,6 +177,34 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func listing(_ request: ListingRequest, account: AccountID? = nil) async throws -> Listing<Post> {
+        let selectedAccount = account ?? accountFromScope(request.accountScope)
+        if let selectedAccount {
+            switch request.feed.destination {
+            case .home, .popular, .all, .community, .multireddit:
+                return try await graphQL.listing(request, account: selectedAccount)
+            case .user(let username, let section):
+                if section.isPrivateToOwner {
+                    guard try await isSelectedAccountOwner(username, account: selectedAccount) else {
+                        return Listing(items: [])
+                    }
+                }
+                return try await graphQL.userPosts(request, username: username, section: section, account: selectedAccount)
+            default: break
+            }
+        } else if case .all = request.feed.destination {
+            throw RedditClientError.anonymousAccessBlocked
+        }
+        if case .search(let query, let community) = request.feed.destination {
+            return try await graphQL.search(
+                RedditSearchRequest(
+                    query: query, community: community,
+                    sort: RedditSort(rawValue: redditSort(request.feed.sort)) ?? .hot,
+                    timeRange: request.feed.topTime.flatMap { RedditTimeRange(rawValue: $0.rawValue) },
+                    after: request.after, limit: request.limit
+                ),
+                account: account ?? accountFromScope(request.accountScope)
+            )
+        }
         let path = feedPath(request.feed)
         var query: [URLQueryItem] = [
             URLQueryItem(name: "raw_json", value: "1"),
@@ -208,6 +243,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func post(_ permalink: URL, sort: CommentSort, account: AccountID? = nil) async throws -> PostThread {
+        if let account { return try await graphQL.post(permalink, sort: sort, account: account) }
         let route = postJSONRoute(for: permalink)
         let query = [
             URLQueryItem(name: "raw_json", value: "1"),
@@ -227,11 +263,15 @@ actor URLSessionRedditClient: RedditClient {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID? = nil
     ) async throws -> [CommentTreeNode] {
-        guard !childIDs.isEmpty else { return [] }
+        if case .page = continuation {
+            guard let account else { throw RedditClientError.authenticationRequired }
+            return try await graphQL.moreComments(postFullname: postFullname, parentFullname: parentFullname, continuation: continuation, sort: sort, account: account)
+        }
+        guard case .children(let childIDs) = continuation, !childIDs.isEmpty else { return [] }
         await acquireMoreCommentsRequest()
         defer { releaseMoreCommentsRequest() }
         let route = Self.moreCommentsRoute(
@@ -252,66 +292,19 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func search(_ request: RedditSearchRequest, account: AccountID? = nil) async throws -> Listing<Post> {
-        let path: String
-        if let community = normalizedCommunity(request.community) {
-            path = "/r/\(community)/search.json"
-        } else {
-            path = "/search.json"
-        }
-        var query: [URLQueryItem] = [
-            URLQueryItem(name: "raw_json", value: "1"),
-            URLQueryItem(name: "q", value: request.query),
-            URLQueryItem(name: "sort", value: request.sort.rawValue),
-            URLQueryItem(name: "restrict_sr", value: request.community == nil ? nil : "on"),
-            URLQueryItem(name: "limit", value: String(min(max(request.limit, 1), 100)))
-        ]
-        if let timeRange = request.timeRange {
-            query.append(URLQueryItem(name: "t", value: timeRange.rawValue))
-        }
-        if let after = request.after { query.append(URLQueryItem(name: "after", value: after)) }
-        let data = try await requestData(
-            method: "GET",
-            path: path,
-            query: query,
-            body: nil,
-            account: account,
-            retryable: true
-        )
-        return try RedditJSONCodec.decodePosts(data)
+        try await graphQL.search(request, account: account)
     }
 
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID? = nil) async throws -> Listing<Community> {
-        var query = [
-            URLQueryItem(name: "raw_json", value: "1"),
-            URLQueryItem(name: "q", value: request.query),
-            URLQueryItem(name: "limit", value: String(min(max(request.limit, 1), 100)))
-        ]
-        if let after = request.after { query.append(URLQueryItem(name: "after", value: after)) }
-        let data = try await requestData(
-            method: "GET",
-            path: "/subreddits/search.json",
-            query: query,
-            body: nil,
-            account: account,
-            retryable: true
-        )
-        return try RedditJSONCodec.decodeCommunities(data)
+        try await graphQL.communities(request, account: account)
     }
 
     func users(_ request: RedditUserSearchRequest, account: AccountID? = nil) async throws -> Listing<UserProfile> {
-        let route = Self.userSearchRoute(for: request)
-        let data = try await requestData(
-            method: "GET",
-            path: route.path,
-            query: route.query,
-            body: nil,
-            account: account,
-            retryable: true
-        )
-        return try RedditJSONCodec.decodeUserSearch(data)
+        try await graphQL.users(request, account: account)
     }
 
     func trendingCommunities(limit: Int = 25, account: AccountID? = nil) async throws -> Listing<Community> {
+        if let account { return try await graphQL.discoveryCommunities(limit: limit, account: account) }
         let route = Self.trendingCommunitiesRoute(limit: limit)
         let data = try await requestData(
             method: "GET",
@@ -325,20 +318,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
-        var query = [
-            URLQueryItem(name: "raw_json", value: "1"),
-            URLQueryItem(name: "limit", value: "100")
-        ]
-        if let after { query.append(URLQueryItem(name: "after", value: after)) }
-        let data = try await requestData(
-            method: "GET",
-            path: "/subreddits/mine.json",
-            query: query,
-            body: nil,
-            account: account,
-            retryable: true
-        )
-        return try RedditJSONCodec.decodeCommunities(data)
+        try await graphQL.subscribedCommunities(after: after, account: account)
     }
 
     func blockedUsers(after: String? = nil, account: AccountID) async throws -> Listing<UserReference> {
@@ -352,6 +332,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func userProfile(_ username: String, account: AccountID? = nil) async throws -> UserProfile {
+        if let account { return try await graphQL.userProfile(username, account: account) }
         let data = try await requestData(
             method: "GET",
             path: "/user/\(pathSegment(username))/about.json",
@@ -369,6 +350,14 @@ actor URLSessionRedditClient: RedditClient {
         after: String? = nil,
         account: AccountID? = nil
     ) async throws -> Listing<UserComment> {
+        if let account {
+            if section.isPrivateToOwner {
+                guard try await isSelectedAccountOwner(username, account: account) else {
+                    return Listing(items: [])
+                }
+            }
+            return try await graphQL.userComments(username, section: section, after: after, account: account)
+        }
         var query = [
             URLQueryItem(name: "raw_json", value: "1"),
             URLQueryItem(name: "limit", value: "50")
@@ -386,6 +375,16 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeUserComments(data)
+    }
+
+    private func isSelectedAccountOwner(_ username: String, account: AccountID) async throws -> Bool {
+        guard let credential = try await credentialVault.credential(for: account) else {
+            throw RedditClientError.authenticationRequired
+        }
+        if let storedName = credential.redditUser, !storedName.isEmpty {
+            return storedName.caseInsensitiveCompare(username) == .orderedSame
+        }
+        return try await graphQL.isSelectedAccountOwner(username, account: account)
     }
 
     func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {
@@ -473,9 +472,12 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     /// Throws `authenticationRequired` when the session no longer identifies a
-    /// user. Returns true when Reddit issued a different modhash, which is saved
-    /// so the mutation can be retried once; false means the 403 was genuine.
+    /// user. Returns true when a new modhash was saved for that same session,
+    /// allowing the mutation to be retried once.
     private func refreshModhashAfterForbiddenMutation(account: AccountID) async throws -> Bool {
+        guard let credential = try await credentialVault.credential(for: account) else {
+            throw RedditClientError.authenticationRequired
+        }
         let identityData: Data
         do {
             identityData = try await requestData(
@@ -485,7 +487,8 @@ actor URLSessionRedditClient: RedditClient {
                 body: nil,
                 account: account,
                 retryable: true,
-                responseCachePolicy: .reloadIgnoringCache
+                responseCachePolicy: .reloadIgnoringCache,
+                expectedSession: credential.cookieValue
             )
         } catch let error as RedditClientError where error == .accessDenied || error == .notFound {
             throw RedditClientError.authenticationRequired
@@ -493,7 +496,6 @@ actor URLSessionRedditClient: RedditClient {
         guard let envelope = try? JSONSerialization.jsonObject(with: identityData) as? [String: Any],
               let identity = envelope["data"] as? [String: Any],
               let name = identity["name"] as? String, !name.isEmpty,
-              var credential = try await credentialVault.credential(for: account),
               let expectedUser = credential.redditUser,
               name.caseInsensitiveCompare(expectedUser) == .orderedSame else {
             throw RedditClientError.authenticationRequired
@@ -501,9 +503,9 @@ actor URLSessionRedditClient: RedditClient {
         guard let modhash = (identity["modhash"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines), !modhash.isEmpty,
               credential.modhash != modhash else { return false }
-        credential.modhash = modhash
-        try await credentialVault.save(credential, for: account)
-        return true
+        return try await credentialVault.updateModhash(
+            modhash, expectedSession: credential.cookieValue, for: account
+        )
     }
 
     private func requestData(
@@ -514,7 +516,8 @@ actor URLSessionRedditClient: RedditClient {
         account: AccountID?,
         retryable: Bool,
         responseCachePolicy: ListingRequest.ResponseCachePolicy = .useCache,
-        websiteHost: String? = nil
+        websiteHost: String? = nil,
+        expectedSession: String? = nil
     ) async throws -> Data {
         var attempt = 0
         while true {
@@ -526,7 +529,8 @@ actor URLSessionRedditClient: RedditClient {
                     body: body,
                     account: account,
                     responseCachePolicy: responseCachePolicy,
-                    websiteHost: websiteHost
+                    websiteHost: websiteHost,
+                    expectedSession: expectedSession
                 )
             } catch let error as RedditClientError {
                 guard retryable, attempt < 2, shouldRetry(error) else { throw error }
@@ -556,7 +560,8 @@ actor URLSessionRedditClient: RedditClient {
         body: [String: String]?,
         account: AccountID?,
         responseCachePolicy: ListingRequest.ResponseCachePolicy,
-        websiteHost: String? = nil
+        websiteHost: String? = nil,
+        expectedSession: String? = nil
     ) async throws -> Data {
         guard let url = makeURL(path: path, query: query, websiteHost: websiteHost) else { throw RedditClientError.invalidURL }
         guard RedditReportTarget.isRedditURL(url) else { throw RedditClientError.invalidURL }
@@ -588,6 +593,9 @@ actor URLSessionRedditClient: RedditClient {
 
         if let account {
             guard let credential = try await credentialVault.credential(for: account) else {
+                throw RedditClientError.authenticationRequired
+            }
+            if let expectedSession, credential.cookieValue != expectedSession {
                 throw RedditClientError.authenticationRequired
             }
             if path == "/api/report" {
@@ -836,18 +844,6 @@ actor URLSessionRedditClient: RedditClient {
         case .follow(let username, let following):
             return ("POST", "/api/subscribe", [], ["sr_name": "u_\(username)", "action": following ? "sub" : "unsub", "api_type": "json"])
         }
-    }
-
-    static func userSearchRoute(for request: RedditUserSearchRequest) -> (path: String, query: [URLQueryItem]) {
-        (
-            "/users/search.json",
-            [
-                URLQueryItem(name: "raw_json", value: "1"),
-                URLQueryItem(name: "q", value: request.query),
-                URLQueryItem(name: "sort", value: "relevance"),
-                URLQueryItem(name: "limit", value: String(request.limit)),
-            ]
-        )
     }
 
     static func trendingCommunitiesRoute(limit: Int) -> (path: String, query: [URLQueryItem]) {

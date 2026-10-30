@@ -17,7 +17,7 @@ Just want to try it on iPhone? [TestFlight](https://testflight.apple.com/join/kR
 - Create custom feeds from subscribed or other communities, and sync them across your Apple devices with iCloud.
 - Read threaded comments and view images, galleries, GIFs, and video.
 - Report posts and comments using community rules, or continue on Reddit for other reporting reasons.
-- Search posts, communities, and users.
+- Search posts, communities, and users while signed in.
 - Use local filters, drafts, seen-post history, and usage statistics.
 - Generate summaries on device with an Apple Intelligence-supported device or with an optional OpenAI-compatible LLM provider.
 - Use native layouts for iPhone and iPad, including an iPad feed-detail split view.
@@ -39,6 +39,10 @@ Before you begin, make sure you have:
 - **XcodeGen** only if you plan to edit `project.yml`. Install it with `brew install xcodegen`.
 
 You do not need a Reddit API key, client ID, client secret, or developer application.
+
+Signed-in feeds, post details, comments, profiles, user lists, subscriptions and discovery use Reddit's persisted GraphQL queries with a temporary token from your website session. Octonaut keeps session secrets in the device's Keychain. The r/all feed and search require a Reddit login. Other signed-out reads use website JSON routes where Reddit allows them.
+
+Local combined custom feeds, inbox and private messages, unread controls and counts, blocked-user lists, report options and actions continue to use Reddit website routes. Login validation also uses the website identity response. Octonaut does not create Reddit-hosted custom feeds or change account preferences as part of loading data.
 
 ### 1. Clone the Repository
 

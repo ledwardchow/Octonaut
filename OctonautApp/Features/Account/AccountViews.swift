@@ -552,6 +552,7 @@ struct UserSectionView: View {
     @State private var nextPage: String?
     @State private var state: OctonautLoadState = .idle
     @State private var isLoadingMore = false
+    @State private var paginationError: String?
     @State private var actionError: String?
 
     private var offersContentPicker: Bool { section == .saved }
@@ -605,12 +606,19 @@ struct UserSectionView: View {
             case .loaded:
                 rows
                 if nextPage != nil {
-                    HStack {
-                        Spacer()
-                        ProgressView()
-                        Spacer()
+                    if let paginationError {
+                        VStack(spacing: 8) {
+                            Text(paginationError).foregroundStyle(.secondary)
+                            Button("Retry loading more") { Task { await loadMore() } }
+                        }
+                    } else {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                            Spacer()
+                        }
+                        .onAppear { Task { await loadMore() } }
                     }
-                    .onAppear { Task { await loadMore() } }
                 }
             }
         }
@@ -683,6 +691,8 @@ struct UserSectionView: View {
     }
 
     private func load(forceRefresh: Bool = false) async {
+        let context = taskID
+        paginationError = nil
         if loadedContent != content {
             // Posts and comments are different rows; do not leave one kind on
             // screen while the other loads.
@@ -696,36 +706,40 @@ struct UserSectionView: View {
         do {
             let page = try await store.fetchUserSection(
                 section, username: username, content: content, forceRefresh: forceRefresh)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, taskID == context else { return }
             posts = page.posts
             comments = page.comments
             nextPage = page.nextPage
             loadedContent = content
-            state = (content == .posts ? posts.isEmpty : comments.isEmpty) ? .empty : .loaded
+            state = (content == .posts ? posts.isEmpty : comments.isEmpty) && nextPage == nil ? .empty : .loaded
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, taskID == context else { return }
             state = .failure(error)
         }
     }
 
     private func loadMore() async {
         guard let after = nextPage, !isLoadingMore else { return }
+        let context = taskID
         isLoadingMore = true
+        paginationError = nil
         defer { isLoadingMore = false }
         do {
             let page = try await store.fetchUserSection(
                 section, username: username, content: content, after: after)
-            guard !Task.isCancelled, nextPage == after else { return }
+            guard !Task.isCancelled, taskID == context, nextPage == after else { return }
             let existingPosts = Set(posts.map(\.id))
             posts.append(contentsOf: page.posts.filter { !existingPosts.contains($0.id) })
             let existingComments = Set(comments.map(\.id))
             comments.append(contentsOf: page.comments.filter { !existingComments.contains($0.id) })
             nextPage = page.nextPage
+        } catch is CancellationError {
+            return
         } catch {
-            // Keep the rows that did arrive; pagination stops until the next pull.
-            nextPage = nil
+            guard !Task.isCancelled, taskID == context, nextPage == after else { return }
+            paginationError = error.localizedDescription
         }
     }
 

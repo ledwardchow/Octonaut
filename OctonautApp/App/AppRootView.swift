@@ -8,7 +8,16 @@ struct AppRootView: View {
         if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "media" {
             OctonautMediaViewer(post: .screenshotGallery)
         } else if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
-            OctonautTabsView(store: OctonautFeatureStore(settings: dependencies.settings, screenshotMode: true))
+            OctonautTabsView(
+                store: OctonautFeatureStore(
+                    reddit: dependencies.reddit,
+                    authenticated: dependencies.authenticated,
+                    settings: dependencies.settings,
+                    persistence: dependencies.persistence,
+                    screenshotMode: true
+                ),
+                reddit: dependencies.reddit
+            )
         } else {
             liveTabs
         }

@@ -70,13 +70,14 @@ struct SearchRootView: View {
     }
 
     private var trending: some View {
-        List {
+        let label = dependencies.accounts.selectedAccountID == nil ? "Trending communities" : "Suggested communities"
+        return List {
             Section {
                 switch model.trendingState {
                 case .idle, .loading:
                     HStack(spacing: 10) {
                         ProgressView()
-                        Text("Loading trending communities…")
+                        Text("Loading \(label.lowercased())…")
                             .foregroundStyle(.secondary)
                     }
                 case .loaded:
@@ -95,25 +96,25 @@ struct SearchRootView: View {
                             .listRowInsets(EdgeInsets())
                     }
                 case .empty:
-                    Text("No trending communities found.")
+                    Text("No \(label.lowercased()) found.")
                         .foregroundStyle(.secondary)
                 case .loginRequired:
                     RedditLoginRequiredView()
                 case .failed(let message):
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("Trending communities could not be loaded", systemImage: "exclamationmark.triangle")
+                        Label("\(label) could not be loaded", systemImage: "exclamationmark.triangle")
                         Text(message)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Button("Try again") {
-                            Task { await model.loadTrendingCommunities(forceRefresh: true) }
+                            Task { await model.loadTrendingCommunities(forceRefresh: true, account: dependencies.accounts.selectedAccountID) }
                         }
                         .font(.caption.weight(.semibold))
                     }
                     .padding(.vertical, 8)
                 }
             } header: {
-                OctonautSectionHeader("Trending communities")
+                OctonautSectionHeader(label)
             }
             Section {
                 Text("Search posts, communities, or users. Search terms stay on this device until you submit them to Reddit.")
@@ -221,6 +222,10 @@ struct SearchRootView: View {
                 }
                 .padding(.vertical, 8)
                 .listRowSeparator(.hidden)
+            }
+            if model.hasMoreResults, model.paginationError == nil {
+                Button("Load more results") { Task { await model.loadMore() } }
+                    .disabled(model.isLoadingMore)
             }
             HStack { Spacer(); ProgressView().opacity(0.001); Spacer() }
                 .listRowSeparator(.hidden)

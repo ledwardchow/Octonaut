@@ -518,7 +518,17 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
     var moreCount: Int?
     var moreFailed: Bool
     var moreParentFullname: String?
-    var moreChildIDs: [String]
+    var moreContinuation: CommentContinuation?
+
+    var moreChildIDs: [String] {
+        guard case .children(let ids) = moreContinuation else { return [] }
+        return ids
+    }
+
+    var hasCommentPage: Bool {
+        if case .page = moreContinuation { return true }
+        return false
+    }
 
     func isOriginalPoster(postAuthor: String) -> Bool {
         guard !author.isEmpty, !postAuthor.isEmpty else { return false }
@@ -542,7 +552,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         moreCount: Int? = nil,
         moreFailed: Bool = false,
         moreParentFullname: String? = nil,
-        moreChildIDs: [String] = []
+        moreContinuation: CommentContinuation? = nil
     ) {
         self.id = id
         self.author = author
@@ -560,7 +570,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
         self.moreCount = moreCount
         self.moreFailed = moreFailed
         self.moreParentFullname = moreParentFullname
-        self.moreChildIDs = moreChildIDs
+        self.moreContinuation = moreContinuation
     }
 
     init(comment: CommentNode, depth: Int = 0, isCollapsed: Bool = false) {
@@ -591,7 +601,7 @@ struct CommentCardModel: Identifiable, Hashable, Sendable {
             isModerator: false, isCollapsed: false, children: [], isMoreNode: true,
             moreCount: node.count ?? node.childIDs.count,
             moreParentFullname: node.parentFullname,
-            moreChildIDs: node.childIDs)
+            moreContinuation: node.continuation)
     }
 
     static func deleted(_ node: DeletedCommentNode, depth: Int) -> CommentCardModel {
@@ -1168,6 +1178,9 @@ final class OctonautFeatureStore {
         if screenshotMode {
 #if DEBUG
             posts = [.screenshotCat, .screenshotCoast, .sample]
+            if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "comments-pagination" {
+                posts = [PostCardModel(post: FixtureData.posts[0])]
+            }
             if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "media-sizing" {
                 var portrait = PostCardModel.screenshotCat
                 portrait.title = "Portrait media, 1:4"
@@ -1356,7 +1369,7 @@ final class OctonautFeatureStore {
             filteredPostCount = cached.filteredPostCount
             nextPage = cached.nextPage
             loadedFeed = descriptor
-            feedState = posts.isEmpty ? .empty : .loaded
+            feedState = posts.isEmpty && nextPage == nil ? .empty : .loaded
             hasWarmContent = !posts.isEmpty
             if Date.now.timeIntervalSince(cached.storedAt) < feedCacheFreshness {
                 return
@@ -1373,7 +1386,7 @@ final class OctonautFeatureStore {
         guard let reddit else {
             try? await Task.sleep(for: .milliseconds(240))
             guard feedRequestID == requestID, !Task.isCancelled else { return }
-            feedState = posts.isEmpty ? .empty : .loaded
+            feedState = posts.isEmpty && nextPage == nil ? .empty : .loaded
             return
         }
 
@@ -1397,7 +1410,7 @@ final class OctonautFeatureStore {
             filteredPostCount = filtered.removedCount
             nextPage = listing.after
             loadedFeed = descriptor
-            feedState = posts.isEmpty ? .empty : .loaded
+            feedState = posts.isEmpty && nextPage == nil ? .empty : .loaded
             feedCache[cacheKey] = FeedCacheEntry(
                 posts: posts,
                 readPostIDsAtLoad: readPostIDsAtLoad,
@@ -1600,33 +1613,25 @@ final class OctonautFeatureStore {
         if !hasCachedContent { userProfileState = .loading }
         do {
             async let profileRequest = reddit.userProfile(normalizedUsername, account: selectedAccountID)
-            async let postsRequest = reddit.listing(
-                ListingRequest(
-                    feed: FeedDescriptor(
-                        destination: .user(username: normalizedUsername, section: .submitted),
-                        sort: .new
-                    ),
-                    limit: 50,
-                    accountScope: selectedAccountID.map(AccountScope.account) ?? .anonymous,
-                    responseCachePolicy: forceRefresh ? .reloadIgnoringCache : .useCache
-                ),
-                account: selectedAccountID
-            )
-            async let commentsRequest = reddit.userComments(
-                normalizedUsername, section: .comments, after: nil, account: selectedAccountID)
+            async let postsRequest = initialProfilePosts(
+                from: reddit, username: normalizedUsername, account: selectedAccountID,
+                generation: selectedGeneration, forceRefresh: forceRefresh)
+            async let commentsRequest = initialProfileComments(
+                from: reddit, username: normalizedUsername, account: selectedAccountID,
+                generation: selectedGeneration)
             let (profile, submitted, comments) = try await (profileRequest, postsRequest, commentsRequest)
             guard !Task.isCancelled,
                 isCurrentAccount(selectedAccountID, generation: selectedGeneration),
                 loadedUserProfileUsername == normalizedUsername
             else { return }
             userProfile = profile
-            userProfilePosts = submitted.items.map(PostCardModel.init).filter { !isBlockedAuthor($0.author) }
-            userProfileComments = comments.items.map(UserCommentCardModel.init).filter { !isBlockedAuthor($0.author) }
+            userProfilePosts = submitted.map(PostCardModel.init).filter { !isBlockedAuthor($0.author) }
+            userProfileComments = comments.map(UserCommentCardModel.init).filter { !isBlockedAuthor($0.author) }
             userProfileState = .loaded
             await UserProfileCache.shared.store(
                 profile: profile,
-                posts: submitted.items,
-                comments: comments.items,
+                posts: submitted,
+                comments: comments,
                 for: normalizedUsername,
                 account: selectedAccountID
             )
@@ -1641,6 +1646,51 @@ final class OctonautFeatureStore {
                 userProfileState = .failure(error)
             }
         }
+    }
+
+    private func initialProfilePosts(
+        from reddit: any RedditClient, username: String, account: AccountID?,
+        generation: UInt, forceRefresh: Bool
+    ) async throws -> [Post] {
+        var items: [Post] = []
+        var seenIDs = Set<String>()
+        var seenCursors = Set<String>()
+        var after: String?
+        for _ in 0..<5 {
+            guard !Task.isCancelled, isCurrentAccount(account, generation: generation),
+                  loadedUserProfileUsername == username else { throw CancellationError() }
+            let page = try await reddit.listing(
+                ListingRequest(
+                    feed: FeedDescriptor(destination: .user(username: username, section: .submitted), sort: .new),
+                    limit: 50, after: after,
+                    accountScope: account.map(AccountScope.account) ?? .anonymous,
+                    responseCachePolicy: forceRefresh ? .reloadIgnoringCache : .useCache
+                ), account: account)
+            for post in page.items where seenIDs.insert(post.fullname).inserted { items.append(post) }
+            if items.count >= 50 { break }
+            guard let next = page.after, seenCursors.insert(next).inserted else { break }
+            after = next
+        }
+        return Array(items.prefix(50))
+    }
+
+    private func initialProfileComments(
+        from reddit: any RedditClient, username: String, account: AccountID?, generation: UInt
+    ) async throws -> [UserComment] {
+        var items: [UserComment] = []
+        var seenIDs = Set<String>()
+        var seenCursors = Set<String>()
+        var after: String?
+        for _ in 0..<5 {
+            guard !Task.isCancelled, isCurrentAccount(account, generation: generation),
+                  loadedUserProfileUsername == username else { throw CancellationError() }
+            let page = try await reddit.userComments(username, section: .comments, after: after, account: account)
+            for comment in page.items where seenIDs.insert(comment.fullname).inserted { items.append(comment) }
+            if items.count >= 50 { break }
+            guard let next = page.after, seenCursors.insert(next).inserted else { break }
+            after = next
+        }
+        return Array(items.prefix(50))
     }
 
     /// Reads one page of a profile section such as Saved or Upvoted. The page
@@ -1704,6 +1754,15 @@ final class OctonautFeatureStore {
     ) async -> Bool {
         if screenshotMode {
             detailPost = post
+            if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "comments-pagination" {
+                comments = FixtureData.commentPaginationTree.map { node in
+                    switch node {
+                    case .comment(let comment): CommentCardModel(comment: comment)
+                    case .more(let more): CommentCardModel.more(more, depth: 0)
+                    case .deleted(let deleted): CommentCardModel.deleted(deleted, depth: 0)
+                    }
+                }
+            }
             detailState = .loaded
             return true
         }
@@ -1720,11 +1779,12 @@ final class OctonautFeatureStore {
             detailState = .loaded
             return true
         }
+        let hasVisibleThread = detailPost?.id == post.id && detailState == .loaded && !comments.isEmpty
         detailCache.removeValue(forKey: key)
         let requestID = UUID()
         detailRequestID = requestID
         visibleDetailKey = nil
-        if !preservingVisibleComments {
+        if !preservingVisibleComments && !hasVisibleThread {
             detailState = .loading
             detailPost = post
         }
@@ -1734,7 +1794,7 @@ final class OctonautFeatureStore {
             detailState = .loaded
             return true
         }
-        if !preservingVisibleComments {
+        if !preservingVisibleComments && !hasVisibleThread {
             comments = []
         }
 
@@ -1774,7 +1834,7 @@ final class OctonautFeatureStore {
             return false
         } catch {
             guard detailRequestID == requestID, isCurrentAccount(selectedAccountID, generation: selectedGeneration) else { return false }
-            if !preservingVisibleComments || OctonautLoadState.failure(error) == .loginRequired {
+            if (!preservingVisibleComments && !hasVisibleThread) || OctonautLoadState.failure(error) == .loginRequired {
                 detailState = .failure(error)
             }
             return false
@@ -1786,7 +1846,7 @@ final class OctonautFeatureStore {
         guard let placeholder = comment(withID: commentID, in: comments),
               placeholder.isMoreNode,
               let parentFullname = placeholder.moreParentFullname,
-              !placeholder.moreChildIDs.isEmpty else {
+              let continuation = placeholder.moreContinuation else {
             moreFailedIDs.insert(commentID)
             return
         }
@@ -1802,15 +1862,22 @@ final class OctonautFeatureStore {
             return
         }
 
-        let requestedChildIDs = Array(placeholder.moreChildIDs.prefix(100))
-        let remainingChildIDs = Array(placeholder.moreChildIDs.dropFirst(requestedChildIDs.count))
+        let requestedChildIDs: [String]
+        let remainingChildIDs: [String]
+        if case .children(let ids) = continuation {
+            requestedChildIDs = Array(ids.prefix(100))
+            remainingChildIDs = Array(ids.dropFirst(requestedChildIDs.count))
+        } else {
+            requestedChildIDs = []
+            remainingChildIDs = []
+        }
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
         do {
             let nodes = try await reddit.moreComments(
                 postFullname: post.fullname,
                 parentFullname: parentFullname,
-                childIDs: requestedChildIDs,
+                continuation: requestedChildIDs.isEmpty ? continuation : .children(requestedChildIDs),
                 sort: CommentSort(rawValue: sort),
                 account: selectedAccountID
             )
@@ -1957,7 +2024,7 @@ final class OctonautFeatureStore {
             readPostIDsAtLoad.formUnion(newPosts.filter(\.isSeen).map(\.id))
             filteredPostCount += filtered.removedCount
             self.nextPage = listing.after == nextPage ? nil : listing.after
-            feedState = posts.isEmpty ? .empty : .loaded
+            feedState = posts.isEmpty && self.nextPage == nil ? .empty : .loaded
             feedCache[feedCacheKey(for: descriptor)] = FeedCacheEntry(
                 posts: posts,
                 readPostIDsAtLoad: readPostIDsAtLoad,

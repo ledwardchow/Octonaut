@@ -12,7 +12,7 @@ struct UnavailableRedditClient: RedditClient {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID?
     ) async throws -> [CommentTreeNode] {
