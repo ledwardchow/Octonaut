@@ -931,6 +931,31 @@ final class DomainTests: XCTestCase {
         XCTAssertFalse(comment.isOriginalPoster(postAuthor: ""))
     }
 
+    func testCommentContinuationDecodesLegacyChildIDs() throws {
+        let legacy = Data(#"{"id":"more-old","parentFullname":"t1_parent","childIDs":["one"],"count":1}"#.utf8)
+        let node = try JSONDecoder().decode(MoreCommentsNode.self, from: legacy)
+        XCTAssertEqual(node.continuation, .children(["one"]))
+        let encoded = try JSONEncoder().encode(node)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertNotNil(object["continuation"])
+    }
+
+    func testGraphQLCommentForestKeepsNestingAndPageCursor() throws {
+        let account = AccountID()
+        let data = Data(#"{"data":{"postInfoById":{"commentForest":{"trees":[{"depth":0,"node":{"__typename":"Comment","id":"t1_parent","authorInfo":{"name":"reader"},"content":{"markdown":"**Parent**"},"createdAt":1724000000}},{"depth":1,"node":{"__typename":"Comment","id":"t1_child","authorInfo":{"name":"reply"},"content":{"markdown":"[link](https://example.com)"},"createdAt":1724000001}},{"depth":1,"more":{"count":4,"cursor":"opaque-next"}}]}}}}"#.utf8)
+        let nodes = try RedditGraphQLComments.decode(data, postFullname: "t3_post", parentFullname: "t3_post", sort: .best, account: account, sessionGeneration: "login-1")
+        guard case .comment(let parent) = try XCTUnwrap(nodes.first) else { return XCTFail("Missing parent") }
+        XCTAssertEqual(parent.body?.plainText, "**Parent**")
+        XCTAssertEqual(parent.children.count, 2)
+        guard case .comment(let child) = parent.children[0] else { return XCTFail("Missing child") }
+        XCTAssertEqual(child.body?.plainText, "[link](https://example.com)")
+        guard case .more(let more) = parent.children[1], case .page(let token) = more.continuation else { return XCTFail("Missing page") }
+        XCTAssertEqual(more.parentFullname, "t1_parent")
+        XCTAssertEqual(token.cursor, "opaque-next")
+        XCTAssertEqual(token.account, account)
+        XCTAssertEqual(token.sessionGeneration, "login-1")
+    }
+
     @MainActor
     func testLoadingMoreCommentsKeepsTheVisibleTreeThenReplacesThePlaceholder() async throws {
         let moreCommentsData = Data(

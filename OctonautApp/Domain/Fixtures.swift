@@ -1,6 +1,9 @@
 import Foundation
 
 enum FixtureData {
+    static let searchResponse = Data(#"{"data":{"children":[{"kind":"t3","data":{"id":"fixture-search","name":"t3_fixture-search","title":"Swift discussion for offline testing","subreddit":"swift","author":"fixture_reader","permalink":"/r/swift/comments/fixture-search/","is_self":true,"selftext":"An offline search result.","created_utc":1724000000}}]}}"#.utf8)
+    static let communitiesResponse = Data(#"{"data":{"children":[{"kind":"t5","data":{"id":"swift","display_name":"swift","display_name_prefixed":"r/swift","title":"Swift","public_description":"Offline Swift community","subscribers":1234}}]}}"#.utf8)
+    static let usersResponse = Data(#"{"data":{"children":[{"kind":"t2","data":{"name":"swift_reader","total_karma":42,"created_utc":1724000000}}]}}"#.utf8)
     static let community = CommunityReference(name: "swift", displayName: "r/Swift")
     static let author = UserReference(username: "octonaut_reader")
 
@@ -73,6 +76,41 @@ enum FixtureData {
     ]
 
     static let thread = PostThread(post: posts[0], comments: comments)
+
+    static let commentPaginationTree: [CommentTreeNode] = [
+        .comment(CommentNode(
+            id: "fixture-parent", fullname: "t1_fixture-parent", parentFullname: posts[0].fullname,
+            author: UserReference(username: "thread_parent"),
+            body: RichText(plainText: "A parent comment with more replies."),
+            createdAt: Date(timeIntervalSince1970: 1_724_000_300), score: 12, vote: .none,
+            isSaved: false, isLocked: false, isDistinguished: false,
+            children: [
+                .comment(CommentNode(
+                    id: "fixture-child", fullname: "t1_fixture-child", parentFullname: "t1_fixture-parent",
+                    author: UserReference(username: "nested_reply"),
+                    body: RichText(plainText: "An existing nested reply."),
+                    createdAt: Date(timeIntervalSince1970: 1_724_000_400), score: 3, vote: .none,
+                    isSaved: false, isLocked: false, isDistinguished: false, children: []
+                )),
+                .more(MoreCommentsNode(
+                    id: "more-pagination-fixture", parentFullname: "t1_fixture-parent",
+                    continuation: .page(CommentPageToken(
+                        cursor: "fixture-page",
+                        account: AccountID(rawValue: UUID(uuidString: "F1000000-0000-0000-0000-000000000001")!),
+                        postFullname: posts[0].fullname,
+                        parentFullname: "t1_fixture-parent",
+                        sort: .best,
+                        sessionGeneration: "fixture-session",
+                        visitedCursors: ["fixture-page"]
+                    )), count: 1
+                ))
+            ]
+        ))
+    ]
+
+    static let commentPaginationResponse = Data(
+        #"{"json":{"errors":[],"data":{"things":[{"kind":"t1","data":{"id":"fixture-loaded","name":"t1_fixture-loaded","parent_id":"t1_fixture-parent","author":"loaded_reply","body":"Loaded from fixture","created_utc":1724000500,"replies":""}}]}}}"#.utf8
+    )
 
     static let accounts: [Account] = [
         Account(username: "swift_reader", health: .healthy),

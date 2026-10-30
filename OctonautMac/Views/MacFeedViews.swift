@@ -778,6 +778,11 @@ struct MacPostDetailView: View {
                             comment: comment,
                             postAuthor: post.author,
                             canVote: true,
+                            isLoadingMore: store.moreLoadingIDs.contains(comment.id),
+                            failedToLoadMore: store.moreFailedIDs.contains(comment.id),
+                            onLoadMore: {
+                                Task { await store.loadMoreComments(comment.id, for: post) }
+                            },
                             onVote: { vote(comment, value: $0) },
                             onReply: {
                                 onCompose(.reply(commentID: comment.id, author: comment.author))
@@ -1726,6 +1731,9 @@ private struct MacCommentRow: View {
     let comment: CommentCardModel
     let postAuthor: String
     let canVote: Bool
+    let isLoadingMore: Bool
+    let failedToLoadMore: Bool
+    let onLoadMore: () -> Void
     let onVote: (Int) -> Void
     let onReply: () -> Void
 
@@ -1740,9 +1748,13 @@ private struct MacCommentRow: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 if comment.isMoreNode {
-                    Text("More comments")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    if isLoadingMore {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button(failedToLoadMore ? "Retry loading replies" : "Load more replies", action: onLoadMore)
+                            .font(.caption.weight(.semibold))
+                            .disabled(comment.moreChildIDs.isEmpty && !comment.hasCommentPage)
+                    }
                 } else {
                     HStack(spacing: 6) {
                         Text("u/\(comment.author)")

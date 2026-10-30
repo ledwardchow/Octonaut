@@ -6,7 +6,15 @@ struct OctonautMacApp: App {
     @State private var dependencies: AppDependencies
 
     init() {
+#if DEBUG
+        if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] != nil {
+            _dependencies = State(initialValue: AppDependencies.preview())
+        } else {
+            _dependencies = State(initialValue: AppDependencies.live())
+        }
+#else
         _dependencies = State(initialValue: AppDependencies.live())
+#endif
     }
 
     var body: some Scene {

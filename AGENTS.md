@@ -1,5 +1,11 @@
 # Octonaut agent instructions
 
+## Git commit signing
+
+If a signed commit fails, or signing is unavailable or stalls, automatically retry unsigned without asking for confirmation. Use `git -c commit.gpgsign=false commit` for that attempt. Do not change global or repository signing settings.
+
+Stop a stalled signing attempt and check that it did not create a commit before retrying.
+
 ## TestFlight change notes
 
 For every user-visible feature or bug fix, update `TestFlight/WhatToTest.en-AU.txt` in the same task, without waiting for a reminder.
@@ -44,9 +50,13 @@ Only when the user explicitly says the current implementation no longer works, O
 
 These requests may use a temporary website `token_v2` as a Bearer token, obtained from the user's existing Reddit website session. They must not require developer registration, application credentials, or `oauth.reddit.com`. Anonymous GraphQL access is not assumed.
 
-The user reported r/all and search as broken and authorized this exception on 29 October 2026. GraphQL is permitted for those features. Any further feature needs a separate explicit report that its current implementation no longer works.
+The user reported r/all and search as broken and authorized this exception on 29 October 2026. GraphQL is permitted for those features.
 
-The fact that an endpoint is undocumented, used by Reddit's website, or returns structured data does not make it prohibited. It must work without Reddit developer registration or OAuth Data API credentials. GraphQL replacements must also meet the broken-request exception above.
+On 30 October 2026, the user also approved the planned migration of supported signed-in reads for Home, Popular, individual communities, existing server multireddits, discovery, post detail, comment expansion, profiles, user lists and subscriptions. This is explicit permission for that read migration. It does not mean those features were reported as broken. Keep anonymous website reads and local combined feeds on their existing routes. Keep inbox, private messages, unread controls and counts, blocked-user enumeration, full report options and website writes on their existing routes until equivalent behavior has separate approval.
+
+Outside these explicitly approved scopes, any further GraphQL feature needs a separate explicit report that its current implementation no longer works. Do not use the read migration as permission to migrate actions or change Reddit account preferences.
+
+The fact that an endpoint is undocumented, used by Reddit's website, or returns structured data does not make it prohibited. It must work without Reddit developer registration or OAuth Data API credentials. GraphQL replacements must also meet an explicit permission above.
 
 ## Authentication and credential handling
 
@@ -68,7 +78,7 @@ Before implementing or approving a Reddit-related feature:
 2. If it does, redesign it to use a no-registration Reddit website endpoint or a user-visible webpage handoff.
 3. If no no-registration approach can satisfy the feature, stop and explain the conflict. Do not add or request developer credentials.
 4. Validate every Reddit destination as HTTPS and restrict credential-bearing requests to intended Reddit hosts.
-5. Search the proposed diff for Data API regressions, including `oauth.reddit.com`, OAuth client IDs or secrets, and instructions asking users to register an application. Permit website Bearer tokens only under the broken-request exception above.
+5. Search the proposed diff for Data API regressions, including `oauth.reddit.com`, OAuth client IDs or secrets, and instructions asking users to register an application. Permit website Bearer tokens only within the explicitly approved scopes above.
 6. Add deterministic tests for request construction, response decoding, authentication boundaries, and browser destination URLs where practical.
 7. Tests must use fixtures, mocks, or synthetic responses and must never contact Reddit.
 

@@ -538,7 +538,7 @@ final class SettingsTests: XCTestCase {
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
         XCTAssertTrue(AnonymousBootstrapProtocol.seedRequests.isEmpty)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.first?.value(forHTTPHeaderField: "Cookie"),
                        "reddit_session=synthetic-session")
@@ -550,7 +550,7 @@ final class SettingsTests: XCTestCase {
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
         _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
-        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
         _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
 
         let requests = AnonymousBootstrapProtocol.jsonRequests
@@ -753,8 +753,8 @@ final class SettingsTests: XCTestCase {
         }
     }
 
-    func testCombinedFeedDoesNotRetryAccessDeniedAndSingleFeedDoesNotFallBack() async throws {
-        for (destination, expectedError) in [(FeedDestination.combined(["denied", "swift"]), RedditClientError.accessDenied), (.community("missing"), .notFound)] {
+    func testCombinedFeedAndWebsiteURLDoNotRetryErrors() async throws {
+        for (destination, expectedError) in [(FeedDestination.combined(["denied", "swift"]), RedditClientError.accessDenied), (.url(URL(string: "https://www.reddit.com/r/missing")!), .notFound)] {
             GamesRouteProtocol.reset()
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [GamesRouteProtocol.self]
@@ -1355,7 +1355,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
-    func testUserSectionListingUsesTheSectionRouteWithoutASortPathSegment() async throws {
+    func testAnonymousUserOverviewUsesWebsiteSectionRoute() async throws {
         UserSectionRouteProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [UserSectionRouteProtocol.self]
@@ -1366,28 +1366,28 @@ final class SettingsTests: XCTestCase {
         let page = try await client.listing(
             ListingRequest(
                 feed: FeedDescriptor(
-                    destination: .user(username: "Example_Author", section: .saved),
+                    destination: .user(username: "Example_Author", section: .overview),
                     sort: .new
                 ),
                 limit: 35,
-                accountScope: .account(account),
+                accountScope: .anonymous,
                 responseCachePolicy: .reloadIgnoringCache
             ),
-            account: account
+            account: nil
         )
 
         XCTAssertEqual(page.items.map(\.id), ["saved"])
-        let request = try XCTUnwrap(UserSectionRouteProtocol.requests.first)
+        let request = try XCTUnwrap(UserSectionRouteProtocol.requests.last)
         let url = try XCTUnwrap(request.url)
-        XCTAssertEqual(url.path, "/user/Example_Author/saved.json")
+        XCTAssertEqual(url.path, "/user/Example_Author/overview.json")
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertTrue(query.contains(URLQueryItem(name: "sort", value: "new")))
         // A mixed listing is narrowed to posts, since `listing` only returns posts.
         XCTAssertTrue(query.contains(URLQueryItem(name: "type", value: "links")))
-        XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-test-session")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Cookie"))
     }
 
-    func testSavedCommentsUseTheSameRouteNarrowedToComments() async throws {
+    func testAnonymousUserOverviewNarrowsWebsiteRouteToComments() async throws {
         UserSectionRouteProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [UserSectionRouteProtocol.self]
@@ -1395,11 +1395,11 @@ final class SettingsTests: XCTestCase {
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-test-session")])
         let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
 
-        let page = try await client.userComments("Example_Author", section: .saved, after: nil, account: account)
+        let page = try await client.userComments("Example_Author", section: .overview, after: nil, account: nil)
 
         XCTAssertEqual(page.items.map(\.id), ["savedcomment"])
-        let url = try XCTUnwrap(UserSectionRouteProtocol.requests.first?.url)
-        XCTAssertEqual(url.path, "/user/Example_Author/saved.json")
+        let url = try XCTUnwrap(UserSectionRouteProtocol.requests.last?.url)
+        XCTAssertEqual(url.path, "/user/Example_Author/overview.json")
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertTrue(query.contains(URLQueryItem(name: "type", value: "comments")))
     }

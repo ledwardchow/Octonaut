@@ -311,10 +311,8 @@ struct PostDetailView: View {
         crosspostPost = currentPost
     }
 
-    /// Reddit marks a reply chain too deep to inline with a "more" stub that
-    /// has no child IDs. It can only be read from the parent comment's page.
     private func continueThreadURL(_ comment: CommentCardModel) -> URL? {
-        guard comment.moreChildIDs.isEmpty,
+        guard comment.moreChildIDs.isEmpty, !comment.hasCommentPage,
               let parent = comment.moreParentFullname, parent.hasPrefix("t1_") else { return nil }
         return RedditReportTarget(commentID: parent, post: currentPost).permalink
     }

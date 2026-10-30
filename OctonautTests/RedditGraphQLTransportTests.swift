@@ -36,7 +36,7 @@ final class RedditGraphQLTransportTests: XCTestCase {
         defer { scenario.close() }
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A")])
         let client = scenario.client(vault: vault)
-        let request = RedditSearchRequest(query: "C++ & a=b", community: "r/all", sort: .top, timeRange: .week, after: "cursor-1", limit: 17)
+        let request = RedditSearchRequest(query: "C++ & a=b", community: "r/all", sort: .top, timeRange: .week, limit: 17)
         let result = try await client.search(request, account: account)
         XCTAssertTrue(result.items.isEmpty)
         XCTAssertNil(result.after)
@@ -47,7 +47,7 @@ final class RedditGraphQLTransportTests: XCTestCase {
         XCTAssertEqual(variables["query"] as? String, "C++ & a=b")
         XCTAssertEqual(variables["sort"] as? String, "TOP")
         XCTAssertEqual(variables["pageSize"] as? Int, 17)
-        XCTAssertEqual(variables["afterCursor"] as? String, "cursor-1")
+        XCTAssertNil(variables["afterCursor"])
         let filters = try XCTUnwrap(variables["filters"] as? [[String: String]])
         XCTAssertEqual(filters, [["key": "time_range", "value": "week"]])
         let extensions = try XCTUnwrap(payload["extensions"] as? [String: Any])
@@ -73,7 +73,8 @@ final class RedditGraphQLTransportTests: XCTestCase {
         let feedRequest = ListingRequest(feed: FeedDescriptor(destination: .all))
         let first = try await client.listing(feedRequest, account: account)
         XCTAssertEqual(first.items.map(\.id), ["first", "second"])
-        XCTAssertEqual(first.after, "t3_second")
+        XCTAssertNotNil(first.after)
+        XCTAssertNotEqual(first.after, "t3_second")
         var next = feedRequest
         next.after = first.after
         let last = try await client.listing(next, account: account)
@@ -96,16 +97,142 @@ final class RedditGraphQLTransportTests: XCTestCase {
         ])
         defer { scenario.close() }
         let client = scenario.client(vault: InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A")]))
-        _ = try await client.communities(RedditCommunitySearchRequest(query: "/r/sw", after: "community-cursor", limit: 9), account: account)
+        _ = try await client.communities(RedditCommunitySearchRequest(query: "/r/sw", limit: 9), account: account)
         _ = try await client.users(RedditUserSearchRequest(query: "reader", limit: 12), account: account)
         let communities = try Self.payload(scenario.requests[2])["variables"] as? [String: Any]
         XCTAssertEqual(communities?["query"] as? String, "sw")
         XCTAssertEqual(communities?["first"] as? Int, 9)
-        XCTAssertEqual(communities?["after"] as? String, "community-cursor")
+        XCTAssertNil(communities?["after"])
         let users = try Self.payload(scenario.requests[3])["variables"] as? [String: Any]
         XCTAssertEqual(users?["query"] as? String, "reader")
         XCTAssertEqual(users?["pageSize"] as? Int, 12)
         scenario.assertFinished()
+    }
+
+    func testSearchCursorBindsAccountSessionAndQueryBeforeRequest() async throws {
+        let account = AccountID()
+        let other = AccountID()
+        let token = Self.token("search-pages")
+        let firstPage = #"{"data":{"search":{"general":{"posts":{"edges":[{"node":{"__typename":"SubredditPost","id":"t3_first","postTitle":"First","subreddit":{"name":"swift"}}}],"pageInfo":{"hasNextPage":true,"endCursor":"server-one"}}}}}}"#
+        let scenario = GraphQLScenario([
+            .prime(session: "session-A"), .mint(session: "session-A", token: token),
+            .graphql("SearchPosts", token: token, json: firstPage),
+            .graphql("SearchPosts", token: token, json: Self.emptyPostSearch)
+        ])
+        defer { scenario.close() }
+        let vault = InMemoryCredentialVault(values: [
+            account: RedditCredential(cookieValue: "session-A"), other: RedditCredential(cookieValue: "session-B")
+        ])
+        let client = scenario.client(vault: vault)
+        let request = RedditSearchRequest(query: "swift", community: "r/iOS", sort: .top, timeRange: .week)
+        let first = try await client.search(request, account: account)
+        XCTAssertEqual(first.items.map(\.id), ["first"])
+        let cursor = try XCTUnwrap(first.after)
+        XCTAssertNotEqual(cursor, "server-one")
+        var next = request
+        next.after = cursor
+        var changed = next
+        changed.query = "other"
+        await assertRejectedSearchPage(client, request: changed, account: account)
+        changed = next
+        changed.community = "r/other"
+        await assertRejectedSearchPage(client, request: changed, account: account)
+        changed = next
+        changed.sort = .new
+        await assertRejectedSearchPage(client, request: changed, account: account)
+        changed = next
+        changed.timeRange = .day
+        await assertRejectedSearchPage(client, request: changed, account: account)
+        await assertRejectedSearchPage(client, request: next, account: other)
+        XCTAssertEqual(scenario.requests.count, 3)
+        let last = try await client.search(next, account: account)
+        XCTAssertTrue(last.items.isEmpty)
+        XCTAssertNil(last.after)
+        let variables = try Self.payload(scenario.requests[3])["variables"] as? [String: Any]
+        XCTAssertEqual(variables?["afterCursor"] as? String, "server-one")
+        try await vault.save(RedditCredential(cookieValue: "session-replaced"), for: account)
+        await assertRejectedSearchPage(client, request: next, account: account)
+        XCTAssertEqual(scenario.requests.count, 4)
+        scenario.assertFinished()
+    }
+
+    private func assertRejectedSearchPage(_ client: URLSessionRedditClient, request: RedditSearchRequest,
+                                          account: AccountID) async {
+        do {
+            _ = try await client.search(request, account: account)
+            XCTFail("A search cursor cannot be used in another scope")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .http(statusCode: 400, message: "This Reddit sort or page direction is unavailable."))
+        }
+    }
+
+    func testCommunitySearchCursorUsesNormalizedQuery() async throws {
+        let account = AccountID()
+        let token = Self.token("community-pages")
+        let firstPage = #"{"data":{"search":{"general":{"communities":{"edges":[{"node":{"__typename":"Subreddit","name":"swift"}}],"pageInfo":{"hasNextPage":true,"endCursor":"community-one"}}}}}}"#
+        let lastPage = #"{"data":{"search":{"general":{"communities":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}"#
+        let scenario = GraphQLScenario([
+            .prime(session: "session-A"), .mint(session: "session-A", token: token),
+            .graphql("CommunityPickerSearchPaginated", token: token, json: firstPage),
+            .graphql("CommunityPickerSearchPaginated", token: token, json: lastPage)
+        ])
+        defer { scenario.close() }
+        let client = scenario.client(vault: InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A")]))
+        let first = try await client.communities(RedditCommunitySearchRequest(query: "/r/sw"), account: account)
+        XCTAssertEqual(first.items.count, 1)
+        let cursor = try XCTUnwrap(first.after)
+        XCTAssertNotEqual(cursor, "community-one")
+        let last = try await client.communities(RedditCommunitySearchRequest(query: "r/SW", after: cursor), account: account)
+        XCTAssertTrue(last.items.isEmpty)
+        let variables = try Self.payload(scenario.requests[3])["variables"] as? [String: Any]
+        XCTAssertEqual(variables?["after"] as? String, "community-one")
+        scenario.assertFinished()
+    }
+
+    func testSearchSkipsThreeEmptyPagesAndPreservesContinuation() async throws {
+        let account = AccountID()
+        let token = Self.token("empty-pages")
+        let scenario = GraphQLScenario([
+            .prime(session: "session-A"), .mint(session: "session-A", token: token),
+            .graphql("SearchPosts", token: token, json: Self.emptySearchPage(after: "one")),
+            .graphql("SearchPosts", token: token, json: Self.emptySearchPage(after: "two")),
+            .graphql("SearchPosts", token: token, json: Self.emptySearchPage(after: "three")),
+            .graphql("SearchPosts", token: token, json: Self.emptyPostSearch)
+        ])
+        defer { scenario.close() }
+        let client = scenario.client(vault: InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A")]))
+        let first = try await client.search(RedditSearchRequest(query: "swift"), account: account)
+        XCTAssertTrue(first.items.isEmpty)
+        let cursor = try XCTUnwrap(first.after)
+        XCTAssertNotEqual(cursor, "three")
+        let second = try await client.search(RedditSearchRequest(query: "swift", after: cursor), account: account)
+        XCTAssertTrue(second.items.isEmpty)
+        XCTAssertNil(second.after)
+        for (index, expected) in [(3, "one"), (4, "two"), (5, "three")] {
+            let variables = try Self.payload(scenario.requests[index])["variables"] as? [String: Any]
+            XCTAssertEqual(variables?["afterCursor"] as? String, expected)
+        }
+        scenario.assertFinished()
+    }
+
+    func testSearchStopsWhenServerRepeatsCursor() async throws {
+        let account = AccountID()
+        let token = Self.token("repeat")
+        let scenario = GraphQLScenario([
+            .prime(session: "session-A"), .mint(session: "session-A", token: token),
+            .graphql("SearchPosts", token: token, json: Self.emptySearchPage(after: "one")),
+            .graphql("SearchPosts", token: token, json: Self.emptySearchPage(after: "one"))
+        ])
+        defer { scenario.close() }
+        let client = scenario.client(vault: InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A")]))
+        let listing = try await client.search(RedditSearchRequest(query: "swift"), account: account)
+        XCTAssertTrue(listing.items.isEmpty)
+        XCTAssertNil(listing.after)
+        scenario.assertFinished()
+    }
+
+    private static func emptySearchPage(after: String) -> String {
+        #"{"data":{"search":{"general":{"posts":{"edges":[],"pageInfo":{"hasNextPage":true,"endCursor":"\#(after)"}}}}}}"#
     }
 
     func testAccountTokensStaySeparateAndLogoutPreventsReuse() async throws {
@@ -295,6 +422,44 @@ final class RedditGraphQLTransportTests: XCTestCase {
         scenario.assertFinished()
     }
 
+    func testCookieRenewalKeepsGenerationDuringVaultWrite() async throws {
+        let account = AccountID()
+        let value = Self.token("renewal-race")
+        let head = GraphQLReply(
+            headers: ["Set-Cookie": "reddit_session=session-B; Path=/; Secure; HttpOnly, csrf_token=synthetic-csrf; Path=/; Secure"],
+            json: "",
+            check: { request in
+                XCTAssertEqual(request.httpMethod, "HEAD")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=session-A")
+            }
+        )
+        let scenario = GraphQLScenario([
+            head,
+            .mint(session: "session-B", token: value),
+            .graphql("SearchPosts", token: value, json: Self.emptyPostSearch)
+        ])
+        defer { scenario.close() }
+        let vault = ObservingCookieReplacementVault(account: account, cookie: "session-A")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [GraphQLRequestProtocol.self]
+        configuration.httpAdditionalHeaders = ["X-Octonaut-Test": scenario.id]
+        let graphQL = RedditGraphQLClient(credentialVault: vault, sessionConfiguration: configuration)
+        let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration, graphQL: graphQL)
+        let originalGeneration = try await graphQL.sessionGeneration(for: account)
+        await vault.observeCookieReplacement { try await graphQL.sessionGeneration(for: account) }
+
+        let result = try await client.search(RedditSearchRequest(query: "swift"), account: account)
+
+        XCTAssertTrue(result.items.isEmpty)
+        let generationDuringWrite = await vault.generationDuringWrite()
+        XCTAssertEqual(generationDuringWrite, originalGeneration)
+        let saved = try await vault.credential(for: account)
+        XCTAssertEqual(saved?.cookieValue, "session-B")
+        XCTAssertEqual(saved?.webGraphQLToken?.value, value)
+        XCTAssertEqual(saved?.webGraphQLToken?.sourceSessionDigest, RedditSessionIdentity.digest("session-B"))
+        scenario.assertFinished()
+    }
+
     func testRedirectResponsesStopBeforeSendingCredentialsElsewhere() async throws {
         for hop in 0..<3 {
             let account = AccountID()
@@ -355,6 +520,54 @@ final class RedditGraphQLTransportTests: XCTestCase {
             data = body
         } else { throw RedditClientError.malformedResponse }
         return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+}
+
+private actor ObservingCookieReplacementVault: AccountCredentialVault {
+    private let backing: InMemoryCredentialVault
+    private var observer: (@Sendable () async throws -> String)?
+    private var observedGeneration: String?
+
+    init(account: AccountID, cookie: String) {
+        backing = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: cookie)])
+    }
+
+    func observeCookieReplacement(_ observer: @escaping @Sendable () async throws -> String) {
+        self.observer = observer
+    }
+
+    func generationDuringWrite() -> String? { observedGeneration }
+
+    func credential(for accountID: AccountID) async throws -> RedditCredential? {
+        try await backing.credential(for: accountID)
+    }
+
+    func save(_ credential: RedditCredential, for accountID: AccountID) async throws {
+        try await backing.save(credential, for: accountID)
+    }
+
+    func removeCredential(for accountID: AccountID) async throws {
+        try await backing.removeCredential(for: accountID)
+    }
+
+    func removeAllCredentials() async throws {
+        try await backing.removeAllCredentials()
+    }
+
+    func saveWebGraphQLToken(_ token: WebGraphQLToken, for accountID: AccountID) async throws -> Bool {
+        try await backing.saveWebGraphQLToken(token, for: accountID)
+    }
+
+    func replaceSessionCookie(_ newValue: String, expected oldValue: String, for accountID: AccountID) async throws -> Bool {
+        let replaced = try await backing.replaceSessionCookie(newValue, expected: oldValue, for: accountID)
+        if replaced, let observer {
+            observedGeneration = try await observer()
+        }
+        return replaced
+    }
+
+    func updateModhash(_ modhash: String, expectedSession: String, for accountID: AccountID) async throws -> Bool {
+        try await backing.updateModhash(modhash, expectedSession: expectedSession, for: accountID)
     }
 }
 

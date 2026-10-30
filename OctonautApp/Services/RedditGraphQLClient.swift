@@ -1,36 +1,30 @@
 import Foundation
+import Synchronization
 
-/// The persisted queries used only for the repaired r/all and search screens.
-private enum GraphQLOperation {
-    case allFeed, postsByIDs, searchPosts, searchCommunities, searchPeople
+struct GraphQLOperation: Sendable {
+    let name: String
+    let hash: String
 
-    var name: String {
-        switch self {
-        case .allFeed: "AllFeedSdui"
-        case .postsByIDs: "PostsByIds"
-        case .searchPosts: "SearchPosts"
-        case .searchCommunities: "CommunityPickerSearchPaginated"
-        case .searchPeople: "SearchPeople"
-        }
-    }
-
-    var hash: String {
-        switch self {
-        case .allFeed: "dea8ebf08bd9127a580fd664b9c312e590a195690f5c04c32d60b9370d876fb0"
-        case .postsByIDs: "b210ea1d852cdc2c25d9bff2d9fa8a406e1a968f36392798812f336694ac27f4"
-        case .searchPosts: "c3d31b88bfa15180fdcd0c8f6f13b8c0e131d0c981c9b9c8a7c537ddd0ed3348"
-        case .searchCommunities: "b58025ad0c98bdb93e9dc1db909accf440573bd7d3a48d2c73a02e96d33f1943"
-        case .searchPeople: "db3607c1a7deea8441614a053c5f434f60da0c8c931db952f819a59d534d9743"
-        }
-    }
+    static let homeFeed = Self(name: "HomeFeedSdui", hash: "03d0ec0f2674005fe6c9777f952bd063ea2236527794344d4579fec8a669bea0")
+    static let popularFeed = Self(name: "PopularFeedSdui", hash: "effee8db2d66287bea4e08a3ccf3a5fcb2db245c363be6fe50a3ba01e9962a24")
+    static let allFeed = Self(name: "AllFeedSdui", hash: "dea8ebf08bd9127a580fd664b9c312e590a195690f5c04c32d60b9370d876fb0")
+    static let subredditFeed = Self(name: "SubredditFeedSdui", hash: "45faffc9969af3d623a079e279c9d9a535b6f877809426a9a8ed203f046a23f0")
+    static let customFeed = Self(name: "CustomFeedSdui", hash: "5a7d82da6ae429dcc26d7e7f0530c09dabc27f140db52c44312d6c9a5fac5a04")
+    static let postsByIDs = Self(name: "PostsByIds", hash: "b210ea1d852cdc2c25d9bff2d9fa8a406e1a968f36392798812f336694ac27f4")
+    static let subredditInfo = Self(name: "SubredditInfoByName", hash: "8c1815b07b762aee3c086cc84306f14b3907018e9ee152046c8e4d08ad4c7b88")
+    static let exploreFeed = Self(name: "ExploreFeedSdui", hash: "78c98e9b4f7845ebe3bd5a22f614a84fb77b9e0bd527a73bbf1eb4a8b348183e")
+    static let searchPosts = Self(name: "SearchPosts", hash: "c3d31b88bfa15180fdcd0c8f6f13b8c0e131d0c981c9b9c8a7c537ddd0ed3348")
+    static let searchCommunities = Self(name: "CommunityPickerSearchPaginated", hash: "b58025ad0c98bdb93e9dc1db909accf440573bd7d3a48d2c73a02e96d33f1943")
+    static let searchPeople = Self(name: "SearchPeople", hash: "db3607c1a7deea8441614a053c5f434f60da0c8c931db952f819a59d534d9743")
 }
 
-private enum GraphQLValue: Encodable, Sendable {
-    case string(String), int(Int), bool(Bool), array([GraphQLValue]), object([String: GraphQLValue])
+enum GraphQLValue: Encodable, Sendable {
+    case null, string(String), int(Int), bool(Bool), array([GraphQLValue]), object([String: GraphQLValue])
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
+        case .null: try container.encodeNil()
         case .string(let value): try container.encode(value)
         case .int(let value): try container.encode(value)
         case .bool(let value): try container.encode(value)
@@ -57,6 +51,57 @@ actor RedditGraphQLClient {
     private let session: URLSession
     private let userAgent: String
     private var refreshTasks: [AccountID: (digest: String, task: Task<WebGraphQLToken, Error>)] = [:]
+    private var renewingSessions: [AccountID: (old: String, new: String)] = [:]
+    private struct FeedCursor {
+        let account: AccountID
+        let feed: FeedDescriptor
+        let generation: String
+        let serverAfter: String
+        let visited: Set<String>
+    }
+    private var feedCursors: [String: FeedCursor] = [:]
+    private var feedCursorOrder: [String] = []
+    private enum SearchScope: Hashable {
+        case posts(query: String, community: String?, sort: RedditSort, time: RedditTimeRange?, limit: Int)
+        case communities(query: String, limit: Int)
+    }
+    private struct SearchCursor {
+        let account: AccountID
+        let generation: String
+        let scope: SearchScope
+        let serverAfter: String
+        let visited: Set<String>
+    }
+    private var searchCursors: [String: SearchCursor] = [:]
+    private var searchCursorOrder: [String] = []
+    private nonisolated let selectionEpoch = Mutex<UInt64>(0)
+    private var accountGenerations: [AccountID: (digest: String, generation: String, epoch: UInt64)] = [:]
+
+    nonisolated func invalidateContinuations() {
+        selectionEpoch.withLock { $0 &+= 1 }
+    }
+
+    func sessionGeneration(for account: AccountID) async throws -> String {
+        let digest = try await sessionDigest(for: account)
+        let epoch = selectionEpoch.withLock { $0 }
+        if let existing = accountGenerations[account], existing.epoch == epoch {
+            let renewal = renewingSessions[account]
+            if existing.digest == digest || (renewal?.old == existing.digest && renewal?.new == digest) {
+                return existing.generation
+            }
+        }
+        let generation = UUID().uuidString
+        accountGenerations[account] = (digest, generation, epoch)
+        return generation
+    }
+
+    func sessionDigest(for account: AccountID) async throws -> String {
+        guard let credential = try await credentialVault.credential(for: account),
+              credential.cookieName == "reddit_session", !credential.cookieValue.isEmpty else {
+            throw RedditClientError.authenticationRequired
+        }
+        return RedditSessionIdentity.digest(credential.cookieValue)
+    }
 
     init(credentialVault: any AccountCredentialVault,
          userAgent: String = URLSessionRedditClient.browserUserAgent,
@@ -74,25 +119,84 @@ actor RedditGraphQLClient {
     }
 
     func listing(_ request: ListingRequest, account: AccountID?) async throws -> Listing<Post> {
-        guard account != nil else { throw RedditClientError.anonymousAccessBlocked }
-        guard case .all = request.feed.destination else { throw unsupportedRequest() }
+        guard let account else { throw RedditClientError.anonymousAccessBlocked }
+        let generation = try await sessionGeneration(for: account)
         guard request.before == nil else { throw unsupportedRequest() }
-        let sort = try feedSort(request.feed.sort)
+        let (operation, defaultSort, extra) = try feedOperation(request.feed.destination)
+        let sort = request.feed.sort == .default ? defaultSort : try feedSort(request.feed.sort)
         var variables: [String: GraphQLValue] = ["sort": .string(sort)]
+        variables.merge(extra) { _, new in new }
         if let time = request.feed.topTime { variables["time"] = .string(time.rawValue.uppercased()) }
         if let after = request.after {
-            guard after.hasPrefix("t3_") else { throw unsupportedRequest() }
-            variables["after"] = .string(Data(after.utf8).base64EncodedString())
+            guard let cursor = feedCursors[after], cursor.account == account,
+                  cursor.feed == request.feed, cursor.generation == generation else { throw unsupportedRequest() }
+            variables["after"] = .string(Data(cursor.serverAfter.utf8).base64EncodedString())
         }
-        let feedData = try await execute(.allFeed, variables: variables, account: account)
-        let IDs = try RedditGraphQLCodec.feedPostIDs(data: feedData)
-        let selected = Array(IDs.prefix(request.limit))
-        guard !selected.isEmpty else { return Listing(items: []) }
-        var postVariables = Self.postsByIDsVariables
-        postVariables["ids"] = .array(selected.map(GraphQLValue.string))
-        let postData = try await execute(.postsByIDs, variables: postVariables, account: account)
-        let posts = try RedditGraphQLCodec.posts(data: postData, orderedIDs: selected)
-        return Listing(items: posts, after: selected.last)
+        if case .community(let name) = request.feed.destination, request.after == nil {
+            try await checkCommunityAccess(name: name, account: account)
+        }
+        var seen = request.after.flatMap { feedCursors[$0]?.visited } ?? []
+        var lastCursor: String?
+        for _ in 0..<3 {
+            let feedData = try await execute(operation, variables: variables, account: account)
+            let page = try RedditGraphQLCodec.feedPage(data: feedData)
+            if let next = page.after, !seen.insert(next).inserted { return Listing(items: []) }
+            var posts: [Post] = []
+            if !page.ids.isEmpty {
+                var postVariables = Self.postsByIDsVariables
+                postVariables["ids"] = .array(page.ids.map(GraphQLValue.string))
+                let postData = try await execute(.postsByIDs, variables: postVariables, account: account)
+                posts = try RedditGraphQLCodec.posts(data: postData, orderedIDs: page.ids)
+            }
+            if let next = page.after {
+                let cursor = UUID().uuidString
+                feedCursors[cursor] = FeedCursor(account: account, feed: request.feed, generation: generation, serverAfter: next, visited: seen)
+                feedCursorOrder.append(cursor)
+                if feedCursorOrder.count > 256 { feedCursors.removeValue(forKey: feedCursorOrder.removeFirst()) }
+                lastCursor = cursor
+                variables["after"] = .string(Data(next.utf8).base64EncodedString())
+            } else {
+                lastCursor = nil
+            }
+            if !posts.isEmpty || page.after == nil { return Listing(items: posts, after: lastCursor) }
+        }
+        return Listing(items: [], after: lastCursor)
+    }
+
+    private func feedOperation(_ destination: FeedDestination) throws -> (GraphQLOperation, String, [String: GraphQLValue]) {
+        switch destination {
+        case .home: return (.homeFeed, "BEST", [:])
+        case .popular: return (.popularFeed, "HOT", [:])
+        case .all: return (.allFeed, "HOT", [:])
+        case .community(let name):
+            let normalized = IDNormalization.community(name)
+            guard !normalized.isEmpty, !normalized.contains("+") else { throw unsupportedRequest() }
+            return (.subredditFeed, "HOT", ["subredditName": .string(normalized)])
+        case .multireddit(let owner, let name):
+            guard !owner.isEmpty, !name.isEmpty, !owner.contains("/"), !name.contains("/") else { throw unsupportedRequest() }
+            return (.customFeed, "HOT", ["path": .string("/user/\(owner)/m/\(name)")])
+        default: throw unsupportedRequest()
+        }
+    }
+
+    func checkCommunityAccess(name: String, account: AccountID) async throws {
+        var variables: [String: GraphQLValue] = ["subredditName": .string(IDNormalization.community(name))]
+        for key in "includeWelcomePage includeDevvitData filterGated".split(separator: " ") { variables[String(key)] = .bool(true) }
+        for key in "loggedOutIsOptedIn includeRecapFields includeFeatureVariants includeManualFeatureVariants includeCommunityGuidanceChecklist".split(separator: " ") { variables[String(key)] = .bool(false) }
+        let data = try await execute(.subredditInfo, variables: variables, account: account)
+        let info = try RedditGraphQLCodec.communityAccess(data: data)
+        switch info {
+        case .available: break
+        case .missing: throw RedditClientError.notFound
+        case .banned, .privateCommunity: throw RedditClientError.accessDenied
+        case .quarantined, .gated:
+            throw RedditClientError.http(statusCode: 403, message: "Open this community on Reddit to approve access.")
+        }
+    }
+
+    func discoveryCommunities(limit: Int, account: AccountID?) async throws -> Listing<Community> {
+        let data = try await execute(.exploreFeed, variables: ["includeCarouselRecommendations": .bool(true)], account: account)
+        return Listing(items: try RedditGraphQLCodec.discoveryCommunities(data: data, limit: limit))
     }
 
     func search(_ request: RedditSearchRequest, account: AccountID?) async throws -> Listing<Post> {
@@ -103,31 +207,70 @@ actor RedditGraphQLClient {
         variables["productSurface"] = .string("android")
         variables["pageSize"] = .int(request.limit)
         variables["sort"] = .string(sort)
-        if let after = request.after { variables["afterCursor"] = .string(after) }
         var filters: [GraphQLValue] = []
         if let time = request.timeRange {
             filters.append(.object(["key": .string("time_range"), "value": .string(time.rawValue)]))
         }
-        if let community = request.community {
-            let name = community.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "^/?r/", with: "", options: [.regularExpression, .caseInsensitive])
-            if !name.isEmpty && name.lowercased() != "all" && name.lowercased() != "popular" {
-                filters.append(.object(["key": .string("subreddit_names"), "value": .string(name)]))
-            }
+        let community = request.community.map { Self.normalizedSearchCommunity($0) }
+            .flatMap { $0.isEmpty || $0.lowercased() == "all" || $0.lowercased() == "popular" ? nil : $0 }
+        if let community {
+            filters.append(.object(["key": .string("subreddit_names"), "value": .string(community)]))
         }
         if !filters.isEmpty { variables["filters"] = .array(filters) }
-        return try RedditGraphQLCodec.searchPosts(data: await execute(.searchPosts, variables: variables, account: account))
+        let scope = SearchScope.posts(query: request.query, community: community?.lowercased(),
+                                     sort: request.sort, time: request.timeRange, limit: request.limit)
+        return try await searchPages(operation: .searchPosts, variables: variables, afterKey: "afterCursor",
+                                     after: request.after, account: account, scope: scope,
+                                     decode: RedditGraphQLCodec.searchPosts)
     }
 
     func communities(_ request: RedditCommunitySearchRequest, account: AccountID?) async throws -> Listing<Community> {
         guard let account else { throw RedditClientError.anonymousAccessBlocked }
-        var variables: [String: GraphQLValue] = [
-            "query": .string(request.query.trimmingCharacters(in: .whitespacesAndNewlines)
-                .replacingOccurrences(of: "^/?r/", with: "", options: [.regularExpression, .caseInsensitive])),
+        let query = Self.normalizedSearchCommunity(request.query)
+        let variables: [String: GraphQLValue] = [
+            "query": .string(query),
             "productSurface": .string("android"), "first": .int(request.limit)
         ]
-        if let after = request.after { variables["after"] = .string(after) }
-        return try RedditGraphQLCodec.communities(data: await execute(.searchCommunities, variables: variables, account: account))
+        return try await searchPages(operation: .searchCommunities, variables: variables, afterKey: "after",
+                                     after: request.after, account: account, scope: .communities(query: query.lowercased(), limit: request.limit),
+                                     decode: RedditGraphQLCodec.communities)
+    }
+
+    private static func normalizedSearchCommunity(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "^/?r/", with: "", options: [.regularExpression, .caseInsensitive])
+    }
+
+    private func searchPages<Element: Sendable>(operation: GraphQLOperation, variables: [String: GraphQLValue],
+                                                 afterKey: String, after: String?, account: AccountID,
+                                                 scope: SearchScope, decode: (Data) throws -> Listing<Element>) async throws -> Listing<Element> {
+        let generation = try await sessionGeneration(for: account)
+        var variables = variables
+        var visited: Set<String> = []
+        if let after {
+            guard let cursor = searchCursors[after], cursor.account == account,
+                  cursor.generation == generation, cursor.scope == scope else { throw unsupportedRequest() }
+            variables[afterKey] = .string(cursor.serverAfter)
+            visited = cursor.visited
+        }
+        var lastCursor: String?
+        for _ in 0..<3 {
+            let page = try decode(await execute(operation, variables: variables, account: account))
+            guard let serverAfter = page.after, !serverAfter.isEmpty, visited.insert(serverAfter).inserted else {
+                return Listing(items: page.items)
+            }
+            let cursor = UUID().uuidString
+            searchCursors[cursor] = SearchCursor(account: account, generation: generation, scope: scope,
+                                                  serverAfter: serverAfter, visited: visited)
+            searchCursorOrder.append(cursor)
+            if searchCursorOrder.count > 256 {
+                searchCursors.removeValue(forKey: searchCursorOrder.removeFirst())
+            }
+            lastCursor = cursor
+            if !page.items.isEmpty { return Listing(items: page.items, after: cursor) }
+            variables[afterKey] = .string(serverAfter)
+        }
+        return Listing(items: [], after: lastCursor)
     }
 
     func users(_ request: RedditUserSearchRequest, account: AccountID?) async throws -> Listing<UserProfile> {
@@ -137,8 +280,9 @@ actor RedditGraphQLClient {
         return try RedditGraphQLCodec.users(data: await execute(.searchPeople, variables: variables, account: account))
     }
 
-    private func execute(_ operation: GraphQLOperation, variables: [String: GraphQLValue], account: AccountID?) async throws -> Data {
+    func execute(_ operation: GraphQLOperation, variables: [String: GraphQLValue], account: AccountID?) async throws -> Data {
         guard let account else { throw RedditClientError.anonymousAccessBlocked }
+        let expectedGeneration = try await sessionGeneration(for: account)
         guard let credential = try await credentialVault.credential(for: account),
               credential.cookieName == "reddit_session", !credential.cookieValue.isEmpty,
               !credential.cookieValue.contains(where: { $0 == ";" || $0 == "\r" || $0 == "\n" }) else {
@@ -165,8 +309,14 @@ actor RedditGraphQLClient {
         case 429: throw RedditClientError.rateLimited(retryAfter: retryAfter(result.response))
         default: throw RedditClientError.http(statusCode: result.response.statusCode, message: nil)
         }
+        guard try await sessionGeneration(for: account) == expectedGeneration else {
+            throw RedditClientError.authenticationRequired
+        }
         guard let root = try? JSONSerialization.jsonObject(with: result.data) as? [String: Any],
               let data = root["data"] as? [String: Any], !data.isEmpty else {
+            throw RedditClientError.malformedResponse
+        }
+        if let errors = root["errors"] as? [Any], !errors.isEmpty {
             throw RedditClientError.malformedResponse
         }
         return result.data
@@ -180,17 +330,24 @@ actor RedditGraphQLClient {
     }
 
     private func refresh(for account: AccountID, credential: RedditCredential, digest: String) async throws -> WebGraphQLToken {
-        if let existing = refreshTasks[account] { return try await existing.task.value }
+        if let existing = matchingRefresh(account: account, digest: digest) { return try await existing.value }
         do { try await confirmSession(account: account, digest: digest) }
         catch {
-            if let existing = refreshTasks[account] { return try await existing.task.value }
+            if let existing = matchingRefresh(account: account, digest: digest) { return try await existing.value }
             throw error
         }
-        if let existing = refreshTasks[account] { return try await existing.task.value }
+        if let existing = matchingRefresh(account: account, digest: digest) { return try await existing.value }
         let task = Task { try await bootstrapToken(for: account, credential: credential, digest: digest) }
         refreshTasks[account] = (digest, task)
         defer { if refreshTasks[account]?.digest == digest { refreshTasks.removeValue(forKey: account) } }
         return try await task.value
+    }
+
+    private func matchingRefresh(account: AccountID, digest: String) -> Task<WebGraphQLToken, Error>? {
+        guard let existing = refreshTasks[account] else { return nil }
+        let renewal = renewingSessions[account]
+        guard existing.digest == digest || (renewal?.old == existing.digest && renewal?.new == digest) else { return nil }
+        return existing.task
     }
 
     private func confirmSession(account: AccountID, digest: String) async throws {
@@ -202,6 +359,13 @@ actor RedditGraphQLClient {
     }
 
     private func bootstrapToken(for account: AccountID, credential: RedditCredential, digest: String) async throws -> WebGraphQLToken {
+        var rotation: (old: String, new: String)?
+        defer {
+            if let rotation, let pending = renewingSessions[account],
+               pending.old == rotation.old, pending.new == rotation.new {
+                renewingSessions.removeValue(forKey: account)
+            }
+        }
         let sourceCookie = "reddit_session=\(credential.cookieValue)"
         var head = URLRequest(url: Self.website)
         head.httpMethod = "HEAD"
@@ -225,11 +389,17 @@ actor RedditGraphQLClient {
             if let oldAccount = jwtClaim(credential.cookieValue, key: "sub"),
                let newAccount = jwtClaim(renewed.value, key: "sub"),
                oldAccount != newAccount { throw RedditClientError.authenticationRequired }
+            let renewedDigest = RedditSessionIdentity.digest(renewed.value)
+            rotation = (digest, renewedDigest)
+            renewingSessions[account] = rotation
             guard try await credentialVault.replaceSessionCookie(renewed.value, expected: credential.cookieValue, for: account) else {
                 throw RedditClientError.authenticationRequired
             }
             sessionValue = renewed.value
-            sessionDigest = RedditSessionIdentity.digest(sessionValue)
+            sessionDigest = renewedDigest
+            if let generation = accountGenerations[account], generation.digest == digest {
+                accountGenerations[account] = (sessionDigest, generation.generation, generation.epoch)
+            }
         }
         let extraCookies = safeBootstrapCookies(headResult.response)
         var post = URLRequest(url: Self.bootstrap)
@@ -389,7 +559,7 @@ actor RedditGraphQLClient {
         }
     }
 
-    private static let postsByIDsVariables: [String: GraphQLValue] = {
+    static let postsByIDsVariables: [String: GraphQLValue] = {
         var values: [String: GraphQLValue] = [:]
         for key in "includeAwards includeSubredditInPosts includePcpV2InPosts includePostStats includeDeletedPosts includeStillMediaAltText includeExtraStillResolutions includePlaybackMp4s includeMuxedMp4s includeDevvitData includeCommunityStatus includeIsModRemovedContentReadAllowed includeUnavailablePostReason includePredictedRemovalReasons includeSubredditBackgroundColor includeOverlayData includeCtaEnrichedPageTitle includePlaCards includeWebviewPrefetchField includeAdBrowserDestinationField includeCollectionsHeroCard includeGalleryAdUrl includeCtaMediaColor includeFollowedForNotificationsStatus includeRedditHandleInfo includeVerificationStatus includeIsActiveComments includeMediaSynthesis includePostTombstone".split(separator: " ") {
             values[String(key)] = .bool(true)

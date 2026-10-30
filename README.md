@@ -40,7 +40,9 @@ Before you begin, make sure you have:
 
 You do not need a Reddit API key, client ID, client secret, or developer application.
 
-The r/all feed and search require a Reddit login. They use Reddit's persisted GraphQL queries with a temporary token from your website session. Octonaut keeps session secrets in the device's Keychain. Other feeds continue to use Reddit website JSON routes, whose signed-out availability depends on Reddit.
+Signed-in feeds, post details, comments, profiles, user lists, subscriptions and discovery use Reddit's persisted GraphQL queries with a temporary token from your website session. Octonaut keeps session secrets in the device's Keychain. The r/all feed and search require a Reddit login. Other signed-out reads use website JSON routes where Reddit allows them.
+
+Local combined custom feeds, inbox and private messages, unread controls and counts, blocked-user lists, report options and actions continue to use Reddit website routes. Login validation also uses the website identity response. Octonaut does not create Reddit-hosted custom feeds or change account preferences as part of loading data.
 
 ### 1. Clone the Repository
 

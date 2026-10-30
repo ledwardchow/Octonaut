@@ -3,7 +3,7 @@ import Foundation
 /// A deliberately tolerant JSON value. Reddit occasionally adds fields or
 /// returns null where a field was present before, so transport decoding does
 /// not use a rigid Codable struct for every Reddit object.
-fileprivate enum RedditJSONValue: Decodable, Sendable {
+enum RedditJSONValue: Decodable, Sendable {
     case null
     case bool(Bool)
     case number(Double)
@@ -54,15 +54,16 @@ fileprivate enum RedditJSONValue: Decodable, Sendable {
     }
 }
 
-/// Decodes only the GraphQL operations used by r/all and search. The response
-/// envelope is checked before individual nodes are adapted to the existing
-/// Reddit post, community, and user mappers.
 enum RedditGraphQLCodec {
+    enum CommunityAccess {
+        case available, missing, banned, privateCommunity, quarantined, gated
+    }
+
     private struct Envelope: Decodable {
         let data: [String: RedditJSONValue]
     }
 
-    private static func payload(_ data: Data) throws -> [String: RedditJSONValue] {
+    static func payload(_ data: Data) throws -> [String: RedditJSONValue] {
         let envelope = try JSONDecoder().decode(Envelope.self, from: data)
         return envelope.data
     }
@@ -77,7 +78,7 @@ enum RedditGraphQLCodec {
         return connection
     }
 
-    private static func after(_ connection: [String: RedditJSONValue]) throws -> String? {
+    static func after(_ connection: [String: RedditJSONValue]) throws -> String? {
         guard let pageInfo = connection["pageInfo"]?.objectValue,
               let hasNextPage = pageInfo["hasNextPage"]?.boolValue else {
             throw RedditClientError.malformedResponse
@@ -89,21 +90,30 @@ enum RedditGraphQLCodec {
         return cursor
     }
 
-    private static func nodes(_ connection: [String: RedditJSONValue]) -> [[String: RedditJSONValue]] {
+    static func nodes(_ connection: [String: RedditJSONValue]) -> [[String: RedditJSONValue]] {
         connection["edges"]?.arrayValue?.compactMap {
             $0.objectValue?["node"]?.objectValue
         } ?? []
     }
 
     static func feedPostIDs(data: Data) throws -> [String] {
+        feedPostIDs(elements: try feedElements(data))
+    }
+
+    private static func feedElements(_ data: Data) throws -> [String: RedditJSONValue] {
         let root = try payload(data)
         guard root.count == 1,
               let feed = root.values.first?.objectValue,
-              let edges = feed["elements"]?.objectValue?["edges"]?.arrayValue else {
+              let elements = feed["elements"]?.objectValue,
+              elements["edges"]?.arrayValue != nil else {
             throw RedditClientError.malformedResponse
         }
+        return elements
+    }
+
+    private static func feedPostIDs(elements: [String: RedditJSONValue]) -> [String] {
         var seen = Set<String>()
-        return edges.compactMap { edge -> String? in
+        return (elements["edges"]?.arrayValue ?? []).compactMap { edge -> String? in
             guard let node = edge.objectValue?["node"]?.objectValue,
                   !isAd(node),
                   let id = node["groupId"]?.stringValue ?? node["id"]?.stringValue,
@@ -112,7 +122,70 @@ enum RedditGraphQLCodec {
         }
     }
 
-    static func posts(data: Data, orderedIDs: [String]) throws -> [Post] {
+    static func feedPage(data: Data) throws -> (ids: [String], after: String?) {
+        let elements = try feedElements(data)
+        let ids = feedPostIDs(elements: elements)
+        guard let pageInfo = elements["pageInfo"]?.objectValue else { return (ids, ids.last) }
+        guard let hasNext = pageInfo["hasNextPage"]?.boolValue else { throw RedditClientError.malformedResponse }
+        guard hasNext else { return (ids, nil) }
+        guard let encoded = pageInfo["endCursor"]?.stringValue,
+              let bytes = Data(base64Encoded: encoded), let fullname = String(data: bytes, encoding: .utf8),
+              fullname.range(of: "^t3_[A-Za-z0-9]+$", options: .regularExpression) != nil else {
+            throw RedditClientError.malformedResponse
+        }
+        return (ids, fullname)
+    }
+
+    static func communityAccess(data: Data) throws -> CommunityAccess {
+        let root = try payload(data)
+        guard let value = root["subredditInfoByName"] else { throw RedditClientError.malformedResponse }
+        if case .null = value { return .missing }
+        guard let node = value.objectValue else { throw RedditClientError.malformedResponse }
+        switch node["forbiddenReason"]?.stringValue {
+        case "BANNED": return .banned
+        case "PRIVATE", "GOLD_ONLY": return .privateCommunity
+        case "QUARANTINED": return .quarantined
+        case "GATED": return .gated
+        default:
+            if node["__typename"]?.stringValue == "Subreddit" { return .available }
+            throw RedditClientError.accessDenied
+        }
+    }
+
+    static func discoveryCommunities(data: Data, limit: Int) throws -> [Community] {
+        let root = try payload(data)
+        guard let edges = root["exploreFeedV1"]?.objectValue?["elements"]?.objectValue?["edges"]?.arrayValue else {
+            throw RedditClientError.malformedResponse
+        }
+        let groups: [[[String: RedditJSONValue]]] = edges.compactMap { edge in
+            edge.objectValue?["node"]?.objectValue?["communityRecommendations"]?.arrayValue?.compactMap {
+                $0.objectValue?["subreddit"]?.objectValue
+            }
+        }
+        var seen = Set<String>()
+        var communities: [Community] = []
+        for index in 0..<(groups.map(\.count).max() ?? 0) {
+            for group in groups where index < group.count {
+                let node = group[index]
+                guard let name = node["name"]?.stringValue, !name.isEmpty,
+                      node["isSubscribed"]?.boolValue != true,
+                      seen.insert(name.lowercased()).inserted else { continue }
+                var fields: [String: RedditJSONValue] = ["display_name": .string(name), "display_name_prefixed": .string("r/\(name)")]
+                fields["title"] = node["title"]
+                fields["public_description"] = node["publicDescriptionText"]
+                fields["subscribers"] = node["subscribersCount"]
+                fields["community_icon"] = node["styles"]?.objectValue?["icon"]
+                    ?? node["styles"]?.objectValue?["legacyIcon"]?.objectValue?["url"]
+                fields["user_is_subscriber"] = node["isSubscribed"]
+                fields["quarantine"] = node["isQuarantined"]
+                if let community = RedditJSONCodec.mapCommunity(fields) { communities.append(community) }
+                if communities.count >= limit { return communities }
+            }
+        }
+        return communities
+    }
+
+    static func posts(data: Data, orderedIDs: [String], deletedPostPermalink: URL? = nil) throws -> [Post] {
         let root = try payload(data)
         guard let infos = root["postsInfoByIds"]?.arrayValue else {
             throw RedditClientError.malformedResponse
@@ -120,7 +193,14 @@ enum RedditGraphQLCodec {
         let requested = Set(orderedIDs)
         var byID: [String: Post] = [:]
         for value in infos {
-            guard let node = value.objectValue,
+            guard var node = value.objectValue else { continue }
+            if node["__typename"]?.stringValue == "DeletedProfilePost" {
+                guard let id = node["id"]?.stringValue ?? (orderedIDs.count == 1 ? orderedIDs.first : nil) else { continue }
+                node["id"] = .string(id)
+                node["title"] = .string("[deleted]")
+                node["permalink"] = .string(deletedPostPermalink?.absoluteString ?? "/comments/\(id.dropFirst(3))/")
+            }
+            guard
                   let id = node["id"]?.stringValue,
                   requested.contains(id),
                   let post = post(node) else { continue }
@@ -169,21 +249,22 @@ enum RedditGraphQLCodec {
         return Listing(items: users, after: try after(connection))
     }
 
-    private static func post(_ node: [String: RedditJSONValue]) -> Post? {
-        guard ["SubredditPost", "ProfilePost", "DeletedSubredditPost"].contains(node["__typename"]?.stringValue ?? ""),
+    static func post(_ node: [String: RedditJSONValue]) -> Post? {
+        guard ["SubredditPost", "ProfilePost", "DeletedSubredditPost", "DeletedProfilePost"].contains(node["__typename"]?.stringValue ?? ""),
               let fullname = node["id"]?.stringValue, fullname.hasPrefix("t3_"),
               let title = node["postTitle"]?.stringValue ?? node["title"]?.stringValue else { return nil }
         let id = String(fullname.dropFirst(3))
         let community = node["subreddit"]?.objectValue ?? node["profile"]?.objectValue ?? [:]
         let communityName = community["name"]?.stringValue ?? ""
-        let deleted = node["__typename"]?.stringValue == "DeletedSubredditPost"
+        let deleted = ["DeletedSubredditPost", "DeletedProfilePost"].contains(node["__typename"]?.stringValue ?? "")
+        let body = RedditGraphQLRichText.decode(node["content"]?.objectValue ?? [:], thingID: fullname)?.plainText ?? ""
         let permalink = node["permalink"]?.stringValue ?? "/r/\(communityName)/comments/\(id)/"
         var fields: [String: RedditJSONValue] = [
             "id": .string(id), "name": .string(fullname), "title": .string(title),
             "permalink": .string(permalink), "subreddit": .string(communityName),
             "subreddit_name_prefixed": .string("r/\(communityName)"),
             "author": .string(node["authorInfo"]?.objectValue?["name"]?.stringValue ?? "[deleted]"),
-            "selftext": .string(deleted ? "[deleted]" : (node["content"]?.objectValue?["markdown"]?.stringValue ?? "")),
+            "selftext": .string(deleted ? "[deleted]" : body),
             "url": node["url"] ?? .string("https://www.reddit.com\(permalink)"),
             "is_self": deleted ? .bool(true) : (node["isSelfPost"] ?? .bool(false)),
             "saved": node["isSaved"] ?? .bool(false),
@@ -252,7 +333,7 @@ enum RedditGraphQLCodec {
         return true
     }
 
-    private static func timestamp(_ value: RedditJSONValue?) -> RedditJSONValue? {
+    static func timestamp(_ value: RedditJSONValue?) -> RedditJSONValue? {
         guard let raw = value?.stringValue else { return nil }
         let normal = raw.replacingOccurrences(of: #"(\.\d{3})\d+"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"([+-]\d{2})(\d{2})$"#, with: "$1:$2", options: .regularExpression)
@@ -453,7 +534,7 @@ enum RedditJSONCodec {
         return ActionResult(succeeded: errors.isEmpty, message: errors.first)
     }
 
-    fileprivate static func mapPost(_ object: [String: RedditJSONValue], kind: String) -> Post? {
+    static func mapPost(_ object: [String: RedditJSONValue], kind: String) -> Post? {
         guard let id = object["id"]?.stringValue,
               let permalinkString = object["permalink"]?.stringValue,
               let permalink = redditURL(permalinkString),
@@ -530,7 +611,7 @@ enum RedditJSONCodec {
         )
     }
 
-    fileprivate static func mapCommunity(_ object: [String: RedditJSONValue]) -> Community? {
+    static func mapCommunity(_ object: [String: RedditJSONValue]) -> Community? {
         guard let name = object["display_name"]?.stringValue ?? object["name"]?.stringValue else {
             return nil
         }
@@ -559,7 +640,7 @@ enum RedditJSONCodec {
         )
     }
 
-    fileprivate static func mapUserProfile(_ object: [String: RedditJSONValue]) -> UserProfile? {
+    static func mapUserProfile(_ object: [String: RedditJSONValue]) -> UserProfile? {
         guard let username = object["name"]?.stringValue, !username.isEmpty else { return nil }
         let linkKarma = int(object["link_karma"])
         let commentKarma = int(object["comment_karma"])
@@ -710,7 +791,7 @@ enum RedditJSONCodec {
         }
     }
 
-    private static func mapUserComment(_ object: [String: RedditJSONValue]) -> UserComment? {
+    static func mapUserComment(_ object: [String: RedditJSONValue]) -> UserComment? {
         guard let id = object["id"]?.stringValue else { return nil }
         let communityName = object["subreddit"]?.stringValue
         let community = communityName.map {

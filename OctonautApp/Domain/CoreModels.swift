@@ -356,11 +356,64 @@ struct Post: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+struct CommentPageToken: Codable, Hashable, Sendable {
+    let cursor: String
+    let account: AccountID
+    let postFullname: String
+    let parentFullname: String
+    let sort: CommentSort
+    let sessionGeneration: String
+    let visitedCursors: [String]
+}
+
+enum CommentContinuation: Codable, Hashable, Sendable {
+    case children([String])
+    case page(CommentPageToken)
+}
+
 struct MoreCommentsNode: Codable, Hashable, Sendable, Identifiable {
     let id: String
     let parentFullname: String
-    let childIDs: [String]
+    let continuation: CommentContinuation
     var count: Int?
+
+    private enum CodingKeys: String, CodingKey { case id, parentFullname, continuation, childIDs, count }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        parentFullname = try values.decode(String.self, forKey: .parentFullname)
+        count = try values.decodeIfPresent(Int.self, forKey: .count)
+        if let typed = try values.decodeIfPresent(CommentContinuation.self, forKey: .continuation) {
+            continuation = typed
+        } else {
+            continuation = .children(try values.decodeIfPresent([String].self, forKey: .childIDs) ?? [])
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(id, forKey: .id)
+        try values.encode(parentFullname, forKey: .parentFullname)
+        try values.encode(continuation, forKey: .continuation)
+        try values.encodeIfPresent(count, forKey: .count)
+    }
+
+    init(id: String, parentFullname: String, continuation: CommentContinuation, count: Int?) {
+        self.id = id
+        self.parentFullname = parentFullname
+        self.continuation = continuation
+        self.count = count
+    }
+
+    init(id: String, parentFullname: String, childIDs: [String], count: Int?) {
+        self.init(id: id, parentFullname: parentFullname, continuation: .children(childIDs), count: count)
+    }
+
+    var childIDs: [String] {
+        if case .children(let ids) = continuation { return ids }
+        return []
+    }
 }
 
 struct DeletedCommentNode: Codable, Hashable, Sendable, Identifiable {

@@ -36,7 +36,7 @@ protocol RedditClient: Sendable {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID?
     ) async throws -> [CommentTreeNode]
@@ -125,7 +125,7 @@ actor URLSessionRedditClient: RedditClient {
     /// cache, so one account's cookies never reach another account or the
     /// anonymous path, and private responses are never written to disk.
     private let authenticatedSession: URLSession
-    private let graphQL: RedditGraphQLClient
+    let graphQL: RedditGraphQLClient
     private let credentialVault: any AccountCredentialVault
     private let userAgent: String
     private var didBootstrapAnonymousSession = false
@@ -137,12 +137,13 @@ actor URLSessionRedditClient: RedditClient {
         baseURL: URL = URL(string: "https://www.reddit.com")!,
         credentialVault: any AccountCredentialVault,
         userAgent: String = URLSessionRedditClient.browserUserAgent,
-        sessionConfiguration: URLSessionConfiguration? = nil
+        sessionConfiguration: URLSessionConfiguration? = nil,
+        graphQL: RedditGraphQLClient? = nil
     ) {
         self.baseURL = baseURL
         self.credentialVault = credentialVault
         self.userAgent = userAgent
-        self.graphQL = RedditGraphQLClient(
+        self.graphQL = graphQL ?? RedditGraphQLClient(
             credentialVault: credentialVault,
             userAgent: userAgent,
             sessionConfiguration: sessionConfiguration
@@ -176,8 +177,22 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func listing(_ request: ListingRequest, account: AccountID? = nil) async throws -> Listing<Post> {
-        if case .all = request.feed.destination {
-            return try await graphQL.listing(request, account: account ?? accountFromScope(request.accountScope))
+        let selectedAccount = account ?? accountFromScope(request.accountScope)
+        if let selectedAccount {
+            switch request.feed.destination {
+            case .home, .popular, .all, .community, .multireddit:
+                return try await graphQL.listing(request, account: selectedAccount)
+            case .user(let username, let section):
+                if section.isPrivateToOwner {
+                    guard try await isSelectedAccountOwner(username, account: selectedAccount) else {
+                        return Listing(items: [])
+                    }
+                }
+                return try await graphQL.userPosts(request, username: username, section: section, account: selectedAccount)
+            default: break
+            }
+        } else if case .all = request.feed.destination {
+            throw RedditClientError.anonymousAccessBlocked
         }
         if case .search(let query, let community) = request.feed.destination {
             return try await graphQL.search(
@@ -228,6 +243,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func post(_ permalink: URL, sort: CommentSort, account: AccountID? = nil) async throws -> PostThread {
+        if let account { return try await graphQL.post(permalink, sort: sort, account: account) }
         let route = postJSONRoute(for: permalink)
         let query = [
             URLQueryItem(name: "raw_json", value: "1"),
@@ -247,11 +263,15 @@ actor URLSessionRedditClient: RedditClient {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID? = nil
     ) async throws -> [CommentTreeNode] {
-        guard !childIDs.isEmpty else { return [] }
+        if case .page = continuation {
+            guard let account else { throw RedditClientError.authenticationRequired }
+            return try await graphQL.moreComments(postFullname: postFullname, parentFullname: parentFullname, continuation: continuation, sort: sort, account: account)
+        }
+        guard case .children(let childIDs) = continuation, !childIDs.isEmpty else { return [] }
         await acquireMoreCommentsRequest()
         defer { releaseMoreCommentsRequest() }
         let route = Self.moreCommentsRoute(
@@ -284,6 +304,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func trendingCommunities(limit: Int = 25, account: AccountID? = nil) async throws -> Listing<Community> {
+        if let account { return try await graphQL.discoveryCommunities(limit: limit, account: account) }
         let route = Self.trendingCommunitiesRoute(limit: limit)
         let data = try await requestData(
             method: "GET",
@@ -297,20 +318,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func subscribedCommunities(after: String? = nil, account: AccountID) async throws -> Listing<Community> {
-        var query = [
-            URLQueryItem(name: "raw_json", value: "1"),
-            URLQueryItem(name: "limit", value: "100")
-        ]
-        if let after { query.append(URLQueryItem(name: "after", value: after)) }
-        let data = try await requestData(
-            method: "GET",
-            path: "/subreddits/mine.json",
-            query: query,
-            body: nil,
-            account: account,
-            retryable: true
-        )
-        return try RedditJSONCodec.decodeCommunities(data)
+        try await graphQL.subscribedCommunities(after: after, account: account)
     }
 
     func blockedUsers(after: String? = nil, account: AccountID) async throws -> Listing<UserReference> {
@@ -324,6 +332,7 @@ actor URLSessionRedditClient: RedditClient {
     }
 
     func userProfile(_ username: String, account: AccountID? = nil) async throws -> UserProfile {
+        if let account { return try await graphQL.userProfile(username, account: account) }
         let data = try await requestData(
             method: "GET",
             path: "/user/\(pathSegment(username))/about.json",
@@ -341,6 +350,14 @@ actor URLSessionRedditClient: RedditClient {
         after: String? = nil,
         account: AccountID? = nil
     ) async throws -> Listing<UserComment> {
+        if let account {
+            if section.isPrivateToOwner {
+                guard try await isSelectedAccountOwner(username, account: account) else {
+                    return Listing(items: [])
+                }
+            }
+            return try await graphQL.userComments(username, section: section, after: after, account: account)
+        }
         var query = [
             URLQueryItem(name: "raw_json", value: "1"),
             URLQueryItem(name: "limit", value: "50")
@@ -358,6 +375,16 @@ actor URLSessionRedditClient: RedditClient {
             retryable: true
         )
         return try RedditJSONCodec.decodeUserComments(data)
+    }
+
+    private func isSelectedAccountOwner(_ username: String, account: AccountID) async throws -> Bool {
+        guard let credential = try await credentialVault.credential(for: account) else {
+            throw RedditClientError.authenticationRequired
+        }
+        if let storedName = credential.redditUser, !storedName.isEmpty {
+            return storedName.caseInsensitiveCompare(username) == .orderedSame
+        }
+        return try await graphQL.isSelectedAccountOwner(username, account: account)
     }
 
     func reportOptions(community: String, account: AccountID) async throws -> RedditReportOptions {

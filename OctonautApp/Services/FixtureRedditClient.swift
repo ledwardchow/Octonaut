@@ -104,7 +104,7 @@ actor FixtureRedditClient: RedditClient {
     func moreComments(
         postFullname: String,
         parentFullname: String,
-        childIDs: [String],
+        continuation: CommentContinuation,
         sort: CommentSort,
         account: AccountID? = nil
     ) async throws -> [CommentTreeNode] {
