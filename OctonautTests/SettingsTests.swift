@@ -254,6 +254,131 @@ final class SettingsTests: XCTestCase {
                        "Cached portrait tiles appearing above the viewport must not shift the scroll position")
     }
 
+    func testFourColumnGalleryKeepsPositionWhileDelayedPortraitsLoadAndPostsAppend() async throws {
+        let dependencies = AppDependencies.preview()
+        let store = OctonautFeatureStore(screenshotMode: true)
+        func galleryPosts(_ range: Range<Int>) -> [PostCardModel] {
+            range.map { index in
+                var post = syntheticFeedPost(index)
+                post.hasMedia = true
+                post.mediaKind = "image"
+                if index.isMultiple(of: 4) {
+                    post.mediaURL = URL(string: "octonaut-screenshot://landscape-sizing")!
+                    post.mediaAspectRatio = 4
+                } else {
+                    post.mediaURL = URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")!
+                    post.mediaAspectRatio = 0.25
+                }
+                return post
+            }
+        }
+        store.posts = galleryPosts(0..<180)
+        let host = UIHostingController(rootView: NavigationStack {
+            GalleryView(descriptor: .popular, store: store, router: OctonautFeatureRouter(), columnCount: 4)
+        }.environment(dependencies))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 660, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+
+        func findScroll(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > 2000 { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+        let scroll = try XCTUnwrap(findScroll(host.view))
+
+        let initialContentHeight = scroll.contentSize.height
+        for (down, up) in [(CGFloat(3000), CGFloat(1500)), (4500, 2250), (5500, 2750)] {
+            XCTAssertGreaterThan(scroll.contentSize.height, down + scroll.bounds.height)
+            scroll.setContentOffset(CGPoint(x: 0, y: down), animated: false)
+            try await Task.sleep(for: .milliseconds(80))
+            scroll.setContentOffset(CGPoint(x: 0, y: up), animated: false)
+            let upwardOffset = scroll.contentOffset.y
+            XCTAssertEqual(upwardOffset, up, accuracy: 1)
+
+
+            for _ in 0..<9 {
+                try await Task.sleep(for: .milliseconds(100))
+                host.view.layoutIfNeeded()
+                XCTAssertEqual(scroll.contentOffset.y, upwardOffset, accuracy: 24,
+                               "Decoding tiles above the viewport moved the gallery after scrolling up")
+            }
+        }
+
+        XCTAssertEqual(scroll.contentSize.height, initialContentHeight, accuracy: 1,
+                       "Known image dimensions must keep gallery content height stable during scrolling")
+        store.posts.append(contentsOf: galleryPosts(180..<260))
+        try await Task.sleep(for: .milliseconds(150))
+        host.view.layoutIfNeeded()
+        XCTAssertEqual(store.posts.count, 260)
+        XCTAssertGreaterThan(scroll.contentSize.height, 7000 + scroll.bounds.height)
+        scroll.setContentOffset(CGPoint(x: 0, y: 7000), animated: false)
+        try await Task.sleep(for: .milliseconds(80))
+        scroll.setContentOffset(CGPoint(x: 0, y: 3500), animated: false)
+        let upwardOffset = scroll.contentOffset.y
+        XCTAssertEqual(upwardOffset, 3500, accuracy: 1)
+        for _ in 0..<9 {
+            try await Task.sleep(for: .milliseconds(100))
+            host.view.layoutIfNeeded()
+            XCTAssertEqual(scroll.contentOffset.y, upwardOffset, accuracy: 24,
+                           "Appending posts and decoding tiles moved the gallery after scrolling up")
+        }
+    }
+
+    func testGalleryKeepsVisibleRowWhenUnknownPortraitsResolve() async throws {
+        try await assertGalleryKeepsVisibleRowWhenPortraitsResolve(urlCount: 1)
+    }
+
+    func testGalleryKeepsVisibleRowWhenDifferentPortraitsResolveTogether() async throws {
+        try await assertGalleryKeepsVisibleRowWhenPortraitsResolve(urlCount: 4)
+    }
+
+    private func assertGalleryKeepsVisibleRowWhenPortraitsResolve(urlCount: Int) async throws {
+        let urls = (0..<urlCount).map { _ in
+            URL(string: "octonaut-screenshot://delayed-portrait-sizing/\(UUID().uuidString)")!
+        }
+        let url = urls[0]
+        let store = OctonautFeatureStore(screenshotMode: true)
+        store.posts = (0..<120).map { index in
+            var post = syntheticFeedPost(index)
+            post.hasMedia = true
+            post.mediaKind = "image"
+            post.mediaURL = urls[index % urlCount]
+            post.mediaAspectRatio = nil
+            return post
+        }
+        let host = UIHostingController(rootView: GalleryView(
+            descriptor: .popular, store: store, router: OctonautFeatureRouter(), columnCount: 4
+        ).environment(AppDependencies.preview()))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 660, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        func findScroll(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+        let scroll = try XCTUnwrap(findScroll(host.view))
+        XCTAssertNil(OctonautImageCache.cachedImage(for: url))
+        let tileWidth = (scroll.bounds.width - 20) / 4
+        let initialOffset: CGFloat = 1200
+        let row = floor((initialOffset - 4) / (tileWidth + 4))
+        scroll.setContentOffset(CGPoint(x: 0, y: initialOffset), animated: false)
+        try await Task.sleep(for: .milliseconds(900))
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: url))
+        XCTAssertEqual(scroll.contentOffset.y, initialOffset + row * tileWidth * 3, accuracy: 2,
+                       "The visible row must stay at the same screen position when images above it grow")
+    }
+
     func testInlinePortraitMediaFitsViewportHeight() async throws {
         try await assertInlineMediaSize(image: "portrait-sizing", maximumHeight: 600, expectedHeight: 600)
     }

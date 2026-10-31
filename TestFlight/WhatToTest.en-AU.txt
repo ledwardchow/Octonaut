@@ -18,4 +18,4 @@ Added recommended communities to Search.
 Fixed feeds failing to load posts.
 Smoothly swipe right on posts to reveal communities.
 Gallery now fills Duo with four columns.
-Fixed gallery images resizing when scrolling upwards.
+Fixed gallery stuttering and jumping back to the top.

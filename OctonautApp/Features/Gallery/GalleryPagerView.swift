@@ -17,12 +17,52 @@ struct GalleryMediaItem: Identifiable {
     }
 }
 
+/// Positions items in their original round-robin columns. The scroll view uses
+/// these frames directly, so loading an image cannot change a lazy stack's
+/// estimated height or cause it to discard the current scroll position.
+@MainActor
+struct GalleryMasonryLayout {
+    struct Placement: Identifiable {
+        let item: GalleryMediaItem
+        let frame: CGRect
+        var id: String { item.id }
+    }
+
+    let placements: [Placement]
+    let height: CGFloat
+
+    init(items: [GalleryMediaItem], columns: Int, width: CGFloat, ratios: [URL: CGFloat]) {
+        let count = max(1, columns)
+        let gap: CGFloat = 4
+        let tileWidth = max(1, (width - gap * CGFloat(count + 1)) / CGFloat(count))
+        var columnHeights = Array(repeating: gap, count: count)
+        placements = items.enumerated().map { index, item in
+            let column = index % count
+            let ratio = item.previewURL.flatMap { ratios[$0] }
+                ?? (item.post.galleryURLs.isEmpty ? item.post.mediaAspectRatio : nil)
+                ?? 1
+            let tileHeight = tileWidth / (ratio.isFinite && ratio > 0 ? ratio : 1)
+            let frame = CGRect(
+                x: gap + CGFloat(column) * (tileWidth + gap),
+                y: columnHeights[column],
+                width: tileWidth,
+                height: tileHeight
+            )
+            columnHeights[column] += tileHeight + gap
+            return Placement(item: item, frame: frame)
+        }
+        height = columnHeights.max() ?? gap
+    }
+}
+
 @MainActor
 struct GalleryMediaTile: View {
     let item: GalleryMediaItem
     var blursNSFW = true
     var blursSpoilers = true
     let onOpen: () -> Void
+    var onAspectRatio: ((CGFloat) -> Void)?
+    var frameRatio: CGFloat?
     @State private var loadedImage: (url: URL, image: UIImage)?
     @State private var failedURL: URL?
 
@@ -46,7 +86,7 @@ struct GalleryMediaTile: View {
         let tileImage = displayedImage
         Button(action: onOpen) {
             Color(uiColor: .secondarySystemBackground)
-                .aspectRatio(aspectRatio(for: tileImage), contentMode: .fit)
+                .aspectRatio(frameRatio ?? aspectRatio(for: tileImage), contentMode: .fit)
                 .overlay {
                     if let image = tileImage {
                         Image(uiImage: image)
@@ -82,12 +122,14 @@ struct GalleryMediaTile: View {
             if loadedImage?.url == url { return }
             if let cachedImage = OctonautImageCache.cachedImage(for: url) {
                 loadedImage = (url, cachedImage)
+                onAspectRatio?(aspectRatio(for: cachedImage))
                 return
             }
             do {
                 let result = try await OctonautImageCache.image(for: url)
                 guard !Task.isCancelled else { return }
                 loadedImage = (url, result)
+                onAspectRatio?(aspectRatio(for: result))
             } catch is CancellationError {
                 return
             } catch {

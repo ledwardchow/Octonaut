@@ -433,6 +433,101 @@ private struct CommentComposerTarget: Identifiable {
 }
 
 @MainActor
+private final class GalleryScrollViewport {
+    var rect: CGRect = .zero
+    var anchorID: String?
+    var anchorTopOffset: CGFloat?
+    var pendingTargetY: CGFloat?
+    var pendingContentHeight: CGFloat = 0
+    weak var scrollView: UIScrollView?
+    var contentSizeObservation: NSKeyValueObservation?
+
+    func attach(to scrollView: UIScrollView) {
+        guard self.scrollView !== scrollView else { return }
+        self.scrollView = scrollView
+        contentSizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.applyPendingOffset() }
+        }
+    }
+
+    func applyPendingOffset() {
+        guard let requestedY = pendingTargetY else { return }
+        guard let scrollView else { return }
+        guard !scrollView.isDragging, !scrollView.isTracking else {
+            pendingTargetY = nil
+            anchorID = nil
+            anchorTopOffset = nil
+            return
+        }
+        scrollView.layoutIfNeeded()
+        let maximumY = scrollView.contentSize.height - scrollView.bounds.height
+            + scrollView.adjustedContentInset.bottom
+        guard scrollView.contentSize.height >= pendingContentHeight - 1 else { return }
+        let targetY = min(requestedY, max(-scrollView.adjustedContentInset.top, maximumY))
+        pendingTargetY = nil
+        rect.origin.y = targetY
+        scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: targetY), animated: false)
+        anchorID = nil
+        anchorTopOffset = nil
+    }
+}
+
+@MainActor
+private struct GalleryScrollAnchorBridge: UIViewRepresentable {
+    let viewport: GalleryScrollViewport
+    let revision: Int
+
+    func makeUIView(context: Context) -> AnchorView {
+        AnchorView(viewport: viewport)
+    }
+
+    func updateUIView(_ view: AnchorView, context: Context) {
+        view.viewport = viewport
+        view.findScrollView()
+        DispatchQueue.main.async { [weak view] in view?.viewport.applyPendingOffset() }
+    }
+
+    final class AnchorView: UIView {
+        var viewport: GalleryScrollViewport
+
+        init(viewport: GalleryScrollViewport) {
+            self.viewport = viewport
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) { return nil }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            findScrollView()
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            findScrollView()
+        }
+
+        func findScrollView() {
+            var ancestor = superview
+            while let view = ancestor {
+                if let scrollView = view as? UIScrollView {
+                    viewport.attach(to: scrollView)
+                    break
+                }
+                ancestor = view.superview
+            }
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            findScrollView()
+            DispatchQueue.main.async { [weak self] in self?.viewport.applyPendingOffset() }
+        }
+    }
+}
+
+@MainActor
 struct GalleryView: View {
     let descriptor: FeedDescriptorModel
     let store: OctonautFeatureStore
@@ -442,6 +537,12 @@ struct GalleryView: View {
 
     @Environment(AppDependencies.self) private var dependencies
     @State private var selectedItem: GalleryMediaItem?
+    @State private var imageRatios: [URL: CGFloat] = [:]
+    @State private var scrollViewport = GalleryScrollViewport()
+    @State private var visibleBand = 0
+    @State private var viewportHeight: CGFloat = 0
+    @State private var layoutRevision = 0
+    @State private var lastRequestedCursor: String?
     /// A per-visit override of the blur preferences, so the toolbar button can
     /// unblur this grid without changing the saved setting.
     @State private var revealsSensitiveMedia = false
@@ -456,53 +557,125 @@ struct GalleryView: View {
         })
     }
 
+    private func loadNextPageIfNeeded(contentHeight: CGFloat, visibleRect: CGRect) {
+        guard visibleRect.height > 0,
+              visibleRect.maxY >= contentHeight - visibleRect.height / 2,
+              !items.isEmpty,
+              store.feedState == .loaded,
+              store.nextPageError == nil,
+              let cursor = store.galleryPageCursor(for: descriptor),
+              cursor != lastRequestedCursor else { return }
+        lastRequestedCursor = cursor
+        Task { await store.loadMorePosts(for: descriptor) }
+    }
+
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 4) {
-                    ForEach(0..<columnCount, id: \.self) { column in
-                        LazyVStack(spacing: 4) {
-                            ForEach(Array(items.enumerated()).filter { $0.offset % columnCount == column }.map(\.element)) { item in
-                                GalleryMediaTile(
-                                    item: item,
-                                    blursNSFW: dependencies.settings.blurNSFWMedia && !revealsSensitiveMedia,
-                                    blursSpoilers: dependencies.settings.blurSpoilers && !revealsSensitiveMedia
-                                ) { selectedItem = item }
+        GeometryReader { geometry in
+            let galleryItems = items
+            let layout = GalleryMasonryLayout(
+                items: galleryItems,
+                columns: columnCount,
+                width: geometry.size.width,
+                ratios: imageRatios
+            )
+            let bandHeight = max(viewportHeight, geometry.size.height) / 2
+            let preloadDistance = max(viewportHeight, geometry.size.height) * 1.5
+            let nearby = CGRect(
+                x: 0,
+                y: max(0, CGFloat(visibleBand) * bandHeight - preloadDistance),
+                width: geometry.size.width,
+                height: max(viewportHeight, geometry.size.height) + bandHeight + 2 * preloadDistance
+            )
+            ScrollView {
+                VStack(spacing: 0) {
+                    ZStack(alignment: .topLeading) {
+                        Color.clear.frame(width: geometry.size.width, height: layout.height)
+                        ForEach(layout.placements.filter { $0.frame.intersects(nearby) }) { placement in
+                            GalleryMediaTile(
+                                item: placement.item,
+                                blursNSFW: dependencies.settings.blurNSFWMedia && !revealsSensitiveMedia,
+                                blursSpoilers: dependencies.settings.blurSpoilers && !revealsSensitiveMedia,
+                                onOpen: { selectedItem = placement.item },
+                                onAspectRatio: { ratio in
+                                    guard let url = placement.item.previewURL,
+                                          ratio.isFinite, ratio > 0,
+                                          imageRatios[url] != ratio else { return }
+                                    if scrollViewport.scrollView?.isDragging != true,
+                                       scrollViewport.anchorID == nil,
+                                       let anchor = layout.placements
+                                        .filter({ $0.frame.maxY > scrollViewport.rect.minY &&
+                                            $0.frame.minY < scrollViewport.rect.maxY })
+                                        .min(by: { abs($0.frame.minY - scrollViewport.rect.minY) <
+                                            abs($1.frame.minY - scrollViewport.rect.minY) }) {
+                                        scrollViewport.anchorID = anchor.id
+                                        scrollViewport.anchorTopOffset = anchor.frame.minY - scrollViewport.rect.minY
+                                    }
+                                    imageRatios[url] = ratio
+                                    layoutRevision += 1
+                                },
+                                frameRatio: placement.frame.width / placement.frame.height
+                            )
+                            .frame(width: placement.frame.width, height: placement.frame.height)
+                            .position(x: placement.frame.midX, y: placement.frame.midY)
+                        }
+                    }
+                    .frame(width: geometry.size.width, height: layout.height)
+                    .background(GalleryScrollAnchorBridge(viewport: scrollViewport, revision: layoutRevision))
+
+                    if case .failed(let message) = store.feedState {
+                        VStack(spacing: 12) {
+                            Text(message).font(.callout).foregroundStyle(.secondary)
+                            Button("Try again") {
+                                Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
                             }
                         }
-                        .frame(maxWidth: .infinity)
+                        .padding()
+                    } else if store.feedState == .loading || store.feedState == .idle {
+                        ProgressView("Loading gallery").padding()
+                    } else if store.nextPageError != nil, store.galleryPageCursor(for: descriptor) != nil {
+                        Button("Couldn't load more. Retry") { Task { await store.loadMorePosts(for: descriptor) } }
+                            .buttonStyle(.bordered)
+                            .padding()
+                    } else if store.galleryPageCursor(for: descriptor) != nil {
+                        ProgressView("Loading more")
+                            .padding()
+                    } else if items.isEmpty {
+                        ContentUnavailableView("No media posts", systemImage: "photo.on.rectangle.angled",
+                            description: Text("This feed has no displayable images or videos."))
+                            .padding(.top, 60)
+                    } else {
+                        Text("You've reached the end.")
+                            .font(.footnote).foregroundStyle(.secondary).padding()
                     }
                 }
-                .padding(.horizontal, 4)
-
-                if case .failed(let message) = store.feedState {
-                    VStack(spacing: 12) {
-                        Text(message).font(.callout).foregroundStyle(.secondary)
-                        Button("Try again") {
-                            Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
-                        }
-                    }
-                    .padding()
-                } else if store.feedState == .loading || store.feedState == .idle {
-                    ProgressView("Loading gallery").padding()
-                } else if store.nextPageError != nil, store.galleryPageCursor(for: descriptor) != nil {
-                    Button("Couldn't load more. Retry") { Task { await store.loadMorePosts(for: descriptor) } }
-                        .buttonStyle(.bordered)
-                        .padding()
-                } else if store.galleryPageCursor(for: descriptor) != nil {
-                    ProgressView("Loading more")
-                        .padding()
-                        .task(id: store.galleryPageCursor(for: descriptor)) {
-                            await store.loadMorePosts(for: descriptor)
-                        }
-                } else if items.isEmpty {
-                    ContentUnavailableView("No media posts", systemImage: "photo.on.rectangle.angled",
-                        description: Text("This feed has no displayable images or videos."))
-                        .padding(.top, 60)
-                } else {
-                    Text("You've reached the end.")
-                        .font(.footnote).foregroundStyle(.secondary).padding()
+            }
+            .onScrollGeometryChange(for: CGRect.self) { $0.visibleRect } action: { _, newRect in
+                if scrollViewport.scrollView?.isDragging == true {
+                    scrollViewport.anchorID = nil
+                    scrollViewport.anchorTopOffset = nil
+                    scrollViewport.pendingTargetY = nil
                 }
+                scrollViewport.rect = newRect
+                let newHeight = max(1, newRect.height)
+                if abs(viewportHeight - newHeight) > 1 { viewportHeight = newHeight }
+                let newBand = max(0, Int(floor(newRect.minY / (newHeight / 2))))
+                if visibleBand != newBand { visibleBand = newBand }
+                loadNextPageIfNeeded(contentHeight: layout.height, visibleRect: newRect)
+            }
+            .onChange(of: layout.height) { _, newHeight in
+                loadNextPageIfNeeded(contentHeight: newHeight, visibleRect: scrollViewport.rect)
+            }
+            .onChange(of: layoutRevision) { _, _ in
+                if let anchorID = scrollViewport.anchorID,
+                   let topOffset = scrollViewport.anchorTopOffset,
+                   let anchor = layout.placements.first(where: { $0.id == anchorID }) {
+                    scrollViewport.pendingContentHeight = layout.height
+                    scrollViewport.pendingTargetY = max(0, anchor.frame.minY - topOffset)
+                }
+                scrollViewport.applyPendingOffset()
+            }
+            .onChange(of: store.galleryPageCursor(for: descriptor)) { _, _ in
+                loadNextPageIfNeeded(contentHeight: layout.height, visibleRect: scrollViewport.rect)
             }
         }
         .navigationTitle("Gallery")
