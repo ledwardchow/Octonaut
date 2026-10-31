@@ -188,6 +188,72 @@ final class SettingsTests: XCTestCase {
         )
     }
 
+    func testCachedPortraitGalleryTileUsesPortraitHeightOnFirstLayout() throws {
+        let url = URL(string: "octonaut-screenshot://portrait-sizing")!
+        let image = try XCTUnwrap(OctonautImageCache.cachedImage(for: url))
+        XCTAssertEqual(image.size.width / image.size.height, 0.25, accuracy: 0.001)
+
+        var post = syntheticFeedPost(0)
+        post.hasMedia = true
+        post.mediaKind = "image"
+        post.mediaURL = url
+        post.mediaAspectRatio = 0.25
+        let item = try XCTUnwrap(GalleryMediaItem.items(from: [post]).first)
+        let host = UIHostingController(rootView: GalleryMediaTile(item: item, onOpen: {})
+            .frame(width: 160)
+            .fixedSize(horizontal: false, vertical: true))
+
+        let firstSize = host.sizeThatFits(in: CGSize(width: 160, height: 1000))
+        XCTAssertEqual(firstSize.width, 160, accuracy: 1)
+        XCTAssertEqual(firstSize.height, 640, accuracy: 1,
+                       "A cached portrait tile must reserve its full height before its loading task runs")
+    }
+
+    func testFourColumnGalleryKeepsOffsetWhenScrollingBackThroughCachedMedia() async throws {
+        let portraitURL = URL(string: "octonaut-screenshot://portrait-sizing")!
+        let landscapeURL = URL(string: "octonaut-screenshot://landscape-sizing")!
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: portraitURL))
+        XCTAssertNotNil(OctonautImageCache.cachedImage(for: landscapeURL))
+
+        let store = OctonautFeatureStore(screenshotMode: true)
+        store.posts = (0..<120).map { index in
+            var post = syntheticFeedPost(index)
+            let portrait = index % 3 != 0
+            post.hasMedia = true
+            post.mediaKind = "image"
+            post.mediaURL = portrait ? portraitURL : landscapeURL
+            post.mediaAspectRatio = portrait ? 0.25 : 4
+            return post
+        }
+        let host = UIHostingController(rootView: NavigationStack {
+            GalleryView(descriptor: .popular, store: store, router: OctonautFeatureRouter(), columnCount: 4)
+        }.environment(AppDependencies.preview()))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 660, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        host.view.frame = window.bounds
+        try await Task.sleep(for: .milliseconds(250))
+        host.view.layoutIfNeeded()
+
+        func findScroll(_ view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView, scroll.contentSize.height > 2000 { return scroll }
+            return view.subviews.lazy.compactMap(findScroll).first
+        }
+        let scroll = try XCTUnwrap(findScroll(host.view))
+        XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height + 3000)
+        scroll.setContentOffset(CGPoint(x: 0, y: 4000), animated: false)
+        try await Task.sleep(for: .milliseconds(150))
+        scroll.setContentOffset(CGPoint(x: 0, y: 2000), animated: false)
+        host.view.layoutIfNeeded()
+        let upwardOffset = scroll.contentOffset.y
+        try await Task.sleep(for: .milliseconds(250))
+        host.view.layoutIfNeeded()
+
+        XCTAssertEqual(scroll.contentOffset.y, upwardOffset, accuracy: 1,
+                       "Cached portrait tiles appearing above the viewport must not shift the scroll position")
+    }
+
     func testInlinePortraitMediaFitsViewportHeight() async throws {
         try await assertInlineMediaSize(image: "portrait-sizing", maximumHeight: 600, expectedHeight: 600)
     }
