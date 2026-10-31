@@ -31,6 +31,27 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
         scenario.assertOperations(["HomeFeedSdui": 2, "PostsByIds": 1])
     }
 
+    func testFeedWithoutHasNextPageHydratesPostsAndContinues() async throws {
+        let account = AccountID()
+        let page = #"{"data":{"homeV3":{"elements":{"edges":[{"node":{"groupId":"t3_first"}}],"pageInfo":{"endCursor":"opaque-server-cursor"}}}}}"#
+        let end = #"{"data":{"homeV3":{"elements":{"edges":[],"pageInfo":{"endCursor":null}}}}}"#
+        let scenario = ReadMigrationScenario([
+            "HomeFeedSdui": [page, end],
+            "PostsByIds": [Self.posts(["t3_first"])]
+        ])
+        defer { scenario.close() }
+        let client = scenario.client(account: account)
+        let feed = FeedDescriptor(destination: .home)
+        let first = try await client.listing(ListingRequest(feed: feed), account: account)
+        XCTAssertEqual(first.items.map(\.id), ["first"])
+        let next = try await client.listing(ListingRequest(feed: feed, after: XCTUnwrap(first.after)), account: account)
+        XCTAssertTrue(next.items.isEmpty)
+        XCTAssertNil(next.after)
+        XCTAssertEqual(scenario.variables(for: "HomeFeedSdui").last?["after"] as? String,
+                       Data("t3_first".utf8).base64EncodedString())
+        scenario.assertOperations(["HomeFeedSdui": 2, "PostsByIds": 1])
+    }
+
     func testNamedUnavailableSubscriptionsRemainVisible() throws {
         let data = Data(#"{"data":{"identity":{"subscribedSubredditInfos":{"edges":[{"node":{"__typename":"UnavailableSubreddit","name":"privatecommunity","forbiddenReason":"PRIVATE"}}],"pageInfo":{"hasNextPage":false}}}}}"#.utf8)
         let page = try RedditGraphQLCodec.subscriptions(data: data, fetchSubscribed: true, fetchFollowed: false)

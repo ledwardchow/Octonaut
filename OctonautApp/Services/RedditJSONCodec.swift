@@ -126,7 +126,7 @@ enum RedditGraphQLCodec {
         let elements = try feedElements(data)
         let ids = feedPostIDs(elements: elements)
         guard let pageInfo = elements["pageInfo"]?.objectValue else { return (ids, ids.last) }
-        guard let hasNext = pageInfo["hasNextPage"]?.boolValue else { throw RedditClientError.malformedResponse }
+        guard let hasNext = pageInfo["hasNextPage"]?.boolValue else { return (ids, ids.last) }
         guard hasNext else { return (ids, nil) }
         guard let encoded = pageInfo["endCursor"]?.stringValue,
               let bytes = Data(base64Encoded: encoded), let fullname = String(data: bytes, encoding: .utf8),
