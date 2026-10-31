@@ -720,7 +720,6 @@ struct OctonautCommunityRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
         .contentShape(Rectangle())
-        .overlay(alignment: .bottom) { Rectangle().fill(theme.divider).frame(height: 0.5) }
         .contextMenu {
             Button {
                 onSubscribe?()
