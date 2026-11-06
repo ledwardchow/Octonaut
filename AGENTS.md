@@ -54,6 +54,8 @@ The user reported r/all and search as broken and authorized this exception on 29
 
 On 30 October 2026, the user also approved the planned migration of supported signed-in reads for Home, Popular, individual communities, existing server multireddits, discovery, post detail, comment expansion, profiles, user lists and subscriptions. This is explicit permission for that read migration. It does not mean those features were reported as broken. Keep anonymous website reads and local combined feeds on their existing routes. Keep inbox, private messages, unread controls and counts, blocked-user enumeration, full report options and website writes on their existing routes until equivalent behavior has separate approval.
 
+On 6 November 2026, the user reported local custom feeds as broken and approved loading their member communities through signed-in website GraphQL reads, then combining posts locally. Anonymous combined feeds keep their website routes. This does not authorize creating or changing Reddit-hosted custom feeds.
+
 Outside these explicitly approved scopes, any further GraphQL feature needs a separate explicit report that its current implementation no longer works. Do not use the read migration as permission to migrate actions or change Reddit account preferences.
 
 The fact that an endpoint is undocumented, used by Reddit's website, or returns structured data does not make it prohibited. It must work without Reddit developer registration or OAuth Data API credentials. GraphQL replacements must also meet an explicit permission above.

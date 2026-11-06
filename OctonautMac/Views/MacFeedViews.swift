@@ -176,6 +176,11 @@ struct MacFeedListView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            FeedCommunityFailureNotice(failures: store.feedCommunityFailures) {
+                Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+            }
+        }
         .sheet(item: $reportTarget) { ReportContentView(target: $0) }
         .modifier(MacBlockUserConfirmation(username: $blockTarget, store: store))
         .alert(

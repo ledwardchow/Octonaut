@@ -49,17 +49,25 @@ enum LoadState<Value: Sendable>: Sendable {
     }
 }
 
+struct FeedCommunityFailure: Sendable, Equatable {
+    let community: String
+    let message: String
+}
+
 struct Listing<Element: Sendable>: Sendable {
     var items: [Element]
     var after: String?
     var before: String?
     var receivedAt: Date
+    var communityFailures: [FeedCommunityFailure]
 
-    init(items: [Element], after: String? = nil, before: String? = nil, receivedAt: Date = .now) {
+    init(items: [Element], after: String? = nil, before: String? = nil, receivedAt: Date = .now,
+         communityFailures: [FeedCommunityFailure] = []) {
         self.items = items
         self.after = after
         self.before = before
         self.receivedAt = receivedAt
+        self.communityFailures = communityFailures
     }
 }
 

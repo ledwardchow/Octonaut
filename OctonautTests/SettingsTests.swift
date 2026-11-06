@@ -751,7 +751,7 @@ final class SettingsTests: XCTestCase {
         let account = AccountID()
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
-        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .url(URL(string: "https://www.reddit.com/r/swift/hot.json")!)), responseCachePolicy: .reloadIgnoringCache), account: account)
         XCTAssertTrue(AnonymousBootstrapProtocol.seedRequests.isEmpty)
         XCTAssertEqual(AnonymousBootstrapProtocol.jsonRequests.first?.value(forHTTPHeaderField: "Cookie"),
                        "reddit_session=synthetic-session")
@@ -763,7 +763,7 @@ final class SettingsTests: XCTestCase {
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-session")])
         let client = makeAnonymousBootstrapClient(vault: vault)
         _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
-        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"])), responseCachePolicy: .reloadIgnoringCache), account: account)
+        _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .url(URL(string: "https://www.reddit.com/r/swift/hot.json")!)), responseCachePolicy: .reloadIgnoringCache), account: account)
         _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .community("swift")), responseCachePolicy: .reloadIgnoringCache), account: nil)
 
         let requests = AnonymousBootstrapProtocol.jsonRequests
@@ -939,21 +939,19 @@ final class SettingsTests: XCTestCase {
         XCTAssertNotNil(defaults.data(forKey: "feeds.previousAppleAccount.backup"))
     }
 
-    func testCombinedFeedFallsBackToOldWebsiteWithPaginationAndSession() async throws {
+    func testAnonymousCombinedFeedFallsBackToOldWebsiteWithPagination() async throws {
         GamesRouteProtocol.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [GamesRouteProtocol.self]
-        let account = AccountID()
-        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-test-session")])
-        let client = URLSessionRedditClient(credentialVault: vault, sessionConfiguration: configuration)
+        let client = URLSessionRedditClient(credentialVault: InMemoryCredentialVault(), sessionConfiguration: configuration)
         let page = try await client.listing(
             ListingRequest(feed: FeedDescriptor(destination: .combined(["Swift", "macos"]), sort: .top, topTime: .week),
-                           limit: 35, after: "t3_previous", accountScope: .account(account), responseCachePolicy: .reloadIgnoringCache),
-            account: account
+                           limit: 35, after: "t3_previous", responseCachePolicy: .reloadIgnoringCache),
+            account: nil
         )
         XCTAssertEqual(page.items.map { $0.community.name }, ["swift"])
         XCTAssertEqual(page.after, "t3_next")
-        let requests = GamesRouteProtocol.requests
+        let requests = GamesRouteProtocol.requests.filter { $0.url?.path == "/r/swift+macos/top.json" }
         XCTAssertEqual(requests.map { $0.url?.host }, ["www.reddit.com", "old.reddit.com"])
         for request in requests {
             XCTAssertEqual(request.url?.scheme, "https")
@@ -961,13 +959,13 @@ final class SettingsTests: XCTestCase {
             let query = URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false)?.queryItems ?? []
             XCTAssertTrue(query.contains(URLQueryItem(name: "after", value: "t3_previous")))
             XCTAssertTrue(query.contains(URLQueryItem(name: "t", value: "week")))
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=synthetic-test-session")
+            XCTAssertFalse(request.value(forHTTPHeaderField: "Cookie")?.contains("reddit_session") ?? false)
             XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
         }
     }
 
-    func testCombinedFeedAndWebsiteURLDoNotRetryErrors() async throws {
-        for (destination, expectedError) in [(FeedDestination.combined(["denied", "swift"]), RedditClientError.accessDenied), (.url(URL(string: "https://www.reddit.com/r/missing")!), .notFound)] {
+    func testWebsiteFeedURLsDoNotRetryErrors() async throws {
+        for (destination, expectedError) in [(FeedDestination.url(URL(string: "https://www.reddit.com/r/denied/hot.json")!), RedditClientError.accessDenied), (.url(URL(string: "https://www.reddit.com/r/missing")!), .notFound)] {
             GamesRouteProtocol.reset()
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [GamesRouteProtocol.self]
@@ -991,7 +989,7 @@ final class SettingsTests: XCTestCase {
             let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "synthetic-test-session")])
             let client = URLSessionRedditClient(baseURL: URL(string: base)!, credentialVault: vault, sessionConfiguration: configuration)
             do {
-                _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "macos"]))), account: account)
+                _ = try await client.listing(ListingRequest(feed: FeedDescriptor(destination: .url(URL(string: "https://www.reddit.com/r/swift/hot.json")!))), account: account)
                 XCTFail("Expected invalid URL")
             } catch { XCTAssertEqual(error as? RedditClientError, .invalidURL) }
             XCTAssertTrue(GamesRouteProtocol.requests.isEmpty)

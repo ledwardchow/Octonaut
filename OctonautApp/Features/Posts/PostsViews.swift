@@ -353,8 +353,7 @@ struct FeedView: View {
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }
-                        if dependencies.settings.hideSeenPosts,
-                           store.galleryPageCursor(for: descriptor) != nil {
+                        if store.galleryPageCursor(for: descriptor) != nil {
                             Button(store.nextPageError == nil ? "Load more posts" : "Retry") {
                                 Task { await store.loadMorePosts(for: descriptor) }
                             }
@@ -418,6 +417,13 @@ struct FeedView: View {
                             HStack { Spacer(); ProgressView("Loading more…"); Spacer() }.padding()
                                 .listRowSeparator(.hidden)
                         }
+                        if store.nextPageError == nil, store.galleryPageCursor(for: descriptor) != nil {
+                            Button("Load more posts") {
+                                Task { await store.loadMorePosts(for: descriptor) }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
+                        }
                         if let nextPageError = store.nextPageError {
                             VStack(spacing: 8) {
                                 Text("Couldn't load more posts").font(.subheadline.weight(.semibold))
@@ -450,6 +456,11 @@ struct FeedView: View {
         }
         // The system title lays out and truncates long community names itself,
         // and the title menu keeps sorting one tap away from the name.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            FeedCommunityFailureNotice(failures: store.feedCommunityFailures) {
+                Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+            }
+        }
         .navigationTitle(descriptor.name)
         .navigationSubtitle(sortSummary)
         .navigationBarTitleDisplayMode(.inline)

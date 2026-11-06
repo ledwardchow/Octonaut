@@ -973,6 +973,7 @@ final class OctonautFeatureStore {
         let readPostIDsAtLoad: Set<String>
         let filteredPostCount: Int
         let nextPage: String?
+        let communityFailures: [FeedCommunityFailure]
         let filterRevision: Int
         let storedAt: Date
     }
@@ -1082,6 +1083,7 @@ final class OctonautFeatureStore {
     /// Set when loading the next page fails after the client's own retries.
     /// The loaded posts stay on screen and the feed footer offers a retry.
     private(set) var nextPageError: String?
+    private(set) var feedCommunityFailures: [FeedCommunityFailure] = []
     /// The newest vote or save sent for each item. A failure only rolls back
     /// the UI when no later tap on the same item has superseded it.
     @ObservationIgnored private var latestMutation: [String: UUID] = [:]
@@ -1234,6 +1236,7 @@ final class OctonautFeatureStore {
         detailCache.removeAll()
         visibleDetailKey = nil
         nextPage = nil
+        feedCommunityFailures = []
         loadedFeed = nil
         detailPost = nil
         detailState = .idle
@@ -1297,6 +1300,7 @@ final class OctonautFeatureStore {
                 readPostIDsAtLoad: entry.readPostIDsAtLoad,
                 filteredPostCount: entry.filteredPostCount + entry.posts.count - kept.count,
                 nextPage: entry.nextPage,
+                communityFailures: entry.communityFailures,
                 filterRevision: entry.filterRevision,
                 storedAt: entry.storedAt
             )
@@ -1322,6 +1326,7 @@ final class OctonautFeatureStore {
     func clearVisibleFeed(isLoading: Bool = true) {
         feedRequestID = UUID()
         loadedFeed = nil
+        feedCommunityFailures = []
         posts = []
         nextPage = nil
         filteredPostCount = 0
@@ -1368,6 +1373,7 @@ final class OctonautFeatureStore {
             readPostIDsAtLoad = cached.readPostIDsAtLoad
             filteredPostCount = cached.filteredPostCount
             nextPage = cached.nextPage
+            feedCommunityFailures = cached.communityFailures
             loadedFeed = descriptor
             feedState = posts.isEmpty && nextPage == nil ? .empty : .loaded
             hasWarmContent = !posts.isEmpty
@@ -1378,6 +1384,7 @@ final class OctonautFeatureStore {
 
         feedState = hasWarmContent ? .loaded : .loading
         if !hasWarmContent {
+            feedCommunityFailures = []
             posts = []
             loadedFeed = nil
             nextPage = nil
@@ -1409,6 +1416,7 @@ final class OctonautFeatureStore {
             readPostIDsAtLoad = Set(posts.filter(\.isSeen).map(\.id))
             filteredPostCount = filtered.removedCount
             nextPage = listing.after
+            feedCommunityFailures = listing.communityFailures
             loadedFeed = descriptor
             feedState = posts.isEmpty && nextPage == nil ? .empty : .loaded
             feedCache[cacheKey] = FeedCacheEntry(
@@ -1416,6 +1424,7 @@ final class OctonautFeatureStore {
                 readPostIDsAtLoad: readPostIDsAtLoad,
                 filteredPostCount: filteredPostCount,
                 nextPage: nextPage,
+                communityFailures: feedCommunityFailures,
                 filterRevision: filterRevision,
                 storedAt: .now
             )
@@ -2024,12 +2033,14 @@ final class OctonautFeatureStore {
             readPostIDsAtLoad.formUnion(newPosts.filter(\.isSeen).map(\.id))
             filteredPostCount += filtered.removedCount
             self.nextPage = listing.after == nextPage ? nil : listing.after
+            feedCommunityFailures = listing.communityFailures
             feedState = posts.isEmpty && self.nextPage == nil ? .empty : .loaded
             feedCache[feedCacheKey(for: descriptor)] = FeedCacheEntry(
                 posts: posts,
                 readPostIDsAtLoad: readPostIDsAtLoad,
                 filteredPostCount: filteredPostCount,
                 nextPage: self.nextPage,
+                communityFailures: feedCommunityFailures,
                 filterRevision: Int(settings?.filterRevision ?? 0),
                 storedAt: .now
             )
@@ -2112,6 +2123,7 @@ final class OctonautFeatureStore {
         detailCache.removeAll()
         visibleDetailKey = nil
         nextPage = nil
+        feedCommunityFailures = []
         loadedFeed = nil
         detailPost = nil
         detailState = .idle
@@ -2587,6 +2599,7 @@ final class OctonautFeatureStore {
             readPostIDsAtLoad: readPostIDsAtLoad,
             filteredPostCount: filteredPostCount,
             nextPage: nextPage,
+            communityFailures: feedCommunityFailures,
             filterRevision: Int(settings?.filterRevision ?? 0),
             storedAt: feedCache[key]?.storedAt ?? .now
         )

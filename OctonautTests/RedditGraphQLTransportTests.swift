@@ -289,6 +289,32 @@ final class RedditGraphQLTransportTests: XCTestCase {
 
     private static let emptyPostSearch = #"{"data":{"search":{"general":{"posts":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}"#
 
+    func testCombinedGraphQLDenialAfterRefreshFailsWholeFeed() async throws {
+        let account = AccountID()
+        let oldValue = Self.token("old")
+        let newValue = Self.token("new")
+        let saved = WebGraphQLToken(value: oldValue, sourceSessionDigest: RedditSessionIdentity.digest("session-A"), expiresAt: .now.addingTimeInterval(3600))
+        let scenario = GraphQLScenario([
+            .graphql("SubredditInfoByName", token: oldValue,
+                     json: #"{"data":{"subredditInfoByName":{"__typename":"Subreddit"}}}"#),
+            .graphql("SubredditFeedSdui", token: oldValue,
+                     json: #"{"data":{"subredditFeed":{"elements":{"edges":[],"pageInfo":{"hasNextPage":false}}}}}"#),
+            GraphQLReply(status: 403, json: "blocked"),
+            .prime(session: "session-A"), .mint(session: "session-A", token: newValue),
+            GraphQLReply(status: 403, json: "blocked")
+        ])
+        defer { scenario.close() }
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A", webGraphQLToken: saved)])
+        do {
+            _ = try await scenario.client(vault: vault).listing(
+                ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"]))), account: account)
+            XCTFail("A GraphQL request denial must not become a missing community notice")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .graphQLAccessDenied)
+        }
+        scenario.assertFinished()
+    }
+
     func testRejectedSavedTokenRefreshesOnce() async throws {
         let account = AccountID()
         let oldValue = Self.token("old")
