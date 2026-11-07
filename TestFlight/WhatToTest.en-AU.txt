@@ -20,4 +20,4 @@ Smoothly swipe right on posts to reveal communities.
 Gallery now fills Duo with four columns.
 Fixed gallery stuttering and jumping back to the top.
 Removed duplicate separators between subreddits.
-Fixed custom feeds failing to load when signed in.
+Made signed-in custom feeds load faster.

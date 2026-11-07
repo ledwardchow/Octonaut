@@ -297,8 +297,6 @@ final class RedditGraphQLTransportTests: XCTestCase {
         let scenario = GraphQLScenario([
             .graphql("SubredditInfoByName", token: oldValue,
                      json: #"{"data":{"subredditInfoByName":{"__typename":"Subreddit"}}}"#),
-            .graphql("SubredditFeedSdui", token: oldValue,
-                     json: #"{"data":{"subredditFeed":{"elements":{"edges":[],"pageInfo":{"hasNextPage":false}}}}}"#),
             GraphQLReply(status: 403, json: "blocked"),
             .prime(session: "session-A"), .mint(session: "session-A", token: newValue),
             GraphQLReply(status: 403, json: "blocked")
@@ -307,11 +305,162 @@ final class RedditGraphQLTransportTests: XCTestCase {
         let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A", webGraphQLToken: saved)])
         do {
             _ = try await scenario.client(vault: vault).listing(
-                ListingRequest(feed: FeedDescriptor(destination: .combined(["swift", "apple"]))), account: account)
+                ListingRequest(feed: FeedDescriptor(destination: .combined(["swift"]))), account: account)
             XCTFail("A GraphQL request denial must not become a missing community notice")
         } catch {
             XCTAssertEqual(error as? RedditClientError, .graphQLAccessDenied)
         }
+        scenario.assertFinished()
+    }
+
+    func testConcurrentOldTokenDenialsUseRenewedSessionToken() async throws {
+        let account = AccountID()
+        let oldValue = Self.token("old-concurrent")
+        let newValue = Self.token("new-concurrent")
+        let saved = WebGraphQLToken(value: oldValue, sourceSessionDigest: RedditSessionIdentity.digest("session-A"),
+                                    expiresAt: .now.addingTimeInterval(3600))
+        let gate = GraphQLReplyGate()
+        let oldRequests = XCTestExpectation(description: "Both old-token requests started")
+        oldRequests.expectedFulfillmentCount = 2
+        let renewedRequest = XCTestExpectation(description: "First request used renewed token")
+        var firstDenial = GraphQLReply.graphql("SearchPosts", token: oldValue, json: "{}")
+        firstDenial.status = 401
+        firstDenial.check = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(oldValue)")
+            oldRequests.fulfill()
+        }
+        firstDenial.beforeReply = { await gate.wait(0) }
+        var secondDenial = firstDenial
+        secondDenial.beforeReply = { await gate.wait(1) }
+        var renewed = GraphQLReply.graphql("SearchPosts", token: newValue, json: Self.emptyPostSearch)
+        renewed.check = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(newValue)")
+            renewedRequest.fulfill()
+        }
+        let head = GraphQLReply(headers: ["Set-Cookie": "reddit_session=session-B; Path=/; Secure; HttpOnly, csrf_token=synthetic-csrf; Path=/; Secure"],
+                                json: "", check: { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "reddit_session=session-A")
+        })
+        let scenario = GraphQLScenario([
+            firstDenial, secondDenial, head, .mint(session: "session-B", token: newValue), renewed,
+            .graphql("SearchPosts", token: newValue, json: Self.emptyPostSearch)
+        ])
+        defer { scenario.close() }
+        defer { gate.releaseAll() }
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A", webGraphQLToken: saved)])
+        let client = scenario.client(vault: vault)
+        let first = Task { try await client.search(RedditSearchRequest(query: "swift"), account: account) }
+        let second = Task { try await client.search(RedditSearchRequest(query: "ios"), account: account) }
+        await fulfillment(of: [oldRequests], timeout: 3)
+        guard scenario.requests.count == 2 else {
+            first.cancel(); second.cancel()
+            return XCTFail("Expected two requests with the saved token")
+        }
+        gate.release(0)
+        await fulfillment(of: [renewedRequest], timeout: 3)
+        guard scenario.requests.count >= 5 else {
+            first.cancel(); second.cancel()
+            return XCTFail("Expected a request with the renewed token")
+        }
+        gate.release(1)
+        do {
+            _ = try await first.value
+        } catch {
+            XCTFail("First old-token request should use the renewed token: \(error)")
+        }
+        do {
+            _ = try await second.value
+        } catch {
+            XCTFail("Second old-token request should use the renewed token: \(error)")
+        }
+        let current = try await vault.credential(for: account)
+        XCTAssertEqual(current?.cookieValue, "session-B")
+        scenario.assertFinished()
+    }
+
+    func testExternalSessionReplacementCannotRetryOldTokenDenial() async throws {
+        let account = AccountID()
+        let oldValue = Self.token("old-external")
+        let newValue = Self.token("new-external")
+        let old = WebGraphQLToken(value: oldValue, sourceSessionDigest: RedditSessionIdentity.digest("session-A"),
+                                  expiresAt: .now.addingTimeInterval(3600))
+        let newer = WebGraphQLToken(value: newValue, sourceSessionDigest: RedditSessionIdentity.digest("session-B"),
+                                    expiresAt: .now.addingTimeInterval(3600))
+        let vault = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: "session-A", webGraphQLToken: old)])
+        var denial = GraphQLReply.graphql("SearchPosts", token: oldValue, json: "{}")
+        denial.status = 401
+        denial.beforeReply = {
+            try? await vault.save(RedditCredential(cookieValue: "session-B", webGraphQLToken: newer), for: account)
+        }
+        let scenario = GraphQLScenario([denial])
+        defer { scenario.close() }
+        do {
+            _ = try await scenario.client(vault: vault).search(RedditSearchRequest(query: "swift"), account: account)
+            XCTFail("A request from a replaced session must fail")
+        } catch {
+            XCTAssertEqual(error as? RedditClientError, .authenticationRequired)
+        }
+        scenario.assertFinished()
+    }
+
+    func testConcurrentOldTokenDenialWaitsForInProgressSessionRenewal() async throws {
+        let account = AccountID()
+        let oldValue = Self.token("old-pending")
+        let newValue = Self.token("new-pending")
+        let old = WebGraphQLToken(value: oldValue, sourceSessionDigest: RedditSessionIdentity.digest("session-A"),
+                                  expiresAt: .now.addingTimeInterval(3600))
+        let gate = GraphQLReplyGate()
+        let oldRequests = XCTestExpectation(description: "Both old-token requests started")
+        oldRequests.expectedFulfillmentCount = 2
+        let mintStarted = XCTestExpectation(description: "Cookie renewed before token mint completed")
+        let pendingRead = XCTestExpectation(description: "Late denial read renewed cookie without token")
+        var firstDenial = GraphQLReply.graphql("SearchPosts", token: oldValue, json: "{}")
+        firstDenial.status = 401
+        firstDenial.check = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer \(oldValue)")
+            oldRequests.fulfill()
+        }
+        firstDenial.beforeReply = { await gate.wait(0) }
+        var secondDenial = firstDenial
+        secondDenial.beforeReply = { await gate.wait(1) }
+        let head = GraphQLReply(headers: ["Set-Cookie": "reddit_session=session-B; Path=/; Secure; HttpOnly, csrf_token=synthetic-csrf; Path=/; Secure"], json: "")
+        var mint = GraphQLReply.mint(session: "session-B", token: newValue)
+        mint.check = { request in
+            XCTAssertTrue((request.value(forHTTPHeaderField: "Cookie") ?? "").contains("reddit_session=session-B"))
+            mintStarted.fulfill()
+        }
+        mint.beforeReply = { await gate.wait(2) }
+        let scenario = GraphQLScenario([
+            firstDenial, secondDenial, head, mint,
+            .graphql("SearchPosts", token: newValue, json: Self.emptyPostSearch),
+            .graphql("SearchPosts", token: newValue, json: Self.emptyPostSearch)
+        ])
+        defer { scenario.close() }
+        defer { gate.releaseAll() }
+        let vault = ObservingCookieReplacementVault(account: account, cookie: "session-A")
+        try await vault.save(RedditCredential(cookieValue: "session-A", webGraphQLToken: old), for: account)
+        let client = scenario.client(vault: vault)
+        let first = Task { try await client.search(RedditSearchRequest(query: "swift"), account: account) }
+        let second = Task { try await client.search(RedditSearchRequest(query: "ios"), account: account) }
+        await fulfillment(of: [oldRequests], timeout: 3)
+        guard scenario.requests.count == 2 else {
+            first.cancel(); second.cancel()
+            return XCTFail("Expected two requests with the saved token")
+        }
+        gate.release(0)
+        await fulfillment(of: [mintStarted], timeout: 3)
+        guard scenario.requests.count == 4 else {
+            first.cancel(); second.cancel()
+            return XCTFail("Expected token mint after cookie renewal")
+        }
+        await vault.observePendingRenewalRead(pendingRead)
+        gate.release(1)
+        await fulfillment(of: [pendingRead], timeout: 3)
+        gate.release(2)
+        do { _ = try await first.value }
+        catch { XCTFail("First request failed after renewal: \(error)") }
+        do { _ = try await second.value }
+        catch { XCTFail("Late denial failed during renewal: \(error)") }
         scenario.assertFinished()
     }
 
@@ -553,6 +702,7 @@ private actor ObservingCookieReplacementVault: AccountCredentialVault {
     private let backing: InMemoryCredentialVault
     private var observer: (@Sendable () async throws -> String)?
     private var observedGeneration: String?
+    private var pendingRead: XCTestExpectation?
 
     init(account: AccountID, cookie: String) {
         backing = InMemoryCredentialVault(values: [account: RedditCredential(cookieValue: cookie)])
@@ -564,8 +714,17 @@ private actor ObservingCookieReplacementVault: AccountCredentialVault {
 
     func generationDuringWrite() -> String? { observedGeneration }
 
+    func observePendingRenewalRead(_ expectation: XCTestExpectation) {
+        pendingRead = expectation
+    }
+
     func credential(for accountID: AccountID) async throws -> RedditCredential? {
-        try await backing.credential(for: accountID)
+        let credential = try await backing.credential(for: accountID)
+        if credential?.cookieValue == "session-B", credential?.webGraphQLToken == nil {
+            pendingRead?.fulfill()
+            pendingRead = nil
+        }
+        return credential
     }
 
     func save(_ credential: RedditCredential, for accountID: AccountID) async throws {
@@ -594,6 +753,37 @@ private actor ObservingCookieReplacementVault: AccountCredentialVault {
 
     func updateModhash(_ modhash: String, expectedSession: String, for accountID: AccountID) async throws -> Bool {
         try await backing.updateModhash(modhash, expectedSession: expectedSession, for: accountID)
+    }
+}
+
+private final class GraphQLReplyGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var open: Set<Int> = []
+    private var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
+
+    func wait(_ index: Int) async {
+        await withCheckedContinuation { continuation in
+            let released = lock.withLock {
+                if open.contains(index) { return true }
+                waiting[index] = continuation
+                return false
+            }
+            if released { continuation.resume() }
+        }
+    }
+
+    func release(_ index: Int) {
+        let continuation = lock.withLock {
+            open.insert(index)
+            return waiting.removeValue(forKey: index)
+        }
+        continuation?.resume()
+    }
+
+    func releaseAll() {
+        release(0)
+        release(1)
+        release(2)
     }
 }
 

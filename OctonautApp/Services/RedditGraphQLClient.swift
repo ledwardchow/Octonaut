@@ -65,6 +65,7 @@ actor RedditGraphQLClient {
         let name: String
         var after: String?
         var visitedAfter: Set<String> = []
+        var pendingIDs: [String] = []
         var buffer: [Post] = []
         var exhausted = false
         var failure: FeedCommunityFailure?
@@ -221,31 +222,62 @@ actor RedditGraphQLClient {
 
         let sort: PostSort = request.feed.sort == .best ? .hot : request.feed.sort
         let serverSort = sort == .default ? "HOT" : try feedSort(sort)
+        var pending: [(Int, CombinedSource)] = []
         for index in cursor.sources.indices {
             try await checkCombinedSession(account: account, generation: generation)
             let emitted = cursor.emittedFullnames
             cursor.sources[index].buffer.removeAll { emitted.contains($0.fullname) }
-            guard cursor.sources[index].buffer.isEmpty, !cursor.sources[index].exhausted else { continue }
-            do {
-                let page = try await combinedSourcePage(cursor.sources[index], sort: serverSort, localSort: sort,
-                                                        topTime: request.feed.topTime, account: account)
-                try await checkCombinedSession(account: account, generation: generation)
-                cursor.sources[index].buffer = page.posts
-                if let after = page.after, cursor.sources[index].visitedAfter.insert(after).inserted {
-                    cursor.sources[index].after = after
-                } else {
-                    cursor.sources[index].after = nil
-                    cursor.sources[index].exhausted = true
+            guard cursor.sources[index].buffer.isEmpty,
+                  !cursor.sources[index].pendingIDs.isEmpty || !cursor.sources[index].exhausted else { continue }
+            pending.append((index, cursor.sources[index]))
+        }
+        try await withThrowingTaskGroup(of: (Int, Result<CombinedSourcePage, any Error>).self) { group in
+            defer { group.cancelAll() }
+            var next = pending.startIndex
+            func enqueue() {
+                guard next < pending.endIndex else { return }
+                let (index, source) = pending[next]
+                next += 1
+                group.addTask {
+                    do {
+                        try Task.checkCancellation()
+                        let page = try await self.combinedSourcePage(source, sort: serverSort, localSort: sort,
+                                                                      topTime: request.feed.topTime, account: account)
+                        return (index, .success(page))
+                    } catch {
+                        return (index, .failure(error))
+                    }
                 }
-            } catch {
+            }
+            for _ in 0..<min(4, pending.count) { enqueue() }
+            while let (index, result) = try await group.next() {
                 try await checkCombinedSession(account: account, generation: generation)
-                if isCombinedFatalError(error) { throw error }
-                cursor.sources[index].failure = FeedCommunityFailure(
-                    community: cursor.sources[index].name,
-                    message: combinedFailureMessage(error)
-                )
-                cursor.sources[index].exhausted = true
-                cursor.sources[index].after = nil
+                switch result {
+                case .success(let page):
+                    cursor.sources[index].buffer = page.posts
+                    cursor.sources[index].pendingIDs = page.pendingIDs
+                    if page.fetchedFeed {
+                        if let after = page.after, cursor.sources[index].visitedAfter.insert(after).inserted {
+                            cursor.sources[index].after = after
+                        } else {
+                            cursor.sources[index].after = nil
+                            cursor.sources[index].exhausted = true
+                        }
+                    }
+                case .failure(let error):
+                    if isCombinedFatalError(error) {
+                        group.cancelAll()
+                        throw error
+                    }
+                    cursor.sources[index].failure = FeedCommunityFailure(
+                        community: cursor.sources[index].name,
+                        message: combinedFailureMessage(error)
+                    )
+                    cursor.sources[index].pendingIDs = []
+                    cursor.sources[index].exhausted = true
+                    cursor.sources[index].after = nil
+                }
+                enqueue()
             }
         }
 
@@ -265,6 +297,7 @@ actor RedditGraphQLClient {
             if sort == .new || sort == .top {
                 if cursor.sources.contains(where: { $0.buffer.isEmpty && !$0.exhausted }) { break }
             }
+            if cursor.sources.contains(where: { $0.buffer.isEmpty && !$0.pendingIDs.isEmpty }) { break }
             let available = cursor.sources.indices.filter { !cursor.sources[$0].buffer.isEmpty }
             guard !available.isEmpty else { break }
             let selected: Int
@@ -283,7 +316,7 @@ actor RedditGraphQLClient {
 
         try await checkCombinedSession(account: account, generation: generation)
         let failures = cursor.sources.compactMap(\.failure)
-        let hasMore = cursor.sources.contains { !$0.buffer.isEmpty || !$0.exhausted }
+        let hasMore = cursor.sources.contains { !$0.buffer.isEmpty || !$0.pendingIDs.isEmpty || !$0.exhausted }
         var after: String?
         if hasMore {
             let key = UUID().uuidString
@@ -297,8 +330,21 @@ actor RedditGraphQLClient {
         return Listing(items: posts, after: after, communityFailures: failures)
     }
 
+    private struct CombinedSourcePage: Sendable {
+        let posts: [Post]
+        let after: String?
+        let pendingIDs: [String]
+        let fetchedFeed: Bool
+    }
+
     private func combinedSourcePage(_ source: CombinedSource, sort: String, localSort: PostSort, topTime: TopTime?,
-                                    account: AccountID) async throws -> (posts: [Post], after: String?) {
+                                    account: AccountID) async throws -> CombinedSourcePage {
+        if !source.pendingIDs.isEmpty {
+            let count = min(5, source.pendingIDs.count)
+            let posts = try await hydrateCombinedIDs(Array(source.pendingIDs.prefix(count)), localSort: localSort, account: account)
+            return CombinedSourcePage(posts: posts, after: source.after,
+                                      pendingIDs: Array(source.pendingIDs.dropFirst(count)), fetchedFeed: false)
+        }
         if source.after == nil { try await checkCommunityAccess(name: source.name, account: account) }
         var variables: [String: GraphQLValue] = ["sort": .string(sort), "subredditName": .string(source.name)]
         if let topTime { variables["time"] = .string(topTime.rawValue.uppercased()) }
@@ -307,15 +353,22 @@ actor RedditGraphQLClient {
         }
         let feedData = try await execute(.subredditFeed, variables: variables, account: account)
         let page = try RedditGraphQLCodec.feedPage(data: feedData)
-        guard !page.ids.isEmpty else { return ([], page.after) }
+        let count = localSort == .new || localSort == .top ? page.ids.count : min(5, page.ids.count)
+        let posts = try await hydrateCombinedIDs(Array(page.ids.prefix(count)), localSort: localSort, account: account)
+        return CombinedSourcePage(posts: posts, after: page.after,
+                                  pendingIDs: Array(page.ids.dropFirst(count)), fetchedFeed: true)
+    }
+
+    private func hydrateCombinedIDs(_ ids: [String], localSort: PostSort, account: AccountID) async throws -> [Post] {
+        guard !ids.isEmpty else { return [] }
         var postVariables = Self.postsByIDsVariables
-        postVariables["ids"] = .array(page.ids.map(GraphQLValue.string))
+        postVariables["ids"] = .array(ids.map(GraphQLValue.string))
         let postData = try await execute(.postsByIDs, variables: postVariables, account: account)
-        var posts = try RedditGraphQLCodec.posts(data: postData, orderedIDs: page.ids)
+        var posts = try RedditGraphQLCodec.posts(data: postData, orderedIDs: ids)
         if localSort == .new || localSort == .top {
             posts.sort { combinedPrecedes($0, $1, candidateIndex: 0, bestIndex: 0, sort: localSort) }
         }
-        return (posts, page.after)
+        return posts
     }
 
     private func checkCombinedSession(account: AccountID, generation: String) async throws {
@@ -480,16 +533,53 @@ actor RedditGraphQLClient {
             throw RedditClientError.authenticationRequired
         }
         let digest = RedditSessionIdentity.digest(credential.cookieValue)
-        var token = try await freshToken(for: account, credential: credential, digest: digest)
-        try await confirmSession(account: account, digest: token.sourceSessionDigest)
+        var token: WebGraphQLToken
+        do {
+            token = try await freshToken(for: account, credential: credential, digest: digest)
+            try await confirmSession(account: account, digest: token.sourceSessionDigest)
+        } catch RedditClientError.authenticationRequired {
+            guard let current = try await credentialVault.credential(for: account),
+                  current.cookieName == "reddit_session", !current.cookieValue.isEmpty,
+                  RedditSessionIdentity.digest(current.cookieValue) != digest,
+                  try await sessionGeneration(for: account) == expectedGeneration else {
+                throw RedditClientError.authenticationRequired
+            }
+            let currentDigest = RedditSessionIdentity.digest(current.cookieValue)
+            token = try await freshToken(for: account, credential: current, digest: currentDigest)
+            try await confirmSession(account: account, digest: token.sourceSessionDigest)
+        }
         var result = try await send(operation, variables: variables, token: token.value)
         if result.response.statusCode == 401 || result.response.statusCode == 403 {
             guard let current = try await credentialVault.credential(for: account),
-                  current.cookieName == "reddit_session",
-                  RedditSessionIdentity.digest(current.cookieValue) == token.sourceSessionDigest else {
+                  current.cookieName == "reddit_session", !current.cookieValue.isEmpty else {
                 throw RedditClientError.authenticationRequired
             }
-            token = try await refresh(for: account, credential: current, digest: token.sourceSessionDigest)
+            guard try await sessionGeneration(for: account) == expectedGeneration else {
+                throw RedditClientError.authenticationRequired
+            }
+            let currentDigest = RedditSessionIdentity.digest(current.cookieValue)
+            let newer = current.webGraphQLToken.flatMap { candidate in
+                candidate.sourceSessionDigest == currentDigest && candidate.value != token.value &&
+                candidate.expiresAt.timeIntervalSinceNow > Self.expiryMargin ? candidate : nil
+            }
+            if currentDigest != token.sourceSessionDigest {
+                if let newer {
+                    token = newer
+                } else if let inFlight = matchingRefresh(account: account, digest: currentDigest) {
+                    token = try await inFlight.value
+                } else if let latest = try await credentialVault.credential(for: account)?.webGraphQLToken,
+                          latest.sourceSessionDigest == currentDigest,
+                          latest.value != token.value,
+                          latest.expiresAt.timeIntervalSinceNow > Self.expiryMargin {
+                    token = latest
+                } else {
+                    throw RedditClientError.authenticationRequired
+                }
+            } else if let newer {
+                token = newer
+            } else {
+                token = try await refresh(for: account, credential: current, digest: currentDigest)
+            }
             try await confirmSession(account: account, digest: token.sourceSessionDigest)
             result = try await send(operation, variables: variables, token: token.value)
         }

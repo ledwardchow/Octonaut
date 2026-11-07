@@ -196,16 +196,13 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
 
     func testSignedInCombinedFeedNormalizesSourcesOrdersNewPostsAndBuffersNextPage() async throws {
         let account = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [
-                Self.finalFeed(ids: ["t3_a1", "t3_a2"]),
-                Self.finalFeed(ids: ["t3_b1", "t3_b2"])
-            ],
-            "PostsByIds": [
-                Self.posts([("t3_a1", 400, 100), ("t3_a2", 200, 90)]),
-                Self.posts([("t3_b1", 300, 80), ("t3_b2", 100, 70)])
-            ]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:macos": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_a1", "t3_a2"])],
+            "SubredditFeedSdui:macos": [Self.finalFeed(ids: ["t3_b1", "t3_b2"])],
+            "PostsByIds:t3_a1,t3_a2": [Self.posts([("t3_a1", 400, 100), ("t3_a2", 200, 90)])],
+            "PostsByIds:t3_b1,t3_b2": [Self.posts([("t3_b1", 300, 80), ("t3_b2", 100, 70)])]
         ])
         defer { scenario.close() }
         let client = scenario.client(account: account)
@@ -218,23 +215,92 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
         let second = try await client.listing(ListingRequest(feed: feed, limit: 2, after: cursor), account: account)
         XCTAssertEqual(second.items.map(\.id), ["a2", "b2"])
         XCTAssertNil(second.after)
-        XCTAssertEqual(scenario.variables(for: "SubredditInfoByName").compactMap { $0["subredditName"] as? String }, ["swift", "macos"])
-        XCTAssertEqual(scenario.variables(for: "SubredditFeedSdui").compactMap { $0["subredditName"] as? String }, ["swift", "macos"])
+        XCTAssertEqual(Set(scenario.variables(for: "SubredditInfoByName").compactMap { $0["subredditName"] as? String }), ["swift", "macos"])
+        XCTAssertEqual(Set(scenario.variables(for: "SubredditFeedSdui").compactMap { $0["subredditName"] as? String }), ["swift", "macos"])
         scenario.assertOperations(["SubredditInfoByName": 2, "SubredditFeedSdui": 2, "PostsByIds": 2])
+    }
+
+    func testCombinedSourcesLoadFourAtATimeAndKeepSourceOrder() async throws {
+        let account = AccountID()
+        let names = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"]
+        let gate = CombinedInfoGate()
+        var keyed: [String: [String]] = [:]
+        for (index, name) in names.enumerated() {
+            let id = "t3_p\(index)"
+            keyed["SubredditInfoByName:\(name)"] = [Self.availableCommunity]
+            keyed["SubredditFeedSdui:\(name)"] = [Self.finalFeed(ids: [id])]
+            keyed["PostsByIds:\(id)"] = [Self.posts([id])]
+        }
+        let scenario = ReadMigrationScenario([:], keyedResponses: keyed, infoGate: gate)
+        defer { scenario.close() }
+        defer { gate.releaseAll() }
+        let client = scenario.client(account: account)
+        let feed = FeedDescriptor(destination: .combined(names), sort: .hot)
+        let loading = Task { try await client.listing(ListingRequest(feed: feed, limit: 6), account: account) }
+        await fulfillment(of: [gate.expectCount(4)], timeout: 3)
+        guard gate.startedCount == 4 else {
+            loading.cancel()
+            gate.releaseAll()
+            return XCTFail("Expected four concurrent community requests")
+        }
+        gate.release("delta")
+        await fulfillment(of: [gate.expectCount(5)], timeout: 3)
+        guard gate.startedCount == 5 else {
+            loading.cancel()
+            gate.releaseAll()
+            return XCTFail("Expected a fifth request after one completed")
+        }
+        gate.release("charlie")
+        await fulfillment(of: [gate.expectCount(6)], timeout: 3)
+        guard gate.startedCount == 6 else {
+            loading.cancel()
+            gate.releaseAll()
+            return XCTFail("Expected a sixth request after another completed")
+        }
+        gate.release("bravo")
+        gate.release("alpha")
+        gate.release("foxtrot")
+        gate.release("echo")
+        let result = try await loading.value
+        XCTAssertEqual(gate.peakPending, 4)
+        XCTAssertEqual(result.items.map(\.id), ["p0", "p1", "p2", "p3", "p4", "p5"])
+        XCTAssertTrue(result.communityFailures.isEmpty)
+        scenario.assertOperations(["SubredditInfoByName": 6, "SubredditFeedSdui": 6, "PostsByIds": 6])
+    }
+
+    func testCombinedFeedHydratesFivePostsPerCommunityWithoutDroppingRemainingIDs() async throws {
+        let account = AccountID()
+        let ids = (1...12).map { "t3_p\($0)" }
+        let keyed: [String: [String]] = [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ids)],
+            "PostsByIds:\(ids[0..<5].joined(separator: ","))": [Self.posts(Array(ids[0..<5]))],
+            "PostsByIds:\(ids[5..<10].joined(separator: ","))": [Self.posts(Array(ids[5..<10]))],
+            "PostsByIds:\(ids[10..<12].joined(separator: ","))": [Self.posts(Array(ids[10..<12]))]
+        ]
+        let scenario = ReadMigrationScenario([:], keyedResponses: keyed)
+        defer { scenario.close() }
+        let client = scenario.client(account: account)
+        let feed = FeedDescriptor(destination: .combined(["swift"]), sort: .hot)
+        let first = try await client.listing(ListingRequest(feed: feed, limit: 35), account: account)
+        XCTAssertEqual(first.items.map(\.id), ["p1", "p2", "p3", "p4", "p5"])
+        let second = try await client.listing(ListingRequest(feed: feed, limit: 35, after: XCTUnwrap(first.after)), account: account)
+        XCTAssertEqual(second.items.map(\.id), ["p6", "p7", "p8", "p9", "p10"])
+        let third = try await client.listing(ListingRequest(feed: feed, limit: 35, after: XCTUnwrap(second.after)), account: account)
+        XCTAssertEqual(third.items.map(\.id), ["p11", "p12"])
+        XCTAssertNil(third.after)
+        scenario.assertOperations(["SubredditInfoByName": 1, "SubredditFeedSdui": 1, "PostsByIds": 3])
     }
 
     func testCombinedHotInterleavesCommunitiesAndDeduplicatesPostFullnames() async throws {
         let account = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [
-                Self.finalFeed(ids: ["t3_a1", "t3_shared", "t3_a2"]),
-                Self.finalFeed(ids: ["t3_b1", "t3_shared", "t3_b2"])
-            ],
-            "PostsByIds": [
-                Self.posts(["t3_a1", "t3_shared", "t3_a2"]),
-                Self.posts(["t3_b1", "t3_shared", "t3_b2"])
-            ]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:macos": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_a1", "t3_shared", "t3_a2"])],
+            "SubredditFeedSdui:macos": [Self.finalFeed(ids: ["t3_b1", "t3_shared", "t3_b2"])],
+            "PostsByIds:t3_a1,t3_shared,t3_a2": [Self.posts(["t3_a1", "t3_shared", "t3_a2"])],
+            "PostsByIds:t3_b1,t3_shared,t3_b2": [Self.posts(["t3_b1", "t3_shared", "t3_b2"])]
         ])
         defer { scenario.close() }
         let result = try await scenario.client(account: account).listing(
@@ -246,12 +312,13 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
 
     func testCombinedTopUsesScoreThenDateAndKeepsSourceOrderForTies() async throws {
         let account = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [Self.finalFeed(ids: ["t3_a1", "t3_a2"]),
-                                  Self.finalFeed(ids: ["t3_b1", "t3_b2"])],
-            "PostsByIds": [Self.posts([("t3_a1", 200, 10), ("t3_a2", 100, 10)]),
-                           Self.posts([("t3_b1", 300, 20), ("t3_b2", 100, 10)])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:macos": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_a1", "t3_a2"])],
+            "SubredditFeedSdui:macos": [Self.finalFeed(ids: ["t3_b1", "t3_b2"])],
+            "PostsByIds:t3_a1,t3_a2": [Self.posts([("t3_a1", 200, 10), ("t3_a2", 100, 10)])],
+            "PostsByIds:t3_b1,t3_b2": [Self.posts([("t3_b1", 300, 20), ("t3_b2", 100, 10)])]
         ])
         defer { scenario.close() }
         let result = try await scenario.client(account: account).listing(
@@ -263,12 +330,14 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
 
     func testCombinedNewWaitsForSourceContinuationBeforeEmittingOlderPosts() async throws {
         let account = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [Self.continuingFeed(ids: ["t3_a1"]), Self.finalFeed(ids: ["t3_b1"]),
-                                  Self.finalFeed(ids: ["t3_a2"])],
-            "PostsByIds": [Self.posts([("t3_a1", 400, 0)]), Self.posts([("t3_b1", 100, 0)]),
-                           Self.posts([("t3_a2", 300, 0)])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:macos": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.continuingFeed(ids: ["t3_a1"]), Self.finalFeed(ids: ["t3_a2"])],
+            "SubredditFeedSdui:macos": [Self.finalFeed(ids: ["t3_b1"])],
+            "PostsByIds:t3_a1": [Self.posts([("t3_a1", 400, 0)])],
+            "PostsByIds:t3_b1": [Self.posts([("t3_b1", 100, 0)])],
+            "PostsByIds:t3_a2": [Self.posts([("t3_a2", 300, 0)])]
         ])
         defer { scenario.close() }
         let client = scenario.client(account: account)
@@ -278,7 +347,7 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
         let second = try await client.listing(ListingRequest(feed: feed, limit: 2, after: XCTUnwrap(first.after)), account: account)
         XCTAssertEqual(second.items.map(\.id), ["a2", "b1"])
         XCTAssertNil(second.after)
-        XCTAssertEqual(scenario.variables(for: "SubredditFeedSdui").last?["after"] as? String,
+        XCTAssertEqual(scenario.variables(for: "SubredditFeedSdui").first(where: { $0["after"] != nil })?["after"] as? String,
                        Data("t3_a1".utf8).base64EncodedString())
         scenario.assertOperations(["SubredditInfoByName": 2, "SubredditFeedSdui": 3, "PostsByIds": 3])
     }
@@ -286,11 +355,13 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
     func testCombinedCursorRejectsOtherAccountDescriptorAndLimitWithoutRequests() async throws {
         let account = AccountID()
         let other = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [Self.finalFeed(ids: ["t3_a1", "t3_a2"]),
-                                  Self.finalFeed(ids: ["t3_b1", "t3_b2"])],
-            "PostsByIds": [Self.posts(["t3_a1", "t3_a2"]), Self.posts(["t3_b1", "t3_b2"])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:macos": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_a1", "t3_a2"])],
+            "SubredditFeedSdui:macos": [Self.finalFeed(ids: ["t3_b1", "t3_b2"])],
+            "PostsByIds:t3_a1,t3_a2": [Self.posts(["t3_a1", "t3_a2"])],
+            "PostsByIds:t3_b1,t3_b2": [Self.posts(["t3_b1", "t3_b2"])]
         ])
         defer { scenario.close() }
         let client = scenario.client(account: account, additionalAccount: other)
@@ -314,12 +385,14 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
     func testCombinedPartialFailureStaysVisibleOnNextPageAndRefreshRetriesSource() async throws {
         let account = AccountID()
         let denied = #"{"data":{"subredditInfoByName":{"__typename":"Subreddit","forbiddenReason":"PRIVATE"}}}"#
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, denied, Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [Self.finalFeed(ids: ["t3_a1", "t3_a2"]),
-                                  Self.finalFeed(ids: ["t3_a1"]),
-                                  Self.finalFeed(ids: ["t3_b1"])],
-            "PostsByIds": [Self.posts(["t3_a1", "t3_a2"]), Self.posts(["t3_a1"]), Self.posts(["t3_b1"])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity, Self.availableCommunity],
+            "SubredditInfoByName:denied": [denied, Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_a1", "t3_a2"]), Self.finalFeed(ids: ["t3_a1"])],
+            "SubredditFeedSdui:denied": [Self.finalFeed(ids: ["t3_b1"])],
+            "PostsByIds:t3_a1,t3_a2": [Self.posts(["t3_a1", "t3_a2"])],
+            "PostsByIds:t3_a1": [Self.posts(["t3_a1"])],
+            "PostsByIds:t3_b1": [Self.posts(["t3_b1"])]
         ])
         defer { scenario.close() }
         let client = scenario.client(account: account)
@@ -345,12 +418,13 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
     @MainActor
     func testCombinedEmptySourcePageKeepsManualContinuationUsable() async throws {
         let account = AccountID()
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, Self.availableCommunity],
-            "SubredditFeedSdui": [Self.continuingFeed(ids: [], after: "t3_emptypage"),
-                                  Self.finalFeed(ids: ["t3_older"]),
-                                  Self.finalFeed(ids: ["t3_newer"])],
-            "PostsByIds": [Self.posts([("t3_older", 10, 1)]), Self.posts([("t3_newer", 20, 2)])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:apple": [Self.availableCommunity],
+            "SubredditFeedSdui:swift": [Self.continuingFeed(ids: [], after: "t3_emptypage"), Self.finalFeed(ids: ["t3_newer"])],
+            "SubredditFeedSdui:apple": [Self.finalFeed(ids: ["t3_older"])],
+            "PostsByIds:t3_older": [Self.posts([("t3_older", 10, 1)])],
+            "PostsByIds:t3_newer": [Self.posts([("t3_newer", 20, 2)])]
         ])
         defer { scenario.close() }
         let store = OctonautFeatureStore(reddit: scenario.client(account: account))
@@ -370,7 +444,10 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
     func testCombinedAllSourcesFailThrowsInsteadOfShowingAnEmptyFeed() async throws {
         let account = AccountID()
         let denied = #"{"data":{"subredditInfoByName":{"__typename":"Subreddit","forbiddenReason":"PRIVATE"}}}"#
-        let scenario = ReadMigrationScenario(["SubredditInfoByName": [denied, denied]])
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [denied],
+            "SubredditInfoByName:macos": [denied]
+        ])
         defer { scenario.close() }
         do {
             _ = try await scenario.client(account: account).listing(
@@ -386,10 +463,11 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
     func testStoreShowsPartialCommunityFailureAndClearsItOnAccountChange() async throws {
         let account = AccountID()
         let denied = #"{"data":{"subredditInfoByName":{"__typename":"Subreddit","forbiddenReason":"PRIVATE"}}}"#
-        let scenario = ReadMigrationScenario([
-            "SubredditInfoByName": [Self.availableCommunity, denied],
-            "SubredditFeedSdui": [Self.finalFeed(ids: ["t3_first"])],
-            "PostsByIds": [Self.posts(["t3_first"])]
+        let scenario = ReadMigrationScenario([:], keyedResponses: [
+            "SubredditInfoByName:swift": [Self.availableCommunity],
+            "SubredditInfoByName:denied": [denied],
+            "SubredditFeedSdui:swift": [Self.finalFeed(ids: ["t3_first"])],
+            "PostsByIds:t3_first": [Self.posts(["t3_first"])]
         ])
         defer { scenario.close() }
         let store = OctonautFeatureStore(reddit: scenario.client(account: account))
@@ -571,11 +649,15 @@ private final class ReadMigrationScenario: @unchecked Sendable {
     let id = UUID().uuidString
     private let lock = NSLock()
     private var responses: [String: [String]]
+    private var keyedResponses: [String: [String]]
+    let infoGate: CombinedInfoGate?
     private var captured: [URLRequest] = []
     private let token = "synthetic-read-token"
 
-    init(_ responses: [String: [String]]) {
+    init(_ responses: [String: [String]], keyedResponses: [String: [String]] = [:], infoGate: CombinedInfoGate? = nil) {
         self.responses = responses
+        self.keyedResponses = keyedResponses
+        self.infoGate = infoGate
         ReadMigrationURLProtocol.register(self)
     }
 
@@ -596,6 +678,15 @@ private final class ReadMigrationScenario: @unchecked Sendable {
     func response(to request: URLRequest) -> String {
         let payload = try? Self.payload(request)
         let operation = payload?["operationName"] as? String ?? ""
+        let variables = payload?["variables"] as? [String: Any]
+        let key: String?
+        if let name = variables?["subredditName"] as? String {
+            key = "\(operation):\(name)"
+        } else if let ids = variables?["ids"] as? [String] {
+            key = "\(operation):\(ids.joined(separator: ","))"
+        } else {
+            key = nil
+        }
         return lock.withLock {
             captured.append(request)
             XCTAssertEqual(request.url?.absoluteString, "https://cf.gql-fed.reddit.com/")
@@ -605,6 +696,11 @@ private final class ReadMigrationScenario: @unchecked Sendable {
             XCTAssertNil(request.value(forHTTPHeaderField: "X-Modhash"))
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertNotNil(payload?["extensions"])
+            if let key, var available = keyedResponses[key], !available.isEmpty {
+                let response = available.removeFirst()
+                keyedResponses[key] = available
+                return response
+            }
             guard var available = responses[operation], !available.isEmpty else {
                 XCTFail("Unexpected operation \(operation)")
                 return "{}"
@@ -649,6 +745,58 @@ private final class ReadMigrationScenario: @unchecked Sendable {
     }
 }
 
+private final class CombinedInfoGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var started = 0
+    private var peak = 0
+    private var pending: [String: @Sendable () -> Void] = [:]
+    private var waiters: [(Int, XCTestExpectation)] = []
+    private var isOpen = false
+
+    var startedCount: Int { lock.withLock { started } }
+    var peakPending: Int { lock.withLock { peak } }
+
+    func hold(_ name: String, deliver: @escaping @Sendable () -> Void) {
+        let (ready, deliverNow): ([XCTestExpectation], Bool) = lock.withLock {
+            if !isOpen { pending[name] = deliver }
+            started += 1
+            peak = max(peak, pending.count)
+            let ready = waiters.filter { started >= $0.0 }.map(\.1)
+            waiters.removeAll { started >= $0.0 }
+            return (ready, isOpen)
+        }
+        ready.forEach { $0.fulfill() }
+        if deliverNow { deliver() }
+    }
+
+    func expectCount(_ count: Int) -> XCTestExpectation {
+        let expectation = XCTestExpectation(description: "Started \(count) source requests")
+        let ready = lock.withLock {
+            if started >= count { return true }
+            waiters.append((count, expectation))
+            return false
+        }
+        if ready { expectation.fulfill() }
+        return expectation
+    }
+
+    func release(_ name: String) {
+        let deliver = lock.withLock { pending.removeValue(forKey: name) }
+        XCTAssertNotNil(deliver, "No held request for \(name)")
+        deliver?()
+    }
+
+    func releaseAll() {
+        let deliveries = lock.withLock {
+            isOpen = true
+            let deliveries = Array(pending.values)
+            pending.removeAll()
+            return deliveries
+        }
+        deliveries.forEach { $0() }
+    }
+}
+
 private final class ReadMigrationURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var scenarios: [String: ReadMigrationScenario] = [:]
@@ -678,10 +826,21 @@ private final class ReadMigrationURLProtocol: URLProtocol, @unchecked Sendable {
             captured.httpBody = body
         }
         let body = scenario.response(to: captured)
-        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: [:])!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
-        client?.urlProtocolDidFinishLoading(self)
+        let deliver: @Sendable () -> Void = {
+            let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: [:])!
+            self.client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: Data(body.utf8))
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+        if let gate = scenario.infoGate,
+           let payload = try? JSONSerialization.jsonObject(with: captured.httpBody ?? Data()) as? [String: Any],
+           payload["operationName"] as? String == "SubredditInfoByName",
+           let variables = payload["variables"] as? [String: Any],
+           let name = variables["subredditName"] as? String {
+            gate.hold(name, deliver: deliver)
+        } else {
+            deliver()
+        }
     }
 
     override func stopLoading() {}
