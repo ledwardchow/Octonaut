@@ -1,5 +1,16 @@
 import SwiftUI
 
+enum ComposerLinkValidation {
+    static func webURL(_ text: String) -> URL? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.contains(where: { $0.isWhitespace }),
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else { return nil }
+        return url
+    }
+}
+
 @MainActor
 struct ComposerView: View {
     let kind: ComposerKind
@@ -59,7 +70,10 @@ struct ComposerView: View {
     private var isPostComment: Bool { kind == .comment && targetID?.hasPrefix("t3_") == true }
     private var canSubmit: Bool {
         switch kind {
-        case .post: return !community.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (postType != "Link" || URL(string: link) != nil)
+        case .post:
+            return !community.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && (postType != "Link" || ComposerLinkValidation.webURL(link) != nil)
         case .comment, .edit:
             return targetID?.isEmpty == false
                 && !bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -172,6 +186,7 @@ struct ComposerView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(isPreview ? "Edit" : "Preview") { isPreview.toggle() }
+                        .disabled(sending || draftClosed)
                 }
             }
             .confirmationDialog(kind == .edit ? "Discard changes?" : "Keep this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
@@ -261,7 +276,7 @@ struct ComposerView: View {
                 title: title.trimmingCharacters(in: .whitespacesAndNewlines),
                 text: bodyText.isEmpty ? nil : bodyText,
                 // A link typed before switching back to Text must not turn this into a link post.
-                link: postType == "Link" ? URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)) : nil,
+                link: postType == "Link" ? ComposerLinkValidation.webURL(link) : nil,
                 sendReplies: sendReplies
             )
         case .comment, .edit:

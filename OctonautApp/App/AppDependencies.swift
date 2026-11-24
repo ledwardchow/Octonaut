@@ -7,6 +7,7 @@ final class AppDependencies {
     let router: AppRouter
     let accounts: AccountCoordinator
     let reddit: any RedditClient
+    let trendingCommunitiesModel: SearchFeatureModel
     let authenticated: any AuthenticatedRedditService
     let persistence: any PersistenceStore
     let media: any MediaService
@@ -39,6 +40,7 @@ final class AppDependencies {
         self.router = router
         self.accounts = accounts
         self.reddit = reddit
+        self.trendingCommunitiesModel = SearchFeatureModel(reddit: reddit)
         self.authenticated = authenticated
         self.persistence = persistence
         self.media = media
@@ -74,6 +76,7 @@ final class AppDependencies {
 
         settings.removeAllData()
         RedditResponseCache.removeAll()
+        trendingCommunitiesModel.clearTrendingCache()
         await summaryCache.removeAll()
         URLCache.shared.removeAllCachedResponses()
         await SubscribedCommunitiesCache.shared.removeAll()

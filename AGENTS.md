@@ -13,7 +13,9 @@ For every user-visible feature or bug fix, update `TestFlight/WhatToTest.en-AU.t
 - Write one very short line per change, ideally under 10 words.
 - Describe only what changed, using plain English. Example: `Fixed missing audio in videos.`
 - Do not add headings, explanations, testing instructions, or implementation details.
-- Add to the current build's changes. Combine duplicate entries and update entries when the same feature changes again.
+- The current build contains only changes since the latest pull request merged into `main`, including uncommitted changes. Verify the latest merged PR before regrouping notes.
+- Move notes already included at that merge into the existing previous-builds section, preserving older notes. Keep changes made after that merge in the current-build section.
+- Add new changes to the current build. Combine duplicate entries and update entries when the same feature changes again.
 - Only list changes implemented in the task. Skip documentation, tests, and internal refactors that do not change app behaviour.
 - Preserve existing notes unless asked to start a new build or rewrite them.
 

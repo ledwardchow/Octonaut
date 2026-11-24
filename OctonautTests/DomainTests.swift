@@ -621,6 +621,60 @@ final class DomainTests: XCTestCase {
         XCTAssertTrue(model.communities.isEmpty)
     }
 
+    @MainActor
+    func testTrendingCommunitiesCacheSuccessfulAndEmptyResultsForSession() async {
+        let populated = Data(
+            #"{"data":{"children":[{"kind":"t5","data":{"display_name":"AskReddit"}}]}}"#.utf8
+        )
+        for data in [populated, nil] {
+            let client = FixtureRedditClient(communitiesData: data)
+            let model = SearchFeatureModel(reddit: client)
+            await model.loadTrendingCommunities()
+            let expected = model.trendingCommunities.map(\.name)
+            await model.submit(query: "swift", scope: .posts)
+            await model.submit(query: "", scope: .posts)
+            await model.loadTrendingCommunities()
+            await model.loadTrendingCommunities()
+            XCTAssertEqual(model.trendingCommunities.map(\.name), expected)
+            XCTAssertEqual(model.trendingState, expected.isEmpty ? .empty : .loaded)
+            let requests = await client.searchAccounts
+            XCTAssertEqual(requests.count, 2, "One trending request and one search request")
+        }
+    }
+
+    @MainActor
+    func testTrendingCacheSeparatesAccountsAndSupportsRefreshAndReset() async {
+        let client = FixtureRedditClient()
+        let model = SearchFeatureModel(reddit: client)
+        let account = AccountID()
+        await model.loadTrendingCommunities()
+        await model.loadTrendingCommunities(account: account)
+        await model.loadTrendingCommunities()
+        await model.loadTrendingCommunities(account: account)
+        var requests = await client.searchAccounts
+        XCTAssertEqual(requests, [nil, account])
+
+        await model.loadTrendingCommunities(forceRefresh: true, account: account)
+        model.clearTrendingCache()
+        XCTAssertEqual(model.trendingState, .idle)
+        await model.loadTrendingCommunities(account: account)
+        requests = await client.searchAccounts
+        XCTAssertEqual(requests, [nil, account, account, account])
+    }
+
+    @MainActor
+    func testTrendingCacheDoesNotCacheFailures() async {
+        let client = FixtureRedditClient(communitiesData: Data("invalid JSON".utf8))
+        let model = SearchFeatureModel(reddit: client)
+        await model.loadTrendingCommunities()
+        await model.loadTrendingCommunities()
+        let requests = await client.searchAccounts
+        XCTAssertEqual(requests.count, 2)
+        if case .failed = model.trendingState {} else {
+            XCTFail("Expected a retryable failure")
+        }
+    }
+
     func testMarkdownLinksRenderAsLinkedDisplayText() throws {
         let url = try XCTUnwrap(URL(string: "https://www.instagram.com/p/example/"))
         let attributed = RedditPostMarkdown.attributedString(

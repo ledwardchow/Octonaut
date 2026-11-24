@@ -9,6 +9,38 @@ private final class FeedInsetFixture {
 
 @MainActor
 final class SettingsTests: XCTestCase {
+    func testCommentPermalinksHaveIndependentDetailCaches() async {
+        let thread = Data(#"[{"data":{"children":[{"kind":"t3","data":{"id":"sample","name":"t3_sample","title":"Cached post","subreddit":"swift","permalink":"/r/swift/comments/sample/title/","author":"reader"}}]}},{"data":{"children":[{"kind":"t1","data":{"id":"reply","name":"t1_reply","parent_id":"t3_sample","body":"Cached comment","author":"reply_author","created_utc":1700000000}}]}}]"#.utf8)
+        let client = FixtureRedditClient(postData: thread)
+        let store = OctonautFeatureStore(reddit: client)
+        let post = PostCardModel.sample
+        var branch = post
+        branch.shareURL = post.shareURL.appendingPathComponent("specific-comment")
+        let fullLoaded = await store.loadPostDetail(for: post)
+        let branchLoaded = await store.loadPostDetail(for: branch)
+        XCTAssertTrue(fullLoaded)
+        XCTAssertTrue(branchLoaded)
+        let firstRequests = await client.postRequests()
+        XCTAssertEqual(firstRequests, 2, "A comment branch must fetch its own thread")
+        _ = await store.loadPostDetail(for: post)
+        _ = await store.loadPostDetail(for: branch)
+        let cachedRequests = await client.postRequests()
+        XCTAssertEqual(cachedRequests, 2, "Both destinations should keep independent cached responses")
+    }
+
+    func testComposerRejectsRelativeAndNonWebLinks() {
+        for value in ["", "hello", "/relative/path", "//reddit.com/path", "https://", "file:///tmp/file", "javascript:alert(1)", "mailto:a@example.com", "https://exa mple.com"] {
+            XCTAssertNil(ComposerLinkValidation.webURL(value), value)
+        }
+    }
+
+    func testComposerAcceptsAndTrimsAbsoluteWebLinks() {
+        XCTAssertEqual(ComposerLinkValidation.webURL("  https://example.com/a?q=1#part\n")?.absoluteString,
+                       "https://example.com/a?q=1#part")
+        XCTAssertNotNil(ComposerLinkValidation.webURL("http://example.com"))
+        XCTAssertNotNil(ComposerLinkValidation.webURL("HTTPS://example.com"))
+    }
+
     func testDuoPostDisablesBothNativeBackGesturesAndRestoresThem() async throws {
         let host = UIHostingController(rootView: Color.clear.background(DuoPostNavigationGestures(isDisabled: true)))
         let navigation = UINavigationController(rootViewController: UIViewController())

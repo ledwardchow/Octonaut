@@ -100,7 +100,7 @@ struct PostDetailView: View {
                             Text("Comments could not be loaded").font(.subheadline.weight(.semibold))
                             Text(message).font(.caption).foregroundStyle(.secondary)
                             Button("Retry") {
-                                Task { await store.loadPostDetail(for: currentPost, sort: commentSort, forceRefresh: true) }
+                                Task { await store.loadPostDetail(for: post, sort: commentSort, forceRefresh: true) }
                             }
                             .font(.caption.weight(.semibold))
                         }
@@ -193,7 +193,7 @@ struct PostDetailView: View {
                             })
                     }
                 }
-                if comments.isEmpty {
+                if store.detailState == .loaded, comments.isEmpty {
                     VStack(spacing: 12) {
                         ContentUnavailableView(
                             "No comments", systemImage: "bubble.left.and.bubble.right",
@@ -292,7 +292,7 @@ struct PostDetailView: View {
                 onSave: { performSave(postID: currentPost.id) },
                 onOpenPost: { dismissMediaViewerAndStay() })
         }
-        .task(id: "\(post.id):\(commentSort):\(store.accountContextKey)") {
+        .task(id: "\(post.shareURL.absoluteString):\(commentSort):\(store.accountContextKey)") {
             let isOpening = lastOpenedPostID != post.id
             lastOpenedPostID = post.id
             await store.loadPostDetail(for: post, sort: commentSort, markAsSeen: isOpening)
@@ -407,7 +407,7 @@ struct PostDetailView: View {
             showingLogin = true
             return
         }
-        composerTarget = CommentComposerTarget(id: targetID, post: currentPost)
+        composerTarget = CommentComposerTarget(id: targetID, post: post)
     }
 
     private func performCommentVote(commentID: String, value: Int) {

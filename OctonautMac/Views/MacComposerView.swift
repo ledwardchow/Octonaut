@@ -111,6 +111,7 @@ struct MacComposerView: View {
                     Button(isPreviewing ? "Edit" : "Preview") {
                         isPreviewing.toggle()
                     }
+                    .disabled(isSubmitting || isClosing)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(isSubmitting ? "Sending..." : "Send") {

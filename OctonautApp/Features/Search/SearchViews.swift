@@ -98,10 +98,12 @@ struct SearchRootView: View {
     }
 
     private var trending: some View {
-        let label = dependencies.accounts.selectedAccountID == nil ? "Trending communities" : "Suggested communities"
+        let account = dependencies.accounts.selectedAccountID
+        let model = dependencies.trendingCommunitiesModel
+        let label = account == nil ? "Trending communities" : "Suggested communities"
         return List {
             Section {
-                switch model.trendingState {
+                switch model.trendingState(for: account) {
                 case .idle, .loading:
                     HStack(spacing: 10) {
                         ProgressView()
@@ -152,7 +154,7 @@ struct SearchRootView: View {
         }
         .listStyle(.insetGrouped)
         .task(id: dependencies.accounts.selectionGeneration) {
-            await model.loadTrendingCommunities(forceRefresh: true, account: dependencies.accounts.selectedAccountID)
+            await model.loadTrendingCommunities(account: account)
         }
     }
 

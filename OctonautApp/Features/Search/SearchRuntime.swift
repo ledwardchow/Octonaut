@@ -14,6 +14,8 @@ final class SearchFeatureModel {
 
     private var accountID: AccountID?
     private var trendingGeneration = 0
+    @ObservationIgnored private var trendingCache: [AccountID?: [CommunityCardModel]] = [:]
+    private var trendingAccountID: AccountID?
 
     var posts: [PostCardModel] = []
     var communities: [CommunityCardModel] = []
@@ -53,24 +55,44 @@ final class SearchFeatureModel {
         state = .idle
     }
 
+    func trendingState(for account: AccountID?) -> SearchLoadState {
+        trendingAccountID == account ? trendingState : .idle
+    }
+
     func loadTrendingCommunities(forceRefresh: Bool = false, account: AccountID? = nil) async {
-        if !forceRefresh, trendingState == .loading || trendingState == .loaded { return }
+        guard !Task.isCancelled else { return }
+        trendingAccountID = account
         trendingGeneration &+= 1
         let generation = trendingGeneration
+        if !forceRefresh, let cached = trendingCache[account] {
+            trendingCommunities = cached
+            trendingState = cached.isEmpty ? .empty : .loaded
+            return
+        }
+        trendingCommunities = []
         trendingState = .loading
         do {
             let listing = try await reddit.trendingCommunities(limit: 25, account: account)
-            guard !Task.isCancelled, generation == trendingGeneration else { return }
+            try Task.checkCancellation()
+            guard generation == trendingGeneration else { return }
             trendingCommunities = listing.items.map(CommunityCardModel.init)
+            trendingCache[account] = trendingCommunities
             trendingState = trendingCommunities.isEmpty ? .empty : .loaded
         } catch is CancellationError {
             guard generation == trendingGeneration else { return }
-            trendingState = trendingCommunities.isEmpty ? .idle : .loaded
-            return
+            trendingState = .idle
         } catch {
             guard generation == trendingGeneration else { return }
             trendingState = .failure(error)
         }
+    }
+
+    func clearTrendingCache() {
+        trendingGeneration &+= 1
+        trendingCache.removeAll()
+        trendingAccountID = nil
+        trendingCommunities = []
+        trendingState = .idle
     }
 
     func submit(query: String, scope: FeatureSearchScope, account: AccountID? = nil) async {

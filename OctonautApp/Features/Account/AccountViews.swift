@@ -553,6 +553,8 @@ struct UserSectionView: View {
     @State private var state: OctonautLoadState = .idle
     @State private var isLoadingMore = false
     @State private var paginationError: String?
+    @State private var isLoadingFirstPage = false
+    @State private var loadGeneration = UUID()
     @State private var actionError: String?
 
     private var offersContentPicker: Bool { section == .saved }
@@ -605,7 +607,7 @@ struct UserSectionView: View {
                     .foregroundStyle(.secondary)
             case .loaded:
                 rows
-                if nextPage != nil {
+                if nextPage != nil, !isLoadingFirstPage {
                     if let paginationError {
                         VStack(spacing: 8) {
                             Text(paginationError).foregroundStyle(.secondary)
@@ -692,6 +694,13 @@ struct UserSectionView: View {
 
     private func load(forceRefresh: Bool = false) async {
         let context = taskID
+        let generation = UUID()
+        loadGeneration = generation
+        isLoadingFirstPage = true
+        isLoadingMore = false
+        defer {
+            if loadGeneration == generation { isLoadingFirstPage = false }
+        }
         paginationError = nil
         if loadedContent != content {
             // Posts and comments are different rows; do not leave one kind on
@@ -706,7 +715,7 @@ struct UserSectionView: View {
         do {
             let page = try await store.fetchUserSection(
                 section, username: username, content: content, forceRefresh: forceRefresh)
-            guard !Task.isCancelled, taskID == context else { return }
+            guard !Task.isCancelled, loadGeneration == generation, taskID == context else { return }
             posts = page.posts
             comments = page.comments
             nextPage = page.nextPage
@@ -715,21 +724,24 @@ struct UserSectionView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled, taskID == context else { return }
+            guard !Task.isCancelled, loadGeneration == generation, taskID == context else { return }
             state = .failure(error)
         }
     }
 
     private func loadMore() async {
-        guard let after = nextPage, !isLoadingMore else { return }
+        guard let after = nextPage, !isLoadingFirstPage, !isLoadingMore else { return }
         let context = taskID
+        let generation = loadGeneration
         isLoadingMore = true
         paginationError = nil
-        defer { isLoadingMore = false }
+        defer {
+            if loadGeneration == generation { isLoadingMore = false }
+        }
         do {
             let page = try await store.fetchUserSection(
                 section, username: username, content: content, after: after)
-            guard !Task.isCancelled, taskID == context, nextPage == after else { return }
+            guard !Task.isCancelled, loadGeneration == generation, taskID == context, nextPage == after else { return }
             let existingPosts = Set(posts.map(\.id))
             posts.append(contentsOf: page.posts.filter { !existingPosts.contains($0.id) })
             let existingComments = Set(comments.map(\.id))
@@ -738,7 +750,7 @@ struct UserSectionView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard !Task.isCancelled, taskID == context, nextPage == after else { return }
+            guard !Task.isCancelled, loadGeneration == generation, taskID == context, nextPage == after else { return }
             paginationError = error.localizedDescription
         }
     }

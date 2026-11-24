@@ -983,6 +983,7 @@ final class OctonautFeatureStore {
     }
     private struct DetailCacheKey: Hashable {
         let postID: String
+        let permalink: URL
         let sort: String
         let accountID: AccountID?
     }
@@ -1788,7 +1789,7 @@ final class OctonautFeatureStore {
             detailState = .loaded
             return true
         }
-        let key = DetailCacheKey(postID: post.id, sort: sort.lowercased(), accountID: accountID)
+        let key = DetailCacheKey(postID: post.id, permalink: post.shareURL, sort: sort.lowercased(), accountID: accountID)
         saveVisibleDetail()
         let previouslySeen = posts.first(where: { $0.id == post.id })?.isSeen
             ?? (detailPost?.id == post.id ? detailPost?.isSeen : nil)
@@ -1805,7 +1806,8 @@ final class OctonautFeatureStore {
             detailState = .loaded
             return true
         }
-        let hasVisibleThread = detailPost?.id == post.id && detailState == .loaded && !comments.isEmpty
+        let hasVisibleThread = visibleDetailKey?.postID == post.id
+            && visibleDetailKey?.permalink == post.shareURL && detailState == .loaded && !comments.isEmpty
         detailCache.removeValue(forKey: key)
         let requestID = UUID()
         detailRequestID = requestID
