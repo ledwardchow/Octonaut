@@ -296,6 +296,16 @@ private struct MacPostMediaCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if let image = post.firstBodyImage {
+                RedditMarkdownView(
+                    image: image,
+                    hidesMedia: post.isSensitive(
+                        blurringNSFW: dependencies.settings.blurNSFWMedia,
+                        blurringSpoilers: dependencies.settings.blurSpoilers
+                    )
+                )
+            }
+
             if post.hasMedia {
                 media
             }
@@ -746,6 +756,9 @@ struct MacPostDetailView: View {
                     }
                     .background(.black)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
+                    if post.firstBodyImage != nil {
+                        postBody(post)
+                    }
                 } else {
                     postHeader(post)
                 }
@@ -874,10 +887,7 @@ struct MacPostDetailView: View {
                 .textSelection(.enabled)
 
             if !post.body.isEmpty {
-                RedditMarkdownView(source: post.body)
-                    .font(.body)
-                    .tint(.accentColor)
-                    .textSelection(.enabled)
+                postBody(post)
             }
 
             if post.mediaKind == "image", let mediaURL = post.mediaURL {
@@ -908,6 +918,21 @@ struct MacPostDetailView: View {
 
     private var currentAccountID: AccountID? {
         accounts.selectedAccountID
+    }
+
+    private func postBody(_ post: PostCardModel) -> some View {
+        RedditMarkdownView(
+            source: post.body,
+            hidesMedia: post.isSensitive(
+                blurringNSFW: dependencies.settings.blurNSFWMedia,
+                blurringSpoilers: dependencies.settings.blurSpoilers
+            ),
+            groupsImages: true
+        )
+        .font(.body)
+        .tint(.accentColor)
+        .textSelection(.enabled)
+        .id(post.id)
     }
 
     private func vote(_ post: PostCardModel, value: Int) {
@@ -1233,7 +1258,7 @@ private struct MacMediaLightboxView: View {
             Text(post.title)
                 .font(.headline)
                 .lineLimit(2)
-            if !post.body.isEmpty {
+            if post.firstBodyImage == nil, !post.body.isEmpty {
                 // A line limit stops SwiftUI from handling link clicks, so long captions scroll instead.
                 ViewThatFits(in: .vertical) {
                     lightboxCaption

@@ -549,9 +549,10 @@ enum RedditJSONCodec {
                 ?? (communityName.isEmpty ? "" : "r/\(communityName)"),
             iconURL: url(object["community_icon"]?.stringValue)
         )
-        let decodedBody = richText(
+        let decodedBody = bodyText(
             plainText: object["selftext"]?.stringValue,
-            html: object["selftext_html"]?.stringValue
+            html: object["selftext_html"]?.stringValue,
+            media: object["media_metadata"]?.objectValue
         )
         let bodyImageURL = directImageURL(in: decodedBody?.plainText)
         let bodyVideo = bodyVideoMedia(in: decodedBody?.plainText, thumbnailURL: thumbnail(object))
@@ -705,7 +706,11 @@ enum RedditJSONCodec {
         let id = object["id"]?.stringValue ?? UUID().uuidString
         let fullname = object["name"]?.stringValue ?? IDNormalization.fullname(id, kind: "t1")
         let parent = object["parent_id"]?.stringValue ?? ""
-        let body = richText(plainText: object["body"]?.stringValue, html: object["body_html"]?.stringValue)
+        let body = bodyText(
+            plainText: object["body"]?.stringValue,
+            html: object["body_html"]?.stringValue,
+            media: object["media_metadata"]?.objectValue
+        )
         if body == nil && object["author"]?.stringValue == nil {
             return (
                 .deleted(DeletedCommentNode(id: id, parentFullname: parent, reason: "Comment unavailable")),
@@ -805,7 +810,11 @@ enum RedditJSONCodec {
             fullname: object["name"]?.stringValue,
             parentFullname: object["parent_id"]?.stringValue ?? "",
             author: object["author"]?.stringValue.map(UserReference.init(username:)),
-            body: richText(plainText: object["body"]?.stringValue, html: object["body_html"]?.stringValue),
+            body: bodyText(
+                plainText: object["body"]?.stringValue,
+                html: object["body_html"]?.stringValue,
+                media: object["media_metadata"]?.objectValue
+            ),
             createdAt: date(object["created_utc"]),
             score: score(object),
             vote: voteState(object),
@@ -857,6 +866,24 @@ enum RedditJSONCodec {
             textColor: object["author_flair_text_color"]?.stringValue,
             emojiURLs: emojiURLs
         )
+    }
+
+    private static func bodyText(
+        plainText: String?,
+        html: String?,
+        media: [String: RedditJSONValue]?
+    ) -> RichText? {
+        guard let body = richText(plainText: plainText, html: html) else { return nil }
+        let markdown = RedditPostMarkdown.resolvingMediaReferences(in: body.plainText) { id, isGIF in
+            let item = media?[id]?.objectValue
+            let source = item?["s"]?.objectValue
+            if isGIF, let gifURL = RedditPostMarkdown.giphyURL(id: id) ?? url(source?["gif"]?.stringValue) {
+                return gifURL
+            }
+            return url(source?["u"]?.stringValue)
+                ?? url(item?["p"]?.arrayValue?.last?.objectValue?["u"]?.stringValue)
+        }
+        return RichText(plainText: markdown)
     }
 
     /// Every request sends `raw_json=1`, so plain fields are already unescaped
@@ -1157,7 +1184,12 @@ enum RedditJSONCodec {
     }
 
     private static func directImageURL(in text: String?) -> URL? {
-        URLs(in: text).first(where: isDirectImageURL)
+        let candidates = URLs(in: text).filter(isDirectImageURL)
+        guard let text, !candidates.isEmpty else { return candidates.first }
+        let inlineImages = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: text))
+        guard text.contains("![") || inlineImages.count > 1 else { return candidates.first }
+        let inlineURLs = Set(inlineImages.map(\.url))
+        return candidates.first { !inlineURLs.contains($0) }
     }
 
     private static func bodyVideoMedia(in text: String?, thumbnailURL: URL?) -> PostMedia? {

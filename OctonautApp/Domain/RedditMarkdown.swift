@@ -1,11 +1,13 @@
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RedditMarkdownTable: Equatable {
     let headers: [String]
     let rows: [[String]]
 }
 
-struct RedditMarkdownImage: Equatable {
+struct RedditMarkdownImage: Hashable, Sendable {
     let url: URL
     let altText: String?
 }
@@ -14,33 +16,107 @@ enum RedditMarkdownBlock: Equatable {
     case text(String)
     case table(RedditMarkdownTable)
     case image(RedditMarkdownImage)
+    case gallery([RedditMarkdownImage])
+
+    var hasMedia: Bool {
+        switch self {
+        case .image, .gallery: true
+        case .text, .table: false
+        }
+    }
 }
 
 struct RedditMarkdownView: View {
-    let source: String
     private let blocks: [RedditMarkdownBlock]
+    private let hidesMedia: Bool
+    private let maximumImageHeight: CGFloat
+    @State private var revealsMedia = false
 
-    init(source: String) {
-        self.source = source
-        self.blocks = RedditPostMarkdown.blocks(from: source)
+    init(source: String, hidesMedia: Bool = false, groupsImages: Bool = false) {
+        let blocks = RedditPostMarkdown.blocks(from: source)
+        self.blocks = groupsImages ? RedditPostMarkdown.groupingAdjacentImages(in: blocks) : blocks
+        self.hidesMedia = hidesMedia
+        self.maximumImageHeight = 520
+    }
+
+    init(image: RedditMarkdownImage, hidesMedia: Bool, maximumImageHeight: CGFloat = 260) {
+        self.blocks = [.image(image)]
+        self.hidesMedia = hidesMedia
+        self.maximumImageHeight = maximumImageHeight
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .text(let text):
-                    RedditSpoilerText(source: text)
-                        .id(text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .table(let table):
-                    RedditMarkdownTableView(table: table)
-                case .image(let image):
-                    RedditMarkdownImageView(image: image)
+            let firstImage = blocks.firstIndex(where: \.hasMedia)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
+                if hidesMedia && !revealsMedia && block.hasMedia {
+                    if index == firstImage {
+                        Button("Reveal media", systemImage: "eye.slash") { revealsMedia = true }
+                            .buttonStyle(.bordered)
+                    }
+                } else {
+                    switch block {
+                    case .text(let text):
+                        RedditSpoilerText(source: text)
+                            .id(text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .table(let table):
+                        RedditMarkdownTableView(table: table)
+                    case .image(let image):
+                        RedditMarkdownImageView(image: image, maximumHeight: maximumImageHeight)
+                            .id(image)
+                    case .gallery(let images):
+                        RedditMarkdownGallery(images: images, height: min(320, maximumImageHeight))
+                            .id(images)
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RedditMarkdownGallery: View {
+    let images: [RedditMarkdownImage]
+    let height: CGFloat
+    @State private var selectedPage: Int? = 0
+
+    private var page: Int { selectedPage ?? 0 }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(images.indices, id: \.self) { index in
+                        RedditMarkdownImageView(image: images[index], maximumHeight: height)
+                            .containerRelativeFrame(.horizontal)
+                            .id(index)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $selectedPage)
+            .scrollIndicators(.hidden)
+            .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            HStack(spacing: 12) {
+                Button("Previous image", systemImage: "chevron.left") {
+                    withAnimation { selectedPage = page - 1 }
+                }
+                .disabled(page == 0)
+                Text("\(page + 1) of \(images.count)")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityLabel("Image \(page + 1) of \(images.count)")
+                Button("Next image", systemImage: "chevron.right") {
+                    withAnimation { selectedPage = page + 1 }
+                }
+                .disabled(page == images.count - 1)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+        }
     }
 }
 
@@ -63,36 +139,102 @@ private struct RedditSpoilerText: View {
 
 private struct RedditMarkdownImageView: View {
     let image: RedditMarkdownImage
+    let maximumHeight: CGFloat
 
     var body: some View {
         Link(destination: image.url) {
-            AsyncImage(url: image.url) { phase in
-                switch phase {
-                case .empty:
-                    ZStack {
-                        Color.secondary.opacity(0.08)
-                        ProgressView()
-                    }
-                    .frame(height: 180)
-                case .success(let loadedImage):
-                    loadedImage
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 520, alignment: .leading)
-                case .failure:
-                    Label(image.altText ?? image.url.absoluteString, systemImage: "photo")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                @unknown default:
-                    EmptyView()
-                }
-            }
-            .background(Color.secondary.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            RedditMarkdownImageContent(url: image.url, maximumHeight: maximumHeight)
+                .background(Color.secondary.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(image.altText ?? "Linked Reddit image")
         .accessibilityHint("Opens the image")
+    }
+}
+
+private struct RedditMarkdownImageContent: View {
+    let url: URL
+    let maximumHeight: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var isVisible = true
+    @State private var frame: CGImage?
+    @State private var failed = false
+    @State private var frames: RedditImageFrames?
+
+    private var animates: Bool { isVisible && !reduceMotion && scenePhase == .active }
+
+    var body: some View {
+        Group {
+            if let frame {
+                Image(decorative: frame, scale: 1)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: maximumHeight, alignment: .leading)
+            } else if failed {
+                Label("Image unavailable", systemImage: "photo").padding(12)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, minHeight: min(180, maximumHeight))
+            }
+        }
+        .onScrollVisibilityChange { isVisible = $0 }
+        .task {
+            do {
+                var request = URLRequest(url: url)
+                request.httpShouldHandleCookies = false
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) == true,
+                      let decoded = RedditImageFrames(data: data),
+                      let first = await decoded.frame(at: 0) else {
+                    failed = true
+                    return
+                }
+                try Task.checkCancellation()
+                frame = first.image
+                if decoded.count > 1 { frames = decoded }
+            } catch {
+                if !Task.isCancelled { failed = true }
+            }
+        }
+        .task(id: animates ? frames?.id : nil) {
+            guard animates, let frames else { return }
+            var index = 0
+            while !Task.isCancelled, let next = await frames.frame(at: index) {
+                if Task.isCancelled { return }
+                frame = next.image
+                do { try await Task.sleep(for: next.delay) } catch { return }
+                index = (index + 1) % frames.count
+            }
+        }
+    }
+}
+
+actor RedditImageFrames {
+    let id = UUID()
+    let count: Int
+    private let source: CGImageSource
+
+    init?(data: Data) {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        self.source = source
+        let frameCount = CGImageSourceGetCount(source)
+        self.count = CGImageSourceGetType(source) == (UTType.gif.identifier as CFString)
+            ? frameCount : min(frameCount, 1)
+    }
+
+    func frame(at index: Int) -> (image: CGImage, delay: Duration)? {
+        let options = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1040,
+            kCGImageSourceShouldCacheImmediately: true,
+        ] as CFDictionary
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, index, options) else { return nil }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any]
+        let gif = properties?[kCGImagePropertyGIFDictionary] as? [CFString: Double]
+        let delay = gif?[kCGImagePropertyGIFUnclampedDelayTime] ?? gif?[kCGImagePropertyGIFDelayTime] ?? 0.1
+        return (image, .seconds(delay.isFinite && delay >= 0.02 ? delay : 0.1))
     }
 }
 
@@ -176,7 +318,11 @@ private struct RedditMarkdownTableView: View {
 /// Converts the Markdown returned by Reddit into text SwiftUI can render on every platform.
 enum RedditPostMarkdown {
     static func previewText(from source: String, maxCharacters: Int = 240) -> String {
-        for block in blocks(from: source) {
+        previewText(in: blocks(from: source), maxCharacters: maxCharacters)
+    }
+
+    static func previewText(in blocks: [RedditMarkdownBlock], maxCharacters: Int = 240) -> String {
+        for block in blocks {
             guard case .text(let text) = block else { continue }
             let rendered = String(attributedString(from: text).characters)
             let preview = rendered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
@@ -187,7 +333,88 @@ enum RedditPostMarkdown {
         return ""
     }
 
+    static func images(in blocks: [RedditMarkdownBlock]) -> [RedditMarkdownImage] {
+        blocks.compactMap { if case .image(let image) = $0 { image } else { nil } }
+    }
+
+    static func groupingAdjacentImages(in blocks: [RedditMarkdownBlock]) -> [RedditMarkdownBlock] {
+        var result: [RedditMarkdownBlock] = []
+        var images: [RedditMarkdownImage] = []
+
+        func appendImages() {
+            if images.count == 1, let image = images.first {
+                result.append(.image(image))
+            } else if images.count > 1 {
+                result.append(.gallery(images))
+            }
+            images.removeAll(keepingCapacity: true)
+        }
+
+        for block in blocks {
+            switch block {
+            case .image(let image):
+                images.append(image)
+            case .text(let text) where text.allSatisfy(\.isWhitespace):
+                continue
+            default:
+                appendImages()
+                result.append(block)
+            }
+        }
+        appendImages()
+        return result
+    }
+
+    static func resolvingMediaReferences(
+        in markdown: String,
+        lookup: (String, Bool) -> URL?
+    ) -> String {
+        guard markdown.contains("![img]") || markdown.contains("![gif]") else { return markdown }
+        var activeFence: Fence?
+        let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        return lines.map { line in
+            if let fence = activeFence {
+                if isClosingFence(line, matching: fence) { activeFence = nil }
+                return line
+            }
+            if let fence = openingFence(in: line) {
+                activeFence = fence
+                return line
+            }
+            let range = NSRange(line.startIndex..., in: line)
+            var result = line
+            for match in mediaReferenceRegex.matches(in: line, range: range).reversed() {
+                guard let labelRange = Range(match.range(at: 2), in: line),
+                      let idRange = Range(match.range(at: 3), in: line),
+                      let url = lookup(String(line[idRange]), line[labelRange] == "gif"),
+                      let imageURL = redditImageURL(from: url.absoluteString),
+                      let replacementRange = Range(match.range, in: result) else { continue }
+                result.replaceSubrange(replacementRange, with: mediaLink(label: String(line[labelRange]), url: imageURL))
+            }
+            return result
+        }.joined(separator: "\n")
+    }
+
+    static func giphyURL(id: String) -> URL? {
+        guard id.hasPrefix("giphy|") else { return nil }
+        let gifID = id.dropFirst("giphy|".count)
+        guard !gifID.isEmpty, gifID.utf8.allSatisfy({
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+        }) else { return nil }
+        return URL(string: "https://media.giphy.com/media/\(gifID)/giphy.gif")
+    }
+
+    static func mediaLink(label: String, url: URL) -> String {
+        "![\(label)](\(url.absoluteString.replacingOccurrences(of: ")", with: "%29")))"
+    }
+
+    // The first two alternatives consume escaped characters and inline code.
+    private static let mediaReferenceRegex = try! NSRegularExpression(
+        pattern: #"\\.|(?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\1(?!\x60)|!\[(img|gif)\]\(([A-Za-z0-9_|-]+)\)"#
+    )
+
     static func blocks(from source: String) -> [RedditMarkdownBlock] {
+        guard !source.isEmpty else { return [] }
         let lines = source
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
@@ -365,6 +592,10 @@ enum RedditPostMarkdown {
         }
         let imageHosts: Set<String> = ["i.redd.it", "preview.redd.it", "external-preview.redd.it"]
         if let host = url.host?.lowercased(), imageHosts.contains(host) {
+            return url
+        }
+        if url.host?.lowercased() == "media.giphy.com",
+           url.path.hasPrefix("/media/"), url.pathExtension.lowercased() == "gif" {
             return url
         }
 

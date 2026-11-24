@@ -2,8 +2,12 @@ import Foundation
 
 enum RedditGraphQLRichText {
     static func decode(_ content: [String: RedditJSONValue], thingID: String) -> RichText? {
+        let shortID = thingID.hasPrefix("t1_") || thingID.hasPrefix("t3_") ? String(thingID.dropFirst(3)) : thingID
+        let renderer = Renderer(media: content["richtextMedia"]?.arrayValue ?? [], thingID: shortID)
         if let markdown = content["markdown"]?.stringValue, !markdown.isEmpty {
-            return RichText(plainText: markdown)
+            return RichText(plainText: RedditPostMarkdown.resolvingMediaReferences(in: markdown) { id, isGIF in
+                renderer.mediaURL(id: id, isGIF: isGIF)
+            })
         }
         let rich: [String: RedditJSONValue]?
         if let object = content["richtext"]?.objectValue {
@@ -16,8 +20,6 @@ enum RedditGraphQLRichText {
         guard let document = rich?["document"]?.arrayValue else {
             return content["markdown"]?.stringValue.map { RichText(plainText: $0) }
         }
-        let shortID = thingID.hasPrefix("t1_") || thingID.hasPrefix("t3_") ? String(thingID.dropFirst(3)) : thingID
-        let renderer = Renderer(media: content["richtextMedia"]?.arrayValue ?? [], thingID: shortID)
         return RichText(plainText: renderer.blocks(document))
     }
 
@@ -141,15 +143,23 @@ enum RedditGraphQLRichText {
                 let url = "https://reddit.com/link/\(thingID)/video/\(id)/player"
                 return "[Video](\(url))"
             }
-            if id.hasPrefix("giphy|"), let gifID = id.split(separator: "|").dropFirst().first {
-                return "[giphy](https://giphy.com/gifs/\(gifID))"
-            }
+            let isGIF = node["e"]?.stringValue == "gif"
+            guard let url = mediaURL(id: id, isGIF: isGIF) else { return "" }
+            return RedditPostMarkdown.mediaLink(label: isGIF ? "GIF" : "Image", url: url)
+        }
+
+        func mediaURL(id: String, isGIF: Bool) -> URL? {
+            if isGIF, let url = RedditPostMarkdown.giphyURL(id: id) { return url }
             let entry = media.first { $0.objectValue?["id"]?.stringValue == id }?.objectValue
-            let source = ["xxxlarge", "xxlarge", "xlarge", "large", "medium"].compactMap {
-                entry?[$0]?.objectValue?["url"]?.stringValue
-            }.first ?? entry?["url"]?.stringValue
-            guard let url = safeURL(source) else { return "" }
-            return "![Image](\(url.absoluteString.replacingOccurrences(of: ")", with: "%29")))"
+            let sizes = ["original", "xxxlarge", "xxlarge", "xlarge", "large", "medium", "small"]
+            let variants = sizes.compactMap { entry?[$0]?.objectValue }
+            let sources = [entry].compactMap { $0 } + variants
+            if isGIF, let animated = sources.lazy.compactMap({ safeURL($0["gif"]?.stringValue) }).first {
+                return animated
+            }
+            return (variants + [entry].compactMap { $0 }).lazy.compactMap {
+                safeURL($0["url"]?.stringValue)
+            }.first
         }
 
         func safeURL(_ source: String?) -> URL? {

@@ -20,3 +20,6 @@ Smoothly swipe right on posts to reveal communities.
 Gallery now fills Duo with four columns.
 Fixed gallery stuttering and jumping back to the top.
 Removed duplicate separators between subreddits.
+Fixed inline images and GIFs showing as text.
+Grouped consecutive inline images into galleries.
+Feeds show only the first inline image.
