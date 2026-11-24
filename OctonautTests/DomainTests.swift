@@ -685,6 +685,26 @@ final class DomainTests: XCTestCase {
         )
     }
 
+    func testInlineGIFDecodesDistinctFramesAndTheirDelays() async throws {
+        // Two one-pixel frames, red and blue, with 100 ms and 200 ms delays.
+        let data = try XCTUnwrap(Data(base64Encoded:
+            "R0lGODlhAQABAIAAAP8AAAAA/yH5BAAKAAAALAAAAAABAAEAAAICRAEAIfkEABQAAAAsAAAAAAEAAQAAAgJMAQA7"
+        ))
+        let frames = try XCTUnwrap(RedditImageFrames(data: data))
+        let firstFrame = await frames.frame(at: 0)
+        let secondFrame = await frames.frame(at: 1)
+        let first = try XCTUnwrap(firstFrame)
+        let second = try XCTUnwrap(secondFrame)
+        let frameCount = await frames.count
+
+        XCTAssertEqual(frameCount, 2)
+        XCTAssertEqual(Double(first.delay.components.attoseconds) / 1e18, 0.1, accuracy: 0.001)
+        XCTAssertEqual(Double(second.delay.components.attoseconds) / 1e18, 0.2, accuracy: 0.001)
+        let firstPixels = try XCTUnwrap(first.image.dataProvider?.data) as Data
+        let secondPixels = try XCTUnwrap(second.image.dataProvider?.data) as Data
+        XCTAssertNotEqual(firstPixels, secondPixels)
+    }
+
     func testMarkdownLeavesExternalAndCodeImageLinksAsText() {
         let source = "[External](https://example.com/image.png)\n```\nhttps://i.redd.it/code.png\n```"
 
@@ -1696,6 +1716,25 @@ final class DomainTests: XCTestCase {
         }
         XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/parentclip/DASH_480.mp4")
         XCTAssertEqual(thumbnailURL?.absoluteString, "https://preview.redd.it/parentclip.jpg")
+    }
+
+    func testWebsitePostResolvesEmbeddedMediaWithoutDuplicatingPrimaryImage() throws {
+        let object = try JSONDecoder().decode([String: RedditJSONValue].self, from: Data(#"""
+        {"id":"media-post","title":"Inline media","subreddit":"swift","is_self":true,
+        "permalink":"/r/swift/comments/media-post/",
+        "selftext":"![img](image)\n\n![gif](animation)",
+        "media_metadata":{"image":{"s":{"u":"https://preview.redd.it/image.png?width=640&amp;format=png"}},
+        "animation":{"s":{"gif":"https://preview.redd.it/animation.gif","u":"https://preview.redd.it/still.png"}}}}
+        """#.utf8))
+        let post = try XCTUnwrap(RedditJSONCodec.mapPost(object, kind: "t3"))
+        let card = PostCardModel(post: post)
+
+        XCTAssertEqual(card.bodyPreview, "")
+        XCTAssertEqual(card.bodyImages.map(\.url.absoluteString), [
+            "https://preview.redd.it/image.png?width=640&format=png",
+            "https://preview.redd.it/animation.gif",
+        ])
+        XCTAssertEqual(card.mediaKind, "none")
     }
 
     func testDirectImageURLInSelfTextBecomesNativeImage() async throws {

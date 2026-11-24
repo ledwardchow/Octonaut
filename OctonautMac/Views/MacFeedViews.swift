@@ -301,6 +301,16 @@ private struct MacPostMediaCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            if !post.bodyImages.isEmpty {
+                RedditMarkdownView(
+                    images: post.bodyImages,
+                    hidesMedia: post.isSensitive(
+                        blurringNSFW: dependencies.settings.blurNSFWMedia,
+                        blurringSpoilers: dependencies.settings.blurSpoilers
+                    )
+                )
+            }
+
             if post.hasMedia {
                 media
             }
@@ -879,10 +889,17 @@ struct MacPostDetailView: View {
                 .textSelection(.enabled)
 
             if !post.body.isEmpty {
-                RedditMarkdownView(source: post.body)
+                RedditMarkdownView(
+                    source: post.body,
+                    hidesMedia: post.isSensitive(
+                        blurringNSFW: dependencies.settings.blurNSFWMedia,
+                        blurringSpoilers: dependencies.settings.blurSpoilers
+                    )
+                )
                     .font(.body)
                     .tint(.accentColor)
                     .textSelection(.enabled)
+                    .id(post.id)
             }
 
             if post.mediaKind == "image", let mediaURL = post.mediaURL {

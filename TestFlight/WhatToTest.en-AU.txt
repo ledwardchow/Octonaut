@@ -21,3 +21,4 @@ Gallery now fills Duo with four columns.
 Fixed gallery stuttering and jumping back to the top.
 Removed duplicate separators between subreddits.
 Made signed-in custom feeds load faster.
+Fixed inline images and GIFs showing as text.

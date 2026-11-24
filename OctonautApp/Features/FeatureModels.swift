@@ -49,10 +49,13 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
     var title: String
     var body: String {
         didSet {
-            bodyPreview = body.isEmpty ? "" : RedditPostMarkdown.previewText(from: body)
+            let blocks = RedditPostMarkdown.blocks(from: body)
+            bodyPreview = RedditPostMarkdown.previewText(in: blocks)
+            bodyImages = RedditPostMarkdown.images(in: blocks)
         }
     }
     var bodyPreview: String
+    private(set) var bodyImages: [RedditMarkdownImage]
     var flair: Flair?
     var score: Int
     var comments: Int
@@ -186,7 +189,9 @@ struct PostCardModel: Identifiable, Hashable, Sendable {
         self.galleryURLs = galleryURLs
         self.audioURL = audioURL
         self.mediaAspectRatio = mediaAspectRatio
-        self.bodyPreview = bodyPreview ?? (body.isEmpty ? "" : RedditPostMarkdown.previewText(from: body))
+        let blocks = RedditPostMarkdown.blocks(from: body)
+        self.bodyPreview = bodyPreview ?? RedditPostMarkdown.previewText(in: blocks)
+        self.bodyImages = RedditPostMarkdown.images(in: blocks)
     }
 
     init(post: Post) {

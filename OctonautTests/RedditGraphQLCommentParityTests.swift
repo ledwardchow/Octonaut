@@ -49,6 +49,38 @@ final class RedditGraphQLCommentParityTests: XCTestCase {
         XCTAssertEqual(result?.plainText, "**bold** [link](https://example.com)")
     }
 
+    func testPostMarkdownResolvesEmbeddedImagesAndGiphyInOrder() throws {
+        let response = Data(#"""
+        {"data":{"postsInfoByIds":[{"__typename":"SubredditPost","id":"t3_post","title":"Post","isSelfPost":true,
+        "content":{"markdown":"**Caption**\n\n![img](first) ![gif](giphy|Example42) ![img](second)",
+        "richtextMedia":[{"id":"second","small":{"url":"https://preview.redd.it/second.png"}},
+        {"id":"first","large":{"url":"https://i.redd.it/first.png"}}]}}]}}
+        """#.utf8)
+        let post = try XCTUnwrap(RedditGraphQLCodec.posts(data: response, orderedIDs: ["t3_post"]).first)
+        let card = PostCardModel(post: post)
+
+        XCTAssertEqual(card.bodyPreview, "Caption")
+        XCTAssertEqual(card.bodyImages.map(\.url.absoluteString), [
+            "https://i.redd.it/first.png",
+            "https://media.giphy.com/media/Example42/giphy.gif",
+            "https://preview.redd.it/second.png",
+        ])
+        XCTAssertEqual(card.mediaKind, "none")
+    }
+
+    func testMarkdownLeavesLiteralAndUnknownMediaReferencesAlone() throws {
+        let content = try JSONDecoder().decode([String: RedditJSONValue].self, from: Data(#"""
+        {"markdown":"\u0060![img](media)\u0060\n\u0060\u0060\u0060\n![img](media)\n\u0060\u0060\u0060\n\\![img](media)\n![img](missing)\n![img](external)\n![img](media)",
+        "richtextMedia":[{"id":"media","url":"https://i.redd.it/image.png"},
+        {"id":"external","url":"https://example.com/image.png"}]}
+        """#.utf8))
+        let source = try XCTUnwrap(content["markdown"]?.stringValue)
+        let body = try XCTUnwrap(RedditGraphQLRichText.decode(content, thingID: "t1_text"))
+        let literalPrefix = String(source.dropLast("![img](media)".count))
+
+        XCTAssertEqual(body.plainText, literalPrefix + "![img](https://i.redd.it/image.png)")
+    }
+
     func testStructuredFallbackKeepsCodepointFormattingAndLinks() throws {
         let content = try JSONDecoder().decode([String: RedditJSONValue].self, from: Data(#"{"richtext":{"document":[{"e":"par","c":[{"e":"text","t":"😀é bold","f":[[1,4,4]]},{"e":"link","t":" site","u":"https://example.com"}]}]}}"#.utf8))
         let result = try XCTUnwrap(RedditGraphQLRichText.decode(content, thingID: "t1_text"))
