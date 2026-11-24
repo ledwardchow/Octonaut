@@ -503,6 +503,7 @@ final class RedditGraphQLReadMigrationTests: XCTestCase {
         let firstVariables = try XCTUnwrap(scenario.variables(for: "PostComments").first)
         XCTAssertEqual(firstVariables["id"] as? String, "t3_post")
         XCTAssertEqual(firstVariables["sortType"] as? String, "NEW")
+        XCTAssertEqual(firstVariables["includeCommentsHtmlField"] as? Bool, true)
         let focus = try XCTUnwrap(firstVariables["focusedCommentContext"] as? [String: Any])
         XCTAssertEqual(focus["commentId"] as? String, "t1_parent")
         XCTAssertEqual(focus["minDeepCommentParents"] as? Int, 3)

@@ -249,7 +249,7 @@ actor URLSessionRedditClient: RedditClient {
         let query = [
             URLQueryItem(name: "raw_json", value: "1"),
             URLQueryItem(name: "sort", value: sort.rawValue)
-        ]
+        ] + Self.commentMediaQuery
         let data = try await requestData(
             method: "GET",
             path: route.path,
@@ -871,9 +871,14 @@ actor URLSessionRedditClient: RedditClient {
                 URLQueryItem(name: "limit_children", value: "false"),
                 URLQueryItem(name: "sort", value: sort == .best ? "confidence" : sort.rawValue),
                 URLQueryItem(name: "raw_json", value: "1"),
-            ]
+            ] + commentMediaQuery
         )
     }
+
+    private static let commentMediaQuery = [
+        URLQueryItem(name: "raw_media_syntax", value: "1"),
+        URLQueryItem(name: "always_show_media", value: "1"),
+    ]
 
     private func acquireMoreCommentsRequest() async {
         if !isMoreCommentsRequestInFlight {

@@ -225,7 +225,7 @@ struct OctonautTabsView: View {
         let path: [FeatureRoute]
         switch screenshot {
         case "feeds": path = []
-        case "detail": path = [.feed(.home), .post(.screenshotCoast)]
+        case "detail", "comment-images": path = [.feed(.home), .post(.screenshotCoast)]
         default: path = [.feed(.home)]
         }
         _postsRouter = State(initialValue: OctonautFeatureRouter(path: path))

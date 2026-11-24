@@ -8,7 +8,7 @@ private enum CommentQuery {
 
     static let fragment: [String: GraphQLValue] = [
         "includeAwards": .bool(false),
-        "includeCommentsHtmlField": .bool(false),
+        "includeCommentsHtmlField": .bool(true),
         "includeIsGildable": .bool(false),
         "includeModerationInfo": .bool(false),
         "subredditUserPostEditingAllowed": .bool(false),

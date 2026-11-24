@@ -5,7 +5,7 @@ enum RedditGraphQLRichText {
         let shortID = thingID.hasPrefix("t1_") || thingID.hasPrefix("t3_") ? String(thingID.dropFirst(3)) : thingID
         let renderer = Renderer(media: content["richtextMedia"]?.arrayValue ?? [], thingID: shortID)
         if let markdown = content["markdown"]?.stringValue, !markdown.isEmpty {
-            return RichText(plainText: RedditPostMarkdown.resolvingMediaReferences(in: markdown) { id, isGIF in
+            return RichText(plainText: RedditPostMarkdown.resolvingMediaReferences(in: markdown, html: content["html"]?.stringValue) { id, isGIF in
                 renderer.mediaURL(id: id, isGIF: isGIF)
             })
         }
@@ -138,13 +138,15 @@ enum RedditGraphQLRichText {
         }
 
         func mediaMarkdown(_ node: [String: RedditJSONValue]) -> String {
-            guard let id = node["id"]?.stringValue else { return "" }
             if node["e"]?.stringValue == "video" {
+                guard let id = node["id"]?.stringValue else { return "" }
                 let url = "https://reddit.com/link/\(thingID)/video/\(id)/player"
                 return "[Video](\(url))"
             }
             let isGIF = node["e"]?.stringValue == "gif"
-            guard let url = mediaURL(id: id, isGIF: isGIF) else { return "" }
+            let url = node["id"]?.stringValue.flatMap { mediaURL(id: $0, isGIF: isGIF) }
+                ?? node["mediaUrl"]?.stringValue.flatMap(RedditPostMarkdown.redditImageURL(from:))
+            guard let url else { return "" }
             return RedditPostMarkdown.mediaLink(label: isGIF ? "GIF" : "Image", url: url)
         }
 

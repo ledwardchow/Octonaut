@@ -559,6 +559,8 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(query["limit_children"], "false")
         XCTAssertEqual(query["sort"], "top")
         XCTAssertEqual(query["raw_json"], "1")
+        XCTAssertEqual(query["raw_media_syntax"], "1")
+        XCTAssertEqual(query["always_show_media"], "1")
 
         let bestRoute = URLSessionRedditClient.moreCommentsRoute(
             postFullname: "t3_sample",
@@ -1801,6 +1803,22 @@ final class DomainTests: XCTestCase {
         }
         XCTAssertEqual(videoURL.absoluteString, "https://v.redd.it/parentclip/DASH_480.mp4")
         XCTAssertEqual(thumbnailURL?.absoluteString, "https://preview.redd.it/parentclip.jpg")
+    }
+
+    func testWebsiteCommentResolvesProcessingPlaceholderWithImageMetadata() throws {
+        let data = Data(#"""
+        [{"data":{"children":[{"kind":"t3","data":{"id":"thread","title":"Thread","subreddit":"swift",
+        "permalink":"/r/swift/comments/thread/title/"}}]}},{"data":{"children":[{"kind":"t1","data":{
+        "id":"image","author":"reader","parent_id":"t3_thread",
+        "body":"Processing img photo123...\n\n`Processing img photo123...`",
+        "media_metadata":{"photo123":{"s":{"u":"https://preview.redd.it/photo123.png"}}}}}]}}]
+        """#.utf8)
+        let thread = try RedditJSONCodec.decodeThread(data)
+        guard case .comment(let comment) = try XCTUnwrap(thread.comments.first) else { return XCTFail("Missing comment") }
+        let card = CommentCardModel(comment: comment)
+        let images = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: card.body))
+        XCTAssertEqual(images.map(\.url.absoluteString), ["https://preview.redd.it/photo123.png"])
+        XCTAssertTrue(card.body.hasSuffix("`Processing img photo123...`"))
     }
 
     func testWebsitePostResolvesEmbeddedMediaWithoutDuplicatingPrimaryImage() throws {

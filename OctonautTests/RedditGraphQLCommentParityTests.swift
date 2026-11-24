@@ -49,6 +49,34 @@ final class RedditGraphQLCommentParityTests: XCTestCase {
         XCTAssertEqual(result?.plainText, "**bold** [link](https://example.com)")
     }
 
+    func testCommentImagesResolveFromRenderedHTMLWhenMetadataIsMissing() throws {
+        let nodes = try decode(#"""
+        {"data":{"postInfoById":{"commentForest":{"trees":[{"depth":0,"node":{"__typename":"Comment","id":"t1_image",
+        "content":{"markdown":"**Before**\n\nProcessing img photo123...\n\n![img](another456)\n\n![img](missing)\n\nAfter",
+        "html":"<p><img src='https://preview.redd.it/caption-v0-another456.png'></p><p><a href='https://preview.redd.it/photo123.jpeg?width=640&amp;format=pjpg'>&lt;image&gt;</a><img src='https://example.com/missing.png'></p>"}
+        }}]}}}}
+        """#)
+        guard case .comment(let comment) = try XCTUnwrap(nodes.first) else { return XCTFail("Missing comment") }
+        let card = CommentCardModel(comment: comment)
+        let images = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: card.body))
+
+        XCTAssertEqual(images.map(\.url.absoluteString), [
+            "https://preview.redd.it/photo123.jpeg?width=640&format=pjpg",
+            "https://preview.redd.it/caption-v0-another456.png",
+        ])
+        XCTAssertTrue(card.body.hasPrefix("**Before**"))
+        XCTAssertTrue(card.body.contains("![img](missing)"))
+        XCTAssertTrue(card.body.hasSuffix("After"))
+    }
+
+    func testStructuredCommentImageCanCarryItsOwnURL() throws {
+        let content = try JSONDecoder().decode([String: RedditJSONValue].self, from: Data(#"""
+        {"richtext":{"document":[{"e":"img","mediaUrl":"https://i.redd.it/comment.png"}]}}
+        """#.utf8))
+        let body = try XCTUnwrap(RedditGraphQLRichText.decode(content, thingID: "t1_image"))
+        XCTAssertEqual(body.plainText, "![Image](https://i.redd.it/comment.png)")
+    }
+
     func testPostMarkdownResolvesEmbeddedImagesAndGiphyInOrder() throws {
         let response = Data(#"""
         {"data":{"postsInfoByIds":[{"__typename":"SubredditPost","id":"t3_post","title":"Post","isSelfPost":true,

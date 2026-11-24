@@ -180,6 +180,15 @@ private struct RedditMarkdownImageContent: View {
         }
         .onScrollVisibilityChange { isVisible = $0 }
         .task {
+#if DEBUG && os(iOS)
+            if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "comment-images",
+               url.absoluteString == "https://i.redd.it/octonaut-comment-fixture.png" {
+                frame = URL(string: "octonaut-screenshot://landscape-sizing")
+                    .flatMap { OctonautImageCache.cachedImage(for: $0)?.cgImage }
+                failed = frame == nil
+                return
+            }
+#endif
             do {
                 var request = URLRequest(url: url)
                 request.httpShouldHandleCookies = false
@@ -367,9 +376,13 @@ enum RedditPostMarkdown {
 
     static func resolvingMediaReferences(
         in markdown: String,
+        html: String? = nil,
         lookup: (String, Bool) -> URL?
     ) -> String {
-        guard markdown.contains("![img]") || markdown.contains("![gif]") else { return markdown }
+        guard markdown.contains("![img]") || markdown.contains("![gif]") || markdown.contains("Processing img ") else {
+            return markdown
+        }
+        let htmlImages = html.map(imageURLs(inHTML:)) ?? []
         var activeFence: Fence?
         let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         return lines.map { line in
@@ -384,12 +397,17 @@ enum RedditPostMarkdown {
             let range = NSRange(line.startIndex..., in: line)
             var result = line
             for match in mediaReferenceRegex.matches(in: line, range: range).reversed() {
-                guard let labelRange = Range(match.range(at: 2), in: line),
-                      let idRange = Range(match.range(at: 3), in: line),
-                      let url = lookup(String(line[idRange]), line[labelRange] == "gif"),
-                      let imageURL = redditImageURL(from: url.absoluteString),
-                      let replacementRange = Range(match.range, in: result) else { continue }
-                result.replaceSubrange(replacementRange, with: mediaLink(label: String(line[labelRange]), url: imageURL))
+                let label = Range(match.range(at: 2), in: line).map { String(line[$0]) } ?? "Image"
+                let idRange = Range(match.range(at: 3), in: line) ?? Range(match.range(at: 4), in: line)
+                guard let idRange, let replacementRange = Range(match.range, in: result) else { continue }
+                let id = String(line[idRange])
+                let imageURL = lookup(id, label == "gif").flatMap { redditImageURL(from: $0.absoluteString) }
+                    ?? htmlImages.first { url in
+                        let filename = url.deletingPathExtension().lastPathComponent
+                        return filename == id || filename.hasSuffix("-v0-" + id)
+                    }
+                guard let imageURL else { continue }
+                result.replaceSubrange(replacementRange, with: mediaLink(label: label, url: imageURL))
             }
             return result
         }.joined(separator: "\n")
@@ -410,8 +428,27 @@ enum RedditPostMarkdown {
 
     // The first two alternatives consume escaped characters and inline code.
     private static let mediaReferenceRegex = try! NSRegularExpression(
-        pattern: #"\\.|(?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\1(?!\x60)|!\[(img|gif)\]\(([A-Za-z0-9_|-]+)\)"#
+        pattern: #"\\.|(?<!\x60)(\x60+)(?!\x60).*?(?<!\x60)\1(?!\x60)|!\[(img|gif)\]\(([A-Za-z0-9_|-]+)\)|\bProcessing img ([A-Za-z0-9_-]+)\.\.\."#
     )
+
+    private static let htmlImageLinkRegex = try! NSRegularExpression(
+        pattern: #"<(?:img|a)\b[^<>]*?\s(?:src|href)\s*=\s*(["'])(.*?)\1"#,
+        options: .caseInsensitive
+    )
+
+    private static func imageURLs(inHTML html: String) -> [URL] {
+        // Some website responses escape the markup surrounding the image link.
+        let markup = html.contains("<") ? html : html
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        return htmlImageLinkRegex.matches(in: markup, range: NSRange(markup.startIndex..., in: markup)).compactMap {
+            guard let range = Range($0.range(at: 2), in: markup) else { return nil }
+            return redditImageURL(from: String(markup[range]))
+        }
+    }
 
     static func blocks(from source: String) -> [RedditMarkdownBlock] {
         guard !source.isEmpty else { return [] }
@@ -585,7 +622,7 @@ enum RedditPostMarkdown {
         }
     }()
 
-    private static func redditImageURL(from source: String) -> URL? {
+    static func redditImageURL(from source: String) -> URL? {
         let decoded = source.replacingOccurrences(of: "&amp;", with: "&")
         guard let url = URL(string: decoded), url.scheme?.lowercased() == "https" else {
             return nil

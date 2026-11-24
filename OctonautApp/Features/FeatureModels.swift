@@ -1221,6 +1221,15 @@ final class OctonautFeatureStore {
                     isCollapsed: false, children: []
                 )
             ]
+            if ProcessInfo.processInfo.environment["OCTONAUT_SCREENSHOT"] == "comment-images" {
+                let content: [String: RedditJSONValue] = [
+                    "markdown": .string("The colours are lovely. That path looks peaceful.\n\nProcessing img octonaut-comment-fixture..."),
+                    "html": .string(#"<p><a href="https://i.redd.it/octonaut-comment-fixture.png">&lt;image&gt;</a></p>"#),
+                ]
+                if let body = RedditGraphQLRichText.decode(content, thingID: comments[0].id) {
+                    comments[0].body = body.plainText
+                }
+            }
 #endif
         }
     }

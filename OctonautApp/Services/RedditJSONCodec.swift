@@ -874,7 +874,7 @@ enum RedditJSONCodec {
         media: [String: RedditJSONValue]?
     ) -> RichText? {
         guard let body = richText(plainText: plainText, html: html) else { return nil }
-        let markdown = RedditPostMarkdown.resolvingMediaReferences(in: body.plainText) { id, isGIF in
+        let markdown = RedditPostMarkdown.resolvingMediaReferences(in: body.plainText, html: html) { id, isGIF in
             let item = media?[id]?.objectValue
             let source = item?["s"]?.objectValue
             if isGIF, let gifURL = RedditPostMarkdown.giphyURL(id: id) ?? url(source?["gif"]?.stringValue) {
