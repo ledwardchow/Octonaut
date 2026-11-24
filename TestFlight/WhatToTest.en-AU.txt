@@ -20,6 +20,26 @@ Smoothly swipe right on posts to reveal communities.
 Gallery now fills Duo with four columns.
 Fixed gallery stuttering and jumping back to the top.
 Removed duplicate separators between subreddits.
+Made signed-in custom feeds load faster.
+Kept profile and search visible in Duo portrait.
+Removed duplicate profile and search tabs in Duo portrait.
+Used native bottom tabs in Duo portrait.
+Fixed navigation overlapping Settings and Inbox controls.
+Lowered bottom navigation and added Liquid Glass.
+Stopped hidden tabs loading before opening them.
+Matched Duo portrait Settings to the landscape layout.
+Fixed inbox updates after switching accounts.
+Fixed stale messages when changing inbox filters.
+Added retry for failed inbox read actions.
+Restored saved message drafts and their recipients.
+Added Save Draft when closing the composer.
+Protected Mac drafts when cancelling or pressing Escape.
+Removed unsupported reply notification options.
+Added more results to user searches.
 Fixed inline images and GIFs showing as text.
 Grouped consecutive inline images into galleries.
 Feeds show only the first inline image.
+Fixed hiding seen posts across Settings and feeds.
+Opening a post now marks it seen.
+Scrolling marks posts seen after a short pause.
+Added seen controls to Mac feeds.

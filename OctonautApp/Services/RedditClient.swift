@@ -8,6 +8,7 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
     case rateLimited(retryAfter: TimeInterval?)
     case authenticationRequired
     case accessDenied
+    case graphQLAccessDenied
     case anonymousAccessBlocked
     case notFound
     case malformedResponse
@@ -22,7 +23,7 @@ enum RedditClientError: Error, Sendable, Equatable, LocalizedError {
         case .rateLimited: return "Reddit is rate limiting requests. Try again shortly."
         case .authenticationRequired: return "This Reddit account needs to sign in again."
         case .anonymousAccessBlocked: return "Reddit's currently blocking unauthenticated requests; log in to continue."
-        case .accessDenied: return "Reddit denied access to this content."
+        case .accessDenied, .graphQLAccessDenied: return "Reddit denied access to this content."
         case .notFound: return "Reddit could not find this content."
         case .malformedResponse: return "Reddit returned data Octonaut could not read."
         case .reddit(let errors): return errors.joined(separator: ", ")
@@ -180,7 +181,7 @@ actor URLSessionRedditClient: RedditClient {
         let selectedAccount = account ?? accountFromScope(request.accountScope)
         if let selectedAccount {
             switch request.feed.destination {
-            case .home, .popular, .all, .community, .multireddit:
+            case .home, .popular, .all, .community, .combined, .multireddit:
                 return try await graphQL.listing(request, account: selectedAccount)
             case .user(let username, let section):
                 if section.isPrivateToOwner {

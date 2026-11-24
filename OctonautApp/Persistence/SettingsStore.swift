@@ -227,7 +227,13 @@ final class SettingsStore {
     var playFeedVideoAudio: Bool { didSet { persist(playFeedVideoAudio, key: Keys.playFeedVideoAudio) } }
     var enableLiveText: Bool { didSet { persist(enableLiveText, key: Keys.enableLiveText) } }
 
-    var hideSeenPosts: Bool { didSet { persist(hideSeenPosts, key: Keys.hideSeenPosts) } }
+    private(set) var hideSeenPostsRevision: UInt = 0
+    var hideSeenPosts: Bool {
+        didSet {
+            persist(hideSeenPosts, key: Keys.hideSeenPosts)
+            if hideSeenPosts != oldValue { hideSeenPostsRevision &+= 1 }
+        }
+    }
     var autoMarkSeenWhileScrolling: Bool { didSet { persist(autoMarkSeenWhileScrolling, key: Keys.autoMarkSeenWhileScrolling) } }
     var showFilterCount: Bool { didSet { persist(showFilterCount, key: Keys.showFilterCount) } }
 

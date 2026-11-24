@@ -45,6 +45,7 @@ struct MacComposerView: View {
 
     let context: MacComposerContext
     let onSubmitted: (MacComposerResult) -> Void
+    private let initialCommunity: String
 
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
@@ -57,6 +58,14 @@ struct MacComposerView: View {
     @State private var isPreviewing = false
     @State private var isSubmitting = false
     @State private var errorMessage: String?
+    @State private var errorTitle = "Could not send"
+    @State private var showingCloseOptions = false
+    @State private var isClosing = false
+    @State private var draftID = UUID()
+    @State private var draftAccountID: AccountID?
+    @State private var accountIsBound = false
+    @State private var draftSession: ComposerDraftSession?
+    @State private var hasSavedDraft = false
     @FocusState private var bodyIsFocused: Bool
 
     init(
@@ -66,8 +75,10 @@ struct MacComposerView: View {
         self.context = context
         self.onSubmitted = onSubmitted
         if case .post(let defaultCommunity) = context {
+            initialCommunity = defaultCommunity
             _community = State(initialValue: defaultCommunity)
         } else {
+            initialCommunity = ""
             _community = State(initialValue: "")
         }
     }
@@ -82,11 +93,19 @@ struct MacComposerView: View {
                 }
                 formattingBar
             }
+            .disabled(isSubmitting || isClosing)
             .navigationTitle(context.title)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", role: .cancel) { dismiss() }
+                    Button("Cancel", role: .cancel) {
+                        if hasContent || hasSavedDraft {
+                            showingCloseOptions = true
+                        } else {
+                            dismiss()
+                        }
+                    }
                         .keyboardShortcut(.cancelAction)
+                        .disabled(isSubmitting || isClosing)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button(isPreviewing ? "Edit" : "Preview") {
@@ -98,13 +117,20 @@ struct MacComposerView: View {
                         submit()
                     }
                     .keyboardShortcut(.return, modifiers: [.command])
-                    .disabled(!canSubmit || isSubmitting)
+                    .disabled(!canSubmit || isSubmitting || isClosing)
                 }
             }
         }
         .frame(minWidth: 580, idealWidth: 660, minHeight: 440, idealHeight: 560)
+        .confirmationDialog("Keep this draft?", isPresented: $showingCloseOptions, titleVisibility: .visible) {
+            if hasContent {
+                Button("Save Draft") { closeDraft(save: true) }
+            }
+            Button("Discard", role: .destructive) { closeDraft(save: false) }
+            Button("Keep Editing", role: .cancel) {}
+        }
         .alert(
-            "Could not send",
+            errorTitle,
             isPresented: Binding(
                 get: { errorMessage != nil },
                 set: { if !$0 { errorMessage = nil } }
@@ -114,7 +140,16 @@ struct MacComposerView: View {
         } message: {
             Text(errorMessage ?? "Unknown error")
         }
-        .onAppear { bodyIsFocused = context.isComment }
+        .task {
+            if !accountIsBound {
+                draftAccountID = dependencies.accounts.selectedAccountID
+                accountIsBound = true
+                draftSession = ComposerDraftSession(persistence: dependencies.persistence)
+            }
+            await restoreDraft()
+            bodyIsFocused = context.isComment
+        }
+        .interactiveDismissDisabled(hasContent || hasSavedDraft || isSubmitting || isClosing)
     }
 
     private var editor: some View {
@@ -248,6 +283,82 @@ struct MacComposerView: View {
         }
     }
 
+    private var hasContent: Bool {
+        !title.isEmpty || !bodyText.isEmpty || (context.isPost && postKind == .link && !linkText.isEmpty)
+            || (context.isPost && community != initialCommunity && !community.isEmpty)
+    }
+
+    private var draftKind: DraftKind {
+        context.isPost ? .post : .comment
+    }
+
+    private var draftTarget: String {
+        switch context {
+        case .post: community
+        case .comment(let postID, _): IDNormalization.fullname(postID, kind: "t3")
+        case .reply(let commentID, _): IDNormalization.fullname(commentID, kind: "t1")
+        }
+    }
+
+    private func restoreDraft() async {
+        guard !hasContent, !isClosing, let accountID = draftAccountID,
+              let drafts = try? await dependencies.persistence.loadDrafts(accountID: accountID) else { return }
+        let target = draftTarget
+        let match = Draft.newestMatching(
+            in: drafts,
+            kind: draftKind,
+            target: target,
+            anyTargetWhenEmpty: context.isPost
+        )
+        guard let match, !hasContent, !isClosing else { return }
+        draftID = match.id
+        hasSavedDraft = true
+        title = match.title
+        bodyText = match.body
+        if let restoredLink = match.link {
+            linkText = restoredLink.absoluteString
+            postKind = .link
+        }
+        if context.isPost, community.isEmpty { community = match.target ?? "" }
+    }
+
+    private func closeDraft(save: Bool) {
+        guard !isClosing else { return }
+        isClosing = true
+        Task {
+            do {
+                guard let draftSession else { throw MacComposerDraftError.notReady }
+                let operation: ComposerDraftSession.Finish
+                if save && hasContent {
+                    guard let draft = currentDraft else { throw MacComposerDraftError.accountRequired }
+                    operation = .save(draft)
+                } else {
+                    operation = .discard
+                }
+                try await draftSession.finish(operation, id: draftID)
+                dismiss()
+            } catch {
+                isClosing = false
+                errorTitle = save ? "Could not save draft" : "Could not discard draft"
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private var currentDraft: Draft? {
+        guard hasContent, let accountID = draftAccountID else { return nil }
+        return Draft(
+            id: draftID,
+            kind: draftKind,
+            accountID: accountID,
+            target: draftTarget,
+            title: title,
+            body: bodyText,
+            link: postKind == .link ? URL(string: linkText) : nil,
+            modifiedAt: .now
+        )
+    }
+
     private var normalizedCommunity: String {
         var value = community.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.lowercased().hasPrefix("r/") { value.removeFirst(2) }
@@ -266,9 +377,11 @@ struct MacComposerView: View {
     }
 
     private func submit() {
-        guard canSubmit else { return }
+        guard canSubmit, !isSubmitting, !isClosing else { return }
         guard let account = dependencies.accounts.selectedAccount,
-              account.health != .needsLogin else {
+              account.health != .needsLogin,
+              account.id == draftAccountID else {
+            errorTitle = "Could not send"
             errorMessage = "Select a signed-in Reddit account before sending."
             return
         }
@@ -300,18 +413,26 @@ struct MacComposerView: View {
         }
 
         isSubmitting = true
+        let draftSession = self.draftSession
         Task {
             do {
                 _ = try await dependencies.authenticated.perform(action, accountID: account.id)
+                if let draftSession {
+                    try? await draftSession.finish(.discard, id: draftID)
+                } else {
+                    try? await dependencies.persistence.deleteDraft(draftID)
+                }
                 isSubmitting = false
                 dismiss()
                 onSubmitted(result)
             } catch let error as RedditClientError where error == .authenticationRequired {
                 await dependencies.accounts.markNeedsLogin(account.id)
                 isSubmitting = false
+                errorTitle = "Could not send"
                 errorMessage = "Your Reddit session expired. Sign in again from Accounts."
             } catch {
                 isSubmitting = false
+                errorTitle = "Could not send"
                 errorMessage = error.localizedDescription
             }
         }
@@ -319,10 +440,27 @@ struct MacComposerView: View {
 }
 
 private extension MacComposerContext {
+    var isPost: Bool {
+        if case .post = self { return true }
+        return false
+    }
+
     var isComment: Bool {
         switch self {
         case .post: false
         case .comment, .reply: true
+        }
+    }
+}
+
+private enum MacComposerDraftError: LocalizedError {
+    case accountRequired
+    case notReady
+
+    var errorDescription: String? {
+        switch self {
+        case .accountRequired: "Select a Reddit account before saving this draft."
+        case .notReady: "Wait for the draft to finish loading, then try again."
         }
     }
 }

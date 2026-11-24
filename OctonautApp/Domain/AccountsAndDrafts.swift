@@ -105,6 +105,86 @@ struct Draft: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+extension Draft {
+    static func newestMatching(
+        in drafts: [Draft],
+        kind: DraftKind,
+        target: String,
+        anyTargetWhenEmpty: Bool
+    ) -> Draft? {
+        drafts
+            .filter {
+                $0.kind == kind
+                    && (anyTargetWhenEmpty && target.isEmpty || ($0.target ?? "") == target)
+            }
+            .max { $0.modifiedAt < $1.modifiedAt }
+    }
+}
+
+@MainActor
+final class ComposerDraftSession {
+    enum Finish {
+        case save(Draft)
+        case discard
+    }
+
+    private let save: (Draft) async throws -> Void
+    private let delete: (UUID) async throws -> Void
+    private var pendingWrite: Task<Void, Never>?
+    private(set) var isClosed = false
+    var hasPendingWrite: Bool { pendingWrite != nil }
+
+    init(persistence: any PersistenceStore) {
+        self.save = { try await persistence.saveDraft($0) }
+        self.delete = { try await persistence.deleteDraft($0) }
+    }
+
+    init(
+        save: @escaping (Draft) async throws -> Void,
+        delete: @escaping (UUID) async throws -> Void
+    ) {
+        self.save = save
+        self.delete = delete
+    }
+
+    func schedule(_ draft: Draft?, id: UUID) {
+        guard !isClosed else { return }
+        let previous = pendingWrite
+        previous?.cancel()
+        pendingWrite = Task {
+            await previous?.value
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+            guard !isClosed else { return }
+            if let draft {
+                try? await save(draft)
+            } else {
+                try? await delete(id)
+            }
+        }
+    }
+
+    func drain() async {
+        let pending = pendingWrite
+        pending?.cancel()
+        await pending?.value
+    }
+
+    func finish(_ operation: Finish, id: UUID) async throws {
+        guard !isClosed else { return }
+        isClosed = true
+        await drain()
+        do {
+            switch operation {
+            case .save(let draft): try await save(draft)
+            case .discard: try await delete(id)
+            }
+        } catch {
+            isClosed = false
+            throw error
+        }
+    }
+}
+
 struct ExportJob: Hashable, Codable, Sendable, Identifiable {
     let id: UUID
     var progress: Double

@@ -235,3 +235,33 @@ extension View {
         modifier(LoginRequirementModifier(isPresented: isPresented))
     }
 }
+
+struct FeedCommunityFailureNotice: View {
+    let failures: [FeedCommunityFailure]
+    let retry: () -> Void
+
+    var body: some View {
+        if !failures.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Some communities couldn't load", systemImage: "exclamationmark.triangle")
+                    .font(.subheadline.weight(.semibold))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(failures, id: \.community) { failure in
+                            Text("r/\(failure.community): \(failure.message)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 80)
+                Button("Retry", action: retry)
+                    .buttonStyle(.bordered)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.bar)
+        }
+    }
+}

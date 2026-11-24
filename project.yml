@@ -101,6 +101,7 @@ targets:
       - path: OctonautApp/Features/Reporting
       - path: OctonautApp/Features/FeatureLoadState.swift
       - path: OctonautApp/Features/FeatureModels.swift
+      - path: OctonautApp/Features/MarkPostSeenWhileVisible.swift
       - path: OctonautApp/Features/Search/SearchRuntime.swift
       - path: OctonautMac
       - path: OctonautApp/Assets.xcassets

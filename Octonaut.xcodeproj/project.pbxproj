@@ -146,6 +146,10 @@
 		40D55A1C03BCA53E26BB6B1F /* RedditGraphQLCommentParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CBD99713225791DC8F8523A /* RedditGraphQLCommentParityTests.swift */; };
 		8C80AA10807D3AE00B6F2EA6 /* RedditGraphQLReadMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C3B85F3F9455568E143AFCE /* RedditGraphQLReadMigrationTests.swift */; };
 		576D7AAAD0379797A3A29321 /* RedditGraphQLProfileParityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0050648ECADBE4447BFC2F56 /* RedditGraphQLProfileParityTests.swift */; };
+		03AB8C9FDF67601B7113A00A /* InboxRequestStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2B6D21A2F4BDA6B0AC1FD29 /* InboxRequestStateTests.swift */; };
+		1F7E5B5DF6AC2351C837FE88 /* MarkPostSeenWhileVisible.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78A4ED878528BC1063B72941 /* MarkPostSeenWhileVisible.swift */; };
+		B2CFA332F0DB0B04E791DB8B /* MarkPostSeenWhileVisible.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78A4ED878528BC1063B72941 /* MarkPostSeenWhileVisible.swift */; };
+		E82A8D0D4025251B6D27DCE6 /* UserSearchPaginationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF8586811ABDCC32B69992F0 /* UserSearchPaginationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -257,6 +261,9 @@
 		8CBD99713225791DC8F8523A /* RedditGraphQLCommentParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditGraphQLCommentParityTests.swift; sourceTree = "<group>"; };
 		1C3B85F3F9455568E143AFCE /* RedditGraphQLReadMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditGraphQLReadMigrationTests.swift; sourceTree = "<group>"; };
 		0050648ECADBE4447BFC2F56 /* RedditGraphQLProfileParityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RedditGraphQLProfileParityTests.swift; sourceTree = "<group>"; };
+		78A4ED878528BC1063B72941 /* MarkPostSeenWhileVisible.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkPostSeenWhileVisible.swift; sourceTree = "<group>"; };
+		A2B6D21A2F4BDA6B0AC1FD29 /* InboxRequestStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxRequestStateTests.swift; sourceTree = "<group>"; };
+		FF8586811ABDCC32B69992F0 /* UserSearchPaginationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserSearchPaginationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -346,6 +353,7 @@
 				A109F05D6AB9A77F78B2AD66 /* Search */,
 				B9E9AAD9CCD2AC36098A15A5 /* Settings */,
 				008D4295D6BE53BBBF2036FC /* FeatureLoadState.swift */,
+				78A4ED878528BC1063B72941 /* MarkPostSeenWhileVisible.swift */,
 				3E07930B4DE408F45C34596E /* FeatureModels.swift */,
 				F229AD88D7466DB47476E940 /* FeatureShell.swift */,
 				B97B8C2326D533E9D1C7B982 /* NOTES.md */,
@@ -568,6 +576,8 @@
 			isa = PBXGroup;
 			children = (
 				C6E2CF45C950F812138A6C37 /* DomainTests.swift */,
+				FF8586811ABDCC32B69992F0 /* UserSearchPaginationTests.swift */,
+				A2B6D21A2F4BDA6B0AC1FD29 /* InboxRequestStateTests.swift */,
 				E07A5BDE3E3E26B50D788109 /* IntelligenceTests.swift */,
 				97D8FBBD2A0A0743808A5793 /* LegalDocumentsTests.swift */,
 				DA26AD5A1014E91707FDDDD7 /* PersistenceTests.swift */,
@@ -757,6 +767,7 @@
 				FFED5E0582A677857B4B6D6B /* DeterministicExcerpts.swift in Sources */,
 				B1B61E3AA2884886E66F2F8D /* FeatureLoadState.swift in Sources */,
 				70458AE8255997DDB0BABD86 /* FeatureModels.swift in Sources */,
+				B2CFA332F0DB0B04E791DB8B /* MarkPostSeenWhileVisible.swift in Sources */,
 				49993C78529346214E1B5A2E /* FeatureShell.swift in Sources */,
 				FD5331EB21B7C81B7F751882 /* FixtureRedditClient.swift in Sources */,
 				B928A87382A758EF3E7D7360 /* Fixtures.swift in Sources */,
@@ -824,6 +835,7 @@
 				8F67E8978EAB56139ADDFFB5 /* DeterministicExcerpts.swift in Sources */,
 				0B8DE71E9DEE38AFB34CBE4B /* FeatureLoadState.swift in Sources */,
 				D45DA5ECD551FE33012A820B /* FeatureModels.swift in Sources */,
+				1F7E5B5DF6AC2351C837FE88 /* MarkPostSeenWhileVisible.swift in Sources */,
 				152A4EECDD4550E1DE717E0E /* FixtureRedditClient.swift in Sources */,
 				59FC60452946E51688EC6F2A /* Fixtures.swift in Sources */,
 				7330BE0CE22C6F1777944187 /* HelpIndex.swift in Sources */,
@@ -869,6 +881,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				5D77E4C6FD535113E09D857B /* DomainTests.swift in Sources */,
+				E82A8D0D4025251B6D27DCE6 /* UserSearchPaginationTests.swift in Sources */,
+				03AB8C9FDF67601B7113A00A /* InboxRequestStateTests.swift in Sources */,
 				ECE94269A5C26972FAF3BD26 /* IntelligenceTests.swift in Sources */,
 				B6407F4441F7984D96A3B45B /* LegalDocumentsTests.swift in Sources */,
 				3E5EB1E81D32870F4429D4C5 /* PersistenceTests.swift in Sources */,

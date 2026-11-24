@@ -1,6 +1,108 @@
 import SwiftUI
 import UIKit
 
+struct InboxRequestScope {
+    let account: AccountSelectionToken
+    let filterGeneration: UInt
+
+    func matches(account currentAccount: AccountSelectionToken, filterGeneration currentFilterGeneration: UInt) -> Bool {
+        account == currentAccount && filterGeneration == currentFilterGeneration
+    }
+
+    func matchesAccount(_ currentAccount: AccountSelectionToken) -> Bool {
+        account == currentAccount
+    }
+}
+
+struct InboxReadRequest {
+    let scope: InboxRequestScope
+    let id: String
+    let read: Bool
+    let previousUnread: Bool?
+    let requestID: UUID
+}
+
+struct InboxRequestState {
+    private(set) var filterGeneration: UInt = 0
+    private var latestReadRequests: [String: UUID] = [:]
+    private var latestMarkAllReadRequest: UUID?
+    private var readsAtMarkAllStart: [String: UUID] = [:]
+
+    func scope(for account: AccountSelectionToken) -> InboxRequestScope {
+        InboxRequestScope(account: account, filterGeneration: filterGeneration)
+    }
+
+    @MainActor
+    mutating func changeFilter(store: OctonautFeatureStore) {
+        store.inbox = []
+        filterGeneration &+= 1
+        latestReadRequests.removeAll()
+    }
+
+    mutating func changeAccount() {
+        filterGeneration &+= 1
+        latestReadRequests.removeAll()
+        latestMarkAllReadRequest = nil
+    }
+
+    @MainActor
+    mutating func beginRead(_ id: String, read: Bool, account: AccountSelectionToken, store: OctonautFeatureStore) -> InboxReadRequest {
+        let request = UUID()
+        latestReadRequests[id] = request
+        let index = store.inbox.firstIndex(where: { $0.id == id })
+        let previousUnread = index.map { store.inbox[$0].isUnread }
+        if let index { store.inbox[index].isUnread = !read }
+        return InboxReadRequest(
+            scope: scope(for: account), id: id, read: read,
+            previousUnread: previousUnread, requestID: request
+        )
+    }
+
+    @MainActor
+    func failRead(_ request: InboxReadRequest, currentAccount: AccountSelectionToken, store: OctonautFeatureStore) -> Bool {
+        guard request.scope.matches(account: currentAccount, filterGeneration: filterGeneration),
+              latestReadRequests[request.id] == request.requestID else { return false }
+        if let previousUnread = request.previousUnread,
+           let index = store.inbox.firstIndex(where: { $0.id == request.id }),
+           store.inbox[index].isUnread == !request.read {
+            store.inbox[index].isUnread = previousUnread
+        }
+        return true
+    }
+
+    mutating func beginMarkAllRead() -> UUID {
+        let request = UUID()
+        latestMarkAllReadRequest = request
+        readsAtMarkAllStart = latestReadRequests
+        return request
+    }
+
+    @MainActor
+    mutating func applyMarkAllRead(_ request: UUID, scope: InboxRequestScope,
+                                   currentAccount: AccountSelectionToken, store: OctonautFeatureStore) -> Bool {
+        guard scope.matchesAccount(currentAccount), latestMarkAllReadRequest == request else { return false }
+        let newerReads = latestReadRequests.filter { readsAtMarkAllStart[$0.key] != $0.value }
+        let preservedRows = store.inbox.filter { newerReads[$0.id] != nil }
+        latestReadRequests = newerReads
+        store.markAllRead()
+        for row in preservedRows {
+            if let index = store.inbox.firstIndex(where: { $0.id == row.id }) {
+                store.inbox[index].isUnread = row.isUnread
+            }
+        }
+        return true
+    }
+
+    func isLatestMarkAllRead(_ request: UUID) -> Bool {
+        latestMarkAllReadRequest == request
+    }
+}
+
+private struct InboxReadFailure {
+    let action: RedditAction
+    let message: String
+}
+
 @MainActor
 struct InboxRootView: View {
     let store: OctonautFeatureStore
@@ -14,6 +116,8 @@ struct InboxRootView: View {
     @State private var loadError: String?
     @State private var nextInboxPage: String?
     @State private var loadMoreError: String?
+    @State private var requestState = InboxRequestState()
+    @State private var readFailure: InboxReadFailure?
 
     private var items: [InboxCardModel] {
         guard filter != "Unread" else { return store.inbox.filter(\.isUnread) }
@@ -29,6 +133,14 @@ struct InboxRootView: View {
                 ContentUnavailableView("Sign in again", systemImage: "person.crop.circle.badge.exclamationmark", description: Text("This Reddit session has expired. Reauthenticate from the Account tab."))
             } else {
                 List {
+                    if let readFailure {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(readFailure.message)
+                            Button("Retry") { retryReadAction(readFailure.action) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowSeparator(.hidden)
+                    }
                     if isLoading && items.isEmpty {
                         ProgressView("Loading inbox…")
                     } else if let loadError, items.isEmpty {
@@ -36,6 +148,11 @@ struct InboxRootView: View {
                         Button("Try Again") { Task { await refreshLiveInbox() } }
                     } else if items.isEmpty {
                         ContentUnavailableView("Inbox is empty", systemImage: "tray", description: Text("New replies and messages will appear here."))
+                            .listRowSeparator(.hidden)
+                    }
+                    if let loadError, !items.isEmpty {
+                        Text(loadError)
+                            .foregroundStyle(.secondary)
                             .listRowSeparator(.hidden)
                     }
                     ForEach(items) { item in
@@ -87,7 +204,7 @@ struct InboxRootView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
                     ForEach(["All", "Unread", "Replies", "Post Replies", "Mentions", "Messages"], id: \.self) { value in
-                        Button { filter = value } label: {
+                        Button { selectFilter(value) } label: {
                             if filter == value { Label(value, systemImage: "checkmark") } else { Text(value) }
                         }
                     }
@@ -112,19 +229,34 @@ struct InboxRootView: View {
             Button("Mark All Read") { markAllRead() }
             Button("Cancel", role: .cancel) {}
         }
-        .onChange(of: dependencies.accounts.selectionGeneration) { selectedItem = nil }
+        .onChange(of: dependencies.accounts.selectionGeneration) {
+            selectedItem = nil
+            readFailure = nil
+            requestState.changeAccount()
+        }
         .task(id: inboxRefreshKey) { await refreshLiveInbox() }
     }
 
     private var inboxRefreshKey: String {
-        "\(filter):\(dependencies.accounts.selectedAccountID?.description ?? "anonymous"):\(dependencies.accounts.selectionGeneration)"
+        "\(filter):\(requestState.filterGeneration):\(dependencies.accounts.selectedAccountID?.description ?? "anonymous"):\(dependencies.accounts.selectionGeneration)"
+    }
+
+    private func selectFilter(_ value: String) {
+        guard filter != value else { return }
+        nextInboxPage = nil
+        loadError = nil
+        loadMoreError = nil
+        readFailure = nil
+        isLoading = true
+        requestState.changeFilter(store: store)
+        filter = value
     }
 
     private func refreshLiveInbox() async {
         guard let accountID = dependencies.accounts.selectedAccountID else {
             return
         }
-        let token = dependencies.accounts.token(for: accountID)
+        let scope = requestState.scope(for: dependencies.accounts.token(for: accountID))
         let refreshKey = inboxRefreshKey
         isLoading = true
         loadError = nil
@@ -133,13 +265,15 @@ struct InboxRootView: View {
         defer { if refreshKey == inboxRefreshKey { isLoading = false } }
         do {
             let page = try await dependencies.authenticated.fetchInbox(section: sectionForFilter, accountID: accountID)
-            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey, !Task.isCancelled else { return }
+            guard scope.matches(account: dependencies.accounts.token(), filterGeneration: requestState.filterGeneration),
+                  refreshKey == inboxRefreshKey, !Task.isCancelled else { return }
             store.inbox = page.items.map(cardModel)
             nextInboxPage = page.after
         } catch is CancellationError {
             return
         } catch {
-            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey else { return }
+            guard scope.matches(account: dependencies.accounts.token(), filterGeneration: requestState.filterGeneration),
+                  refreshKey == inboxRefreshKey else { return }
             loadError = error.localizedDescription
             if error as? RedditClientError == .authenticationRequired {
                 await dependencies.accounts.markNeedsLogin(accountID)
@@ -150,12 +284,13 @@ struct InboxRootView: View {
     /// Appends the next page of older items.
     private func loadMoreInbox() async {
         guard let accountID = dependencies.accounts.selectedAccountID, let after = nextInboxPage else { return }
-        let token = dependencies.accounts.token(for: accountID)
+        let scope = requestState.scope(for: dependencies.accounts.token(for: accountID))
         let refreshKey = inboxRefreshKey
         loadMoreError = nil
         do {
             let page = try await dependencies.authenticated.fetchInbox(section: sectionForFilter, after: after, accountID: accountID)
-            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey,
+            guard scope.matches(account: dependencies.accounts.token(), filterGeneration: requestState.filterGeneration),
+                  refreshKey == inboxRefreshKey,
                   nextInboxPage == after, !Task.isCancelled else { return }
             let existing = Set(store.inbox.map(\.id))
             store.inbox.append(contentsOf: page.items.map(cardModel).filter { !existing.contains($0.id) })
@@ -163,7 +298,8 @@ struct InboxRootView: View {
         } catch is CancellationError {
             return
         } catch {
-            guard dependencies.accounts.isCurrent(token), refreshKey == inboxRefreshKey else { return }
+            guard scope.matches(account: dependencies.accounts.token(), filterGeneration: requestState.filterGeneration),
+                  refreshKey == inboxRefreshKey else { return }
             loadMoreError = error.localizedDescription
             if error as? RedditClientError == .authenticationRequired {
                 await dependencies.accounts.markNeedsLogin(accountID)
@@ -199,32 +335,62 @@ struct InboxRootView: View {
     }
 
     private func markRead(_ item: InboxCardModel) {
-        let newReadState = item.isUnread
-        if let index = store.inbox.firstIndex(where: { $0.id == item.id }) {
-            store.inbox[index].isUnread = !newReadState
-        }
+        performRead(fullname: item.id, read: item.isUnread)
+    }
+
+    private func performRead(fullname: String, read: Bool) {
         guard let accountID = dependencies.accounts.selectedAccountID else { return }
+        let request = requestState.beginRead(
+            fullname, read: read, account: dependencies.accounts.token(for: accountID), store: store
+        )
+        readFailure = nil
         Task {
             do {
-                _ = try await dependencies.authenticated.perform(.markRead(fullname: item.id, read: newReadState), accountID: accountID)
-            } catch let error as RedditClientError where error == .authenticationRequired {
-                await dependencies.accounts.markNeedsLogin(accountID)
-                if let index = store.inbox.firstIndex(where: { $0.id == item.id }) { store.inbox[index].isUnread = newReadState }
+                let result = try await dependencies.authenticated.perform(.markRead(fullname: fullname, read: read), accountID: accountID)
+                guard result.succeeded else {
+                    throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not update this inbox item."])
+                }
             } catch {
-                if let index = store.inbox.firstIndex(where: { $0.id == item.id }) { store.inbox[index].isUnread = newReadState }
+                guard requestState.failRead(request, currentAccount: dependencies.accounts.token(), store: store) else { return }
+                readFailure = InboxReadFailure(action: .markRead(fullname: fullname, read: read), message: error.localizedDescription)
+                if error as? RedditClientError == .authenticationRequired {
+                    await dependencies.accounts.markNeedsLogin(accountID)
+                }
             }
         }
     }
 
     private func markAllRead() {
         guard let accountID = dependencies.accounts.selectedAccountID else { return }
+        let scope = requestState.scope(for: dependencies.accounts.token(for: accountID))
+        let request = requestState.beginMarkAllRead()
+        readFailure = nil
         Task {
             do {
-                _ = try await dependencies.authenticated.perform(.markAllRead, accountID: accountID)
-                store.markAllRead()
-            } catch let error as RedditClientError where error == .authenticationRequired {
-                await dependencies.accounts.markNeedsLogin(accountID)
-            } catch {}
+                let result = try await dependencies.authenticated.perform(.markAllRead, accountID: accountID)
+                guard result.succeeded else {
+                    throw RedditClientError.reddit(errors: [result.message ?? "Reddit could not mark the inbox as read."])
+                }
+                guard requestState.applyMarkAllRead(
+                    request, scope: scope, currentAccount: dependencies.accounts.token(), store: store
+                ) else { return }
+                readFailure = nil
+            } catch {
+                guard scope.matchesAccount(dependencies.accounts.token()),
+                      requestState.isLatestMarkAllRead(request) else { return }
+                readFailure = InboxReadFailure(action: .markAllRead, message: error.localizedDescription)
+                if error as? RedditClientError == .authenticationRequired {
+                    await dependencies.accounts.markNeedsLogin(accountID)
+                }
+            }
+        }
+    }
+
+    private func retryReadAction(_ action: RedditAction) {
+        switch action {
+        case .markRead(let fullname, let read): performRead(fullname: fullname, read: read)
+        case .markAllRead: markAllRead()
+        default: break
         }
     }
 

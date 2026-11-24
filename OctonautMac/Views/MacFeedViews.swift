@@ -14,6 +14,13 @@ struct MacFeedListView: View {
     @State private var blockTarget: String?
     @State private var actionError: String?
 
+    private var selectedPostID: Binding<String?> {
+        Binding(
+            get: { selectedPost?.id },
+            set: { id in selectedPost = store.visibleFeedPosts.first { $0.id == id } }
+        )
+    }
+
     var body: some View {
         Group {
             switch store.feedState {
@@ -35,7 +42,7 @@ struct MacFeedListView: View {
                     description: Text("This feed is empty or its posts were filtered.")
                 )
             default:
-                List(selection: dependencies.settings.feedLayout == .full ? nil : $selectedPost) {
+                List(selection: dependencies.settings.feedLayout == .full ? nil : selectedPostID) {
                     if store.visibleFeedFilteredPostCount > 0 {
                         Label(
                             "\(store.visibleFeedFilteredPostCount) posts hidden by filters",
@@ -62,7 +69,7 @@ struct MacFeedListView: View {
                             }
                         }
                             .contentShape(Rectangle())
-                            .tag(post)
+                            .tag(post.id)
                             .overlay(alignment: .leading) {
                                 if dependencies.settings.feedLayout == .full,
                                    selectedPost?.id == post.id {
@@ -78,6 +85,7 @@ struct MacFeedListView: View {
                                     selectedPost = post
                                 }
                             )
+                            .modifier(MarkPostSeenWhileVisible(post: post, enabled: dependencies.settings.autoMarkSeenWhileScrolling, store: store))
                             .listRowInsets(
                                 dependencies.settings.feedLayout == .full
                                     ? EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4)
@@ -98,6 +106,9 @@ struct MacFeedListView: View {
 
                                 Button(post.vote == -1 ? "Remove Downvote" : "Downvote") {
                                     performVote(post, value: post.vote == -1 ? 0 : -1)
+                                }
+                                Button(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye") {
+                                    store.markSeen(postID: post.id)
                                 }
 
                                 Divider()
@@ -174,6 +185,11 @@ struct MacFeedListView: View {
                     .background(.bar)
                     .overlay(alignment: .bottom) { Divider() }
                 }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            FeedCommunityFailureNotice(failures: store.feedCommunityFailures) {
+                Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
             }
         }
         .sheet(item: $reportTarget) { ReportContentView(target: $0) }

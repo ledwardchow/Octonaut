@@ -6,6 +6,8 @@ struct ComposerView: View {
     let store: OctonautFeatureStore
     let targetID: String?
     let onSubmitted: (() -> Void)?
+    private let initialCommunity: String
+    private let initialRecipient: String
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.dismiss) private var dismiss
     @State private var community = ""
@@ -22,6 +24,12 @@ struct ComposerView: View {
     @State private var sending = false
     @State private var draftID = UUID()
     @State private var draftAccountID: AccountID?
+    @State private var accountIsBound = false
+    @State private var draftReady = false
+    @State private var draftClosed = false
+    @State private var hasSavedDraft = false
+    @State private var draftSession: ComposerDraftSession?
+    @State private var draftErrorTitle: String?
     @FocusState private var isBodyFocused: Bool
 
     init(
@@ -36,13 +44,17 @@ struct ComposerView: View {
         self.store = store
         self.targetID = targetID
         self.onSubmitted = onSubmitted
+        self.initialCommunity = community
+        self.initialRecipient = recipient
         _community = State(initialValue: community)
         _recipient = State(initialValue: recipient)
     }
 
-    private var isDirty: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty || !community.isEmpty || !recipient.isEmpty }
-    /// Text the user typed, as opposed to a prefilled community or recipient.
-    private var hasContent: Bool { !title.isEmpty || !bodyText.isEmpty || !link.isEmpty }
+    private var hasContent: Bool {
+        !title.isEmpty || !bodyText.isEmpty || (kind == .post && postType == "Link" && !link.isEmpty)
+            || (kind == .post && community != initialCommunity && !community.isEmpty)
+            || (kind == .message && recipient != initialRecipient && !recipient.isEmpty)
+    }
     private var draftFields: [String] { [title, bodyText, link, community, recipient, postType] }
     private var isPostComment: Bool { kind == .comment && targetID?.hasPrefix("t3_") == true }
     private var canSubmit: Bool {
@@ -128,38 +140,50 @@ struct ComposerView: View {
                                     }
                                 }
                         }
-                        Section {
-                            Toggle("Send me reply notifications", isOn: $sendReplies)
+                        if kind == .post {
+                            Section {
+                                Toggle("Send me reply notifications", isOn: $sendReplies)
+                            }
                         }
                     }
                 }
                 formattingBar
             }
+            .disabled(sending || draftClosed)
             .navigationTitle(isPostComment ? "Comment" : kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        if isDirty { showingDiscard = true } else { dismiss() }
+                        if hasContent || hasSavedDraft {
+                            showingDiscard = true
+                        } else if draftSession?.hasPendingWrite != true || kind == .edit {
+                            draftClosed = true
+                            dismiss()
+                        } else {
+                            finishDraft(save: false)
+                        }
                     }
+                    .disabled(sending || draftClosed)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(submitTitle) { submit() }
-                        .disabled(!canSubmit || sending)
+                        .disabled(!canSubmit || sending || draftClosed)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(isPreview ? "Edit" : "Preview") { isPreview.toggle() }
                 }
             }
-            .confirmationDialog("Discard this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
+            .confirmationDialog(kind == .edit ? "Discard changes?" : "Keep this draft?", isPresented: $showingDiscard, titleVisibility: .visible) {
+                if kind != .edit && hasContent {
+                    Button("Save Draft") { finishDraft(save: true) }
+                }
                 Button("Discard", role: .destructive) {
-                    let id = draftID
-                    Task { try? await dependencies.persistence.deleteDraft(id) }
-                    dismiss()
+                    finishDraft(save: false)
                 }
                 Button("Keep Editing", role: .cancel) {}
             }
-            .alert(sendError == nil ? "Complete the required fields" : "Couldn't send", isPresented: $showingError) {
+            .alert(draftErrorTitle ?? (sendError == nil ? "Complete the required fields" : "Couldn't send"), isPresented: $showingError) {
                 Button("OK", role: .cancel) {}
             } message: {
                 if let sendError {
@@ -172,17 +196,19 @@ struct ComposerView: View {
                     Text(kind == .post ? "Add a community and title. Link posts also need a valid URL." : kind == .message ? "Add a recipient, subject and message." : "Add some text before sending.")
                 }
             }
-            .task(id: draftFields) {
-                // A cancelled wait means the view closed or the text changed again.
-                do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-                await saveDraft()
-            }
+            .onChange(of: draftFields) { _, _ in scheduleDraftSave() }
             .task {
-                if draftAccountID == nil { draftAccountID = dependencies.accounts.selectedAccountID }
+                if !accountIsBound {
+                    draftAccountID = dependencies.accounts.selectedAccountID
+                    accountIsBound = true
+                    draftSession = ComposerDraftSession(persistence: dependencies.persistence)
+                }
                 await restoreDraft()
+                draftReady = true
+                scheduleDraftSave()
             }
             // Swiping away would skip the discard prompt and lose the text.
-            .interactiveDismissDisabled(hasContent)
+            .interactiveDismissDisabled(hasContent || hasSavedDraft || sending || draftClosed)
         }
     }
 
@@ -214,6 +240,8 @@ struct ComposerView: View {
     }
 
     private func submit() {
+        guard !sending, !draftClosed else { return }
+        draftErrorTitle = nil
         sendError = nil
         guard canSubmit else { showingError = true; return }
         guard let selectedAccount = dependencies.accounts.selectedAccount,
@@ -224,6 +252,7 @@ struct ComposerView: View {
         }
         let accountID = selectedAccount.id
         sending = true
+        let draftSession = self.draftSession
         let action: RedditAction
         switch kind {
         case .post:
@@ -243,8 +272,14 @@ struct ComposerView: View {
         }
         Task {
             do {
+                await draftSession?.drain()
                 _ = try await dependencies.authenticated.perform(action, accountID: accountID)
-                try? await dependencies.persistence.deleteDraft(draftID)
+                draftClosed = true
+                if let draftSession {
+                    try? await draftSession.finish(.discard, id: draftID)
+                } else {
+                    try? await dependencies.persistence.deleteDraft(draftID)
+                }
                 sending = false
                 onSubmitted?()
                 dismiss()
@@ -252,10 +287,12 @@ struct ComposerView: View {
                 await dependencies.accounts.markNeedsLogin(accountID)
                 sending = false
                 showingError = true
+                scheduleDraftSave()
             } catch {
                 sending = false
                 sendError = error.localizedDescription
                 showingError = true
+                scheduleDraftSave()
             }
         }
     }
@@ -269,18 +306,28 @@ struct ComposerView: View {
         }
     }
 
-    private var draftTarget: String { kind == .post ? community : (targetID ?? recipient) }
+    private var draftTarget: String {
+        switch kind {
+        case .post: community
+        case .message: recipient
+        case .comment, .edit: targetID ?? ""
+        }
+    }
 
     /// Reopens the newest saved draft for the same account, kind and target.
     private func restoreDraft() async {
-        guard !hasContent, kind != .edit, let accountID = draftAccountID, let draftKind,
+        guard !hasContent, !draftClosed, kind != .edit, let accountID = draftAccountID, let draftKind,
               let drafts = try? await dependencies.persistence.loadDrafts(accountID: accountID) else { return }
         let target = draftTarget
-        let match = drafts
-            .filter { $0.kind == draftKind && (kind == .post && community.isEmpty || ($0.target ?? "") == target) }
-            .max { $0.modifiedAt < $1.modifiedAt }
-        guard let match, !hasContent else { return }
+        let match = Draft.newestMatching(
+            in: drafts,
+            kind: draftKind,
+            target: target,
+            anyTargetWhenEmpty: kind == .post || kind == .message
+        )
+        guard let match, !hasContent, !draftClosed else { return }
         draftID = match.id
+        hasSavedDraft = true
         title = match.title
         bodyText = match.body
         if let restoredLink = match.link {
@@ -288,16 +335,41 @@ struct ComposerView: View {
             postType = "Link"
         }
         if kind == .post, community.isEmpty { community = match.target ?? "" }
+        if kind == .message, recipient.isEmpty { recipient = match.target ?? "" }
     }
 
-    private func saveDraft() async {
-        // Edits start from the existing text and share a target with replies, so they aren't drafted.
-        guard !sending, kind != .edit, let accountID = draftAccountID, let draftKind else { return }
-        guard hasContent else {
-            try? await dependencies.persistence.deleteDraft(draftID)
-            return
+    private func scheduleDraftSave() {
+        guard draftReady, !draftClosed, !sending, kind != .edit, draftAccountID != nil else { return }
+        draftSession?.schedule(currentDraft, id: draftID)
+    }
+
+    private func finishDraft(save: Bool) {
+        guard !draftClosed else { return }
+        draftClosed = true
+        Task {
+            do {
+                guard let draftSession else { throw IOSComposerDraftError.notReady }
+                let operation: ComposerDraftSession.Finish
+                if save && hasContent {
+                    guard let draft = currentDraft else { throw IOSComposerDraftError.accountRequired }
+                    operation = .save(draft)
+                } else {
+                    operation = .discard
+                }
+                try await draftSession.finish(operation, id: draftID)
+                dismiss()
+            } catch {
+                draftClosed = false
+                draftErrorTitle = save ? "Couldn't save draft" : "Couldn't discard draft"
+                sendError = error.localizedDescription
+                showingError = true
+            }
         }
-        let draft = Draft(
+    }
+
+    private var currentDraft: Draft? {
+        guard kind != .edit, hasContent, let accountID = draftAccountID, let draftKind else { return nil }
+        return Draft(
             id: draftID,
             kind: draftKind,
             accountID: accountID,
@@ -307,7 +379,18 @@ struct ComposerView: View {
             link: postType == "Link" ? URL(string: link) : nil,
             modifiedAt: .now
         )
-        try? await dependencies.persistence.saveDraft(draft)
+    }
+}
+
+private enum IOSComposerDraftError: LocalizedError {
+    case accountRequired
+    case notReady
+
+    var errorDescription: String? {
+        switch self {
+        case .accountRequired: "Select a Reddit account before saving this draft."
+        case .notReady: "Wait for the draft to finish loading, then try again."
+        }
     }
 }
 

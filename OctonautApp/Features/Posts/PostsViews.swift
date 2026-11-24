@@ -353,8 +353,7 @@ struct FeedView: View {
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }
-                        if dependencies.settings.hideSeenPosts,
-                           store.galleryPageCursor(for: descriptor) != nil {
+                        if store.galleryPageCursor(for: descriptor) != nil {
                             Button(store.nextPageError == nil ? "Load more posts" : "Retry") {
                                 Task { await store.loadMorePosts(for: descriptor) }
                             }
@@ -403,20 +402,25 @@ struct FeedView: View {
                                 }
                             }
                             .fixedSize(horizontal: false, vertical: true)
+                            .modifier(MarkPostSeenWhileVisible(post: post, enabled: dependencies.settings.autoMarkSeenWhileScrolling, store: store))
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .id(post.id)
                             .onAppear {
                                 preloadMedia(after: index)
-                                if dependencies.settings.autoMarkSeenWhileScrolling, !post.isSeen {
-                                    store.markSeen(postID: post.id, seen: true)
-                                }
                                 if index >= visiblePosts.count - 2 { Task { await store.loadMorePosts(for: descriptor) } }
                             }
                         }
                         if store.feedState == .loading, !visiblePosts.isEmpty {
                             HStack { Spacer(); ProgressView("Loading more…"); Spacer() }.padding()
                                 .listRowSeparator(.hidden)
+                        }
+                        if store.nextPageError == nil, store.galleryPageCursor(for: descriptor) != nil {
+                            Button("Load more posts") {
+                                Task { await store.loadMorePosts(for: descriptor) }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .listRowSeparator(.hidden)
                         }
                         if let nextPageError = store.nextPageError {
                             VStack(spacing: 8) {
@@ -450,6 +454,11 @@ struct FeedView: View {
         }
         // The system title lays out and truncates long community names itself,
         // and the title menu keeps sorting one tap away from the name.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            FeedCommunityFailureNotice(failures: store.feedCommunityFailures) {
+                Task { await store.refreshPosts(for: descriptor, forceRefresh: true) }
+            }
+        }
         .navigationTitle(descriptor.name)
         .navigationSubtitle(sortSummary)
         .navigationBarTitleDisplayMode(.inline)

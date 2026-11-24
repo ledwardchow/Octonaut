@@ -9,6 +9,7 @@ final class SearchFeatureModel {
     @ObservationIgnored private let reddit: any RedditClient
     @ObservationIgnored private var postsAfter: String?
     @ObservationIgnored private var communitiesAfter: String?
+    @ObservationIgnored private var usersAfter: String?
     @ObservationIgnored private var requestGeneration = 0
 
     private var accountID: AccountID?
@@ -29,7 +30,7 @@ final class SearchFeatureModel {
         switch activeScope {
         case .posts: postsAfter != nil
         case .communities: communitiesAfter != nil
-        case .users: false
+        case .users: usersAfter != nil
         }
     }
 
@@ -45,6 +46,7 @@ final class SearchFeatureModel {
         trendingState = .idle
         postsAfter = nil
         communitiesAfter = nil
+        usersAfter = nil
         posts.removeAll()
         communities.removeAll()
         users.removeAll()
@@ -81,6 +83,7 @@ final class SearchFeatureModel {
         isLoadingMore = false
         postsAfter = nil
         communitiesAfter = nil
+        usersAfter = nil
         paginationError = nil
         guard query.count >= 2 else {
             posts = []
@@ -117,7 +120,8 @@ final class SearchFeatureModel {
                 posts = []
                 communities = []
                 users = listing.items
-                state = users.isEmpty ? .empty : .loaded
+                usersAfter = listing.after
+                state = users.isEmpty && listing.after == nil ? .empty : .loaded
             }
         } catch is CancellationError {
             return
@@ -158,7 +162,16 @@ final class SearchFeatureModel {
                 self.communitiesAfter = listing.after == communitiesAfter ? nil : listing.after
                 state = communities.isEmpty && self.communitiesAfter == nil ? .empty : .loaded
             case .users:
-                return
+                guard let usersAfter else { return }
+                let listing = try await reddit.users(
+                    RedditUserSearchRequest(query: activeQuery, after: usersAfter),
+                    account: accountID
+                )
+                guard generation == requestGeneration else { return }
+                var seen = Set(users.map(\.id))
+                users.append(contentsOf: listing.items.filter { seen.insert($0.id).inserted })
+                self.usersAfter = listing.after == usersAfter ? nil : listing.after
+                state = users.isEmpty && self.usersAfter == nil ? .empty : .loaded
             }
         } catch is CancellationError {
             return

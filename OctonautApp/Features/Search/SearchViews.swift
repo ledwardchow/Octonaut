@@ -5,7 +5,14 @@ struct SearchRootView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
     @Environment(AppDependencies.self) private var dependencies
-    @State private var query = ""
+    @State private var localQuery = ""
+    private let externalQuery: Binding<String>?
+    private let externalSubmission: UUID?
+    private var queryBinding: Binding<String> { externalQuery ?? $localQuery }
+    private var query: String {
+        get { queryBinding.wrappedValue }
+        nonmutating set { queryBinding.wrappedValue = newValue }
+    }
     @State private var scope: FeatureSearchScope = .posts
     @State private var submittedQuery = ""
     @State private var model: SearchFeatureModel
@@ -15,12 +22,16 @@ struct SearchRootView: View {
         store: OctonautFeatureStore,
         router: OctonautFeatureRouter,
         reddit: (any RedditClient)? = nil,
-        initialQuery: String = ""
+        initialQuery: String = "",
+        externalQuery: Binding<String>? = nil,
+        externalSubmission: UUID? = nil
     ) {
         self.store = store
         self.router = router
         self.initialQuery = initialQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        _query = State(initialValue: self.initialQuery)
+        self.externalQuery = externalQuery
+        self.externalSubmission = externalSubmission
+        _localQuery = State(initialValue: self.initialQuery)
         _model = State(initialValue: SearchFeatureModel(reddit: reddit ?? UnavailableRedditClient()))
     }
 
@@ -32,7 +43,19 @@ struct SearchRootView: View {
                 results
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Reddit")
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if externalQuery != nil {
+                Picker("Search scope", selection: $scope) {
+                    ForEach(FeatureSearchScope.allCases) { value in
+                        Text(value.rawValue).tag(value)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                .background(.bar)
+            }
+        }
+        .modifier(SearchEntryModifier(query: queryBinding, usesExternalField: externalQuery != nil))
         .searchScopes($scope) {
             ForEach(FeatureSearchScope.allCases) { value in
                 Text(value.rawValue).tag(value)
@@ -43,6 +66,11 @@ struct SearchRootView: View {
             guard !initialQuery.isEmpty, submittedQuery.isEmpty else { return }
             submittedQuery = initialQuery
             await model.submit(query: initialQuery, scope: scope, account: dependencies.accounts.selectedAccountID)
+        }
+        .task(id: externalSubmission) {
+            guard externalQuery != nil, externalSubmission != nil else { return }
+            submittedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            await model.submit(query: submittedQuery, scope: scope, account: dependencies.accounts.selectedAccountID)
         }
         .onSubmit(of: .search) {
             submittedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -267,5 +295,19 @@ struct SearchRootView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+    }
+}
+
+private struct SearchEntryModifier: ViewModifier {
+    @Binding var query: String
+    let usesExternalField: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if usesExternalField {
+            content
+        } else {
+            content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search Reddit")
+        }
     }
 }

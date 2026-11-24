@@ -2909,6 +2909,78 @@ extension DomainTests {
     }
 
     @MainActor
+    func testEnablingHideSeenInSettingsHidesPreviouslyReadRows() async {
+        let settings = Self.sortSettings()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a", "b"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+
+        await store.refreshPosts(for: .home)
+        store.markSeen(postID: "a", seen: true)
+        settings.hideSeenPosts = true
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+
+        store.markSeen(postID: "b", seen: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        settings.hideSeenPosts = false
+        settings.hideSeenPosts = true
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
+    }
+
+    @MainActor
+    func testOpeningPostMarksItSeenAcrossCachedFeedsAndRefreshes() async throws {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let thread = Data(#"[{"data":{"children":[{"kind":"t3","data":{"id":"a","name":"t3_a","title":"Read post","subreddit":"swift","permalink":"/r/swift/comments/a/title/"}}]}},{"data":{"children":[]}}]"#.utf8)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a", "b"], after: nil), postData: thread)
+        let persistence = InMemoryPersistenceStore()
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+
+        await store.refreshPosts(for: .popular)
+        await store.refreshPosts(for: .home)
+        let post = try XCTUnwrap(store.posts.first)
+        let opened = await store.loadPostDetail(for: post, markAsSeen: true)
+        XCTAssertTrue(opened)
+        XCTAssertEqual(store.detailPost?.isSeen, true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a", "b"])
+
+        await store.refreshPosts(for: .popular)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        let requestCount = await client.listingRequests()
+        XCTAssertEqual(requestCount, 2)
+
+        await store.refreshPosts(for: .popular, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        store.markSeen(postID: "a", seen: false)
+        await store.loadPostDetail(for: post, sort: "New")
+        XCTAssertEqual(store.detailPost?.isSeen, false)
+        await store.refreshPosts(for: .popular, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a", "b"])
+    }
+
+    @MainActor
+    func testScrollingMarksSeenOnlyAfterAnUncancelledVisibleDwell() async {
+        let settings = Self.sortSettings()
+        settings.autoMarkSeenWhileScrolling = true
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["fast", "offscreen", "read"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+        await store.refreshPosts(for: .home)
+
+        let fastScroll = Task { await store.markSeenAfterScrollDwell(postID: "fast") { true } }
+        fastScroll.cancel()
+        await fastScroll.value
+        XCTAssertTrue(store.posts.allSatisfy { !$0.isSeen })
+
+        let offscreen = Task { await store.markSeenAfterScrollDwell(postID: "offscreen") { false } }
+        let clock = ContinuousClock()
+        let start = clock.now
+        await store.markSeenAfterScrollDwell(postID: "read") { true }
+        XCTAssertTrue(start.duration(to: clock.now) >= .milliseconds(750))
+        await offscreen.value
+
+        XCTAssertEqual(store.posts.filter(\.isSeen).map(\.id), ["read"])
+    }
+
+    @MainActor
     func testPaginationKeepsNewlyReadPostsVisibleUntilRefresh() async {
         let settings = Self.sortSettings()
         settings.hideSeenPosts = true
