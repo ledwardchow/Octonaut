@@ -14,6 +14,13 @@ struct MacFeedListView: View {
     @State private var blockTarget: String?
     @State private var actionError: String?
 
+    private var selectedPostID: Binding<String?> {
+        Binding(
+            get: { selectedPost?.id },
+            set: { id in selectedPost = store.visibleFeedPosts.first { $0.id == id } }
+        )
+    }
+
     var body: some View {
         Group {
             switch store.feedState {
@@ -35,7 +42,7 @@ struct MacFeedListView: View {
                     description: Text("This feed is empty or its posts were filtered.")
                 )
             default:
-                List(selection: dependencies.settings.feedLayout == .full ? nil : $selectedPost) {
+                List(selection: dependencies.settings.feedLayout == .full ? nil : selectedPostID) {
                     if store.visibleFeedFilteredPostCount > 0 {
                         Label(
                             "\(store.visibleFeedFilteredPostCount) posts hidden by filters",
@@ -62,7 +69,7 @@ struct MacFeedListView: View {
                             }
                         }
                             .contentShape(Rectangle())
-                            .tag(post)
+                            .tag(post.id)
                             .overlay(alignment: .leading) {
                                 if dependencies.settings.feedLayout == .full,
                                    selectedPost?.id == post.id {
@@ -78,6 +85,7 @@ struct MacFeedListView: View {
                                     selectedPost = post
                                 }
                             )
+                            .modifier(MarkPostSeenWhileVisible(post: post, enabled: dependencies.settings.autoMarkSeenWhileScrolling, store: store))
                             .listRowInsets(
                                 dependencies.settings.feedLayout == .full
                                     ? EdgeInsets(top: 3, leading: 4, bottom: 3, trailing: 4)
@@ -98,6 +106,9 @@ struct MacFeedListView: View {
 
                                 Button(post.vote == -1 ? "Remove Downvote" : "Downvote") {
                                     performVote(post, value: post.vote == -1 ? 0 : -1)
+                                }
+                                Button(post.isSeen ? "Mark Unseen" : "Mark Seen", systemImage: "eye") {
+                                    store.markSeen(postID: post.id)
                                 }
 
                                 Divider()
@@ -301,9 +312,9 @@ private struct MacPostMediaCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if !post.bodyImages.isEmpty {
+            if let image = post.firstBodyImage {
                 RedditMarkdownView(
-                    images: post.bodyImages,
+                    image: image,
                     hidesMedia: post.isSensitive(
                         blurringNSFW: dependencies.settings.blurNSFWMedia,
                         blurringSpoilers: dependencies.settings.blurSpoilers
@@ -761,6 +772,9 @@ struct MacPostDetailView: View {
                     }
                     .background(.black)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
+                    if post.firstBodyImage != nil {
+                        postBody(post)
+                    }
                 } else {
                     postHeader(post)
                 }
@@ -889,17 +903,7 @@ struct MacPostDetailView: View {
                 .textSelection(.enabled)
 
             if !post.body.isEmpty {
-                RedditMarkdownView(
-                    source: post.body,
-                    hidesMedia: post.isSensitive(
-                        blurringNSFW: dependencies.settings.blurNSFWMedia,
-                        blurringSpoilers: dependencies.settings.blurSpoilers
-                    )
-                )
-                    .font(.body)
-                    .tint(.accentColor)
-                    .textSelection(.enabled)
-                    .id(post.id)
+                postBody(post)
             }
 
             if post.mediaKind == "image", let mediaURL = post.mediaURL {
@@ -930,6 +934,21 @@ struct MacPostDetailView: View {
 
     private var currentAccountID: AccountID? {
         accounts.selectedAccountID
+    }
+
+    private func postBody(_ post: PostCardModel) -> some View {
+        RedditMarkdownView(
+            source: post.body,
+            hidesMedia: post.isSensitive(
+                blurringNSFW: dependencies.settings.blurNSFWMedia,
+                blurringSpoilers: dependencies.settings.blurSpoilers
+            ),
+            groupsImages: true
+        )
+        .font(.body)
+        .tint(.accentColor)
+        .textSelection(.enabled)
+        .id(post.id)
     }
 
     private func vote(_ post: PostCardModel, value: Int) {
@@ -1255,7 +1274,7 @@ private struct MacMediaLightboxView: View {
             Text(post.title)
                 .font(.headline)
                 .lineLimit(2)
-            if !post.body.isEmpty {
+            if post.firstBodyImage == nil, !post.body.isEmpty {
                 // A line limit stops SwiftUI from handling link clicks, so long captions scroll instead.
                 ViewThatFits(in: .vertical) {
                     lightboxCaption

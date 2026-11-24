@@ -17,6 +17,7 @@ struct MacSettingsView: View {
                 }
                 Toggle("Show post flair", isOn: $settings.showPostFlair)
                 Toggle("Hide seen posts", isOn: $settings.hideSeenPosts)
+                Toggle("Mark posts seen while scrolling", isOn: $settings.autoMarkSeenWhileScrolling)
             }
             .formStyle(.grouped)
             .tabItem { Label("General", systemImage: "gearshape") }

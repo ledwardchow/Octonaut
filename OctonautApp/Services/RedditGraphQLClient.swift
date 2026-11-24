@@ -84,6 +84,7 @@ actor RedditGraphQLClient {
     private enum SearchScope: Hashable {
         case posts(query: String, community: String?, sort: RedditSort, time: RedditTimeRange?, limit: Int)
         case communities(query: String, limit: Int)
+        case users(query: String, limit: Int)
     }
     private struct SearchCursor {
         let account: AccountID
@@ -521,7 +522,10 @@ actor RedditGraphQLClient {
         guard let account else { throw RedditClientError.anonymousAccessBlocked }
         let variables: [String: GraphQLValue] = ["query": .string(request.query), "productSurface": .string("android"),
                                                  "pageSize": .int(request.limit)]
-        return try RedditGraphQLCodec.users(data: await execute(.searchPeople, variables: variables, account: account))
+        return try await searchPages(operation: .searchPeople, variables: variables, afterKey: "afterCursor",
+                                     after: request.after, account: account,
+                                     scope: .users(query: request.query, limit: request.limit),
+                                     decode: RedditGraphQLCodec.users)
     }
 
     func execute(_ operation: GraphQLOperation, variables: [String: GraphQLValue], account: AccountID?) async throws -> Data {

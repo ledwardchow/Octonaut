@@ -24,6 +24,7 @@ struct PostDetailView: View {
     @Environment(AppDependencies.self) private var dependencies
     @Environment(\.octonautDuoPostDetail) private var usesDuoPostDetail
     @State private var titleHasScrolledPast = false
+    @State private var lastOpenedPostID: String?
     @State private var commentSort = "Best"
     @State private var composerTarget: CommentComposerTarget?
     @State private var isMediaViewerPresented = false
@@ -292,7 +293,9 @@ struct PostDetailView: View {
                 onOpenPost: { dismissMediaViewerAndStay() })
         }
         .task(id: "\(post.id):\(commentSort):\(store.accountContextKey)") {
-            await store.loadPostDetail(for: post, sort: commentSort)
+            let isOpening = lastOpenedPostID != post.id
+            lastOpenedPostID = post.id
+            await store.loadPostDetail(for: post, sort: commentSort, markAsSeen: isOpening)
         }
         .task(id: post.id) {
             await store.recordPostViewed()

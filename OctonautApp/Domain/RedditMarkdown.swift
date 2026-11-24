@@ -16,6 +16,14 @@ enum RedditMarkdownBlock: Equatable {
     case text(String)
     case table(RedditMarkdownTable)
     case image(RedditMarkdownImage)
+    case gallery([RedditMarkdownImage])
+
+    var hasMedia: Bool {
+        switch self {
+        case .image, .gallery: true
+        case .text, .table: false
+        }
+    }
 }
 
 struct RedditMarkdownView: View {
@@ -24,41 +32,91 @@ struct RedditMarkdownView: View {
     private let maximumImageHeight: CGFloat
     @State private var revealsMedia = false
 
-    init(source: String, hidesMedia: Bool = false) {
-        self.blocks = RedditPostMarkdown.blocks(from: source)
+    init(source: String, hidesMedia: Bool = false, groupsImages: Bool = false) {
+        let blocks = RedditPostMarkdown.blocks(from: source)
+        self.blocks = groupsImages ? RedditPostMarkdown.groupingAdjacentImages(in: blocks) : blocks
         self.hidesMedia = hidesMedia
         self.maximumImageHeight = 520
     }
 
-    init(images: [RedditMarkdownImage], hidesMedia: Bool, maximumImageHeight: CGFloat = 260) {
-        self.blocks = images.map(RedditMarkdownBlock.image)
+    init(image: RedditMarkdownImage, hidesMedia: Bool, maximumImageHeight: CGFloat = 260) {
+        self.blocks = [.image(image)]
         self.hidesMedia = hidesMedia
         self.maximumImageHeight = maximumImageHeight
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            let firstImage = blocks.firstIndex { if case .image = $0 { true } else { false } }
+            let firstImage = blocks.firstIndex(where: \.hasMedia)
             ForEach(Array(blocks.enumerated()), id: \.offset) { index, block in
-                switch block {
-                case .text(let text):
-                    RedditSpoilerText(source: text)
-                        .id(text)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                case .table(let table):
-                    RedditMarkdownTableView(table: table)
-                case .image(let image):
-                    if !hidesMedia || revealsMedia {
-                        RedditMarkdownImageView(image: image, maximumHeight: maximumImageHeight)
-                            .id(image)
-                    } else if index == firstImage {
+                if hidesMedia && !revealsMedia && block.hasMedia {
+                    if index == firstImage {
                         Button("Reveal media", systemImage: "eye.slash") { revealsMedia = true }
                             .buttonStyle(.bordered)
+                    }
+                } else {
+                    switch block {
+                    case .text(let text):
+                        RedditSpoilerText(source: text)
+                            .id(text)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .table(let table):
+                        RedditMarkdownTableView(table: table)
+                    case .image(let image):
+                        RedditMarkdownImageView(image: image, maximumHeight: maximumImageHeight)
+                            .id(image)
+                    case .gallery(let images):
+                        RedditMarkdownGallery(images: images, height: min(320, maximumImageHeight))
+                            .id(images)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct RedditMarkdownGallery: View {
+    let images: [RedditMarkdownImage]
+    let height: CGFloat
+    @State private var selectedPage: Int? = 0
+
+    private var page: Int { selectedPage ?? 0 }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(images.indices, id: \.self) { index in
+                        RedditMarkdownImageView(image: images[index], maximumHeight: height)
+                            .containerRelativeFrame(.horizontal)
+                            .id(index)
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $selectedPage)
+            .scrollIndicators(.hidden)
+            .frame(height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            HStack(spacing: 12) {
+                Button("Previous image", systemImage: "chevron.left") {
+                    withAnimation { selectedPage = page - 1 }
+                }
+                .disabled(page == 0)
+                Text("\(page + 1) of \(images.count)")
+                    .font(.caption.monospacedDigit())
+                    .accessibilityLabel("Image \(page + 1) of \(images.count)")
+                Button("Next image", systemImage: "chevron.right") {
+                    withAnimation { selectedPage = page + 1 }
+                }
+                .disabled(page == images.count - 1)
+            }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.bordered)
+        }
     }
 }
 
@@ -277,6 +335,34 @@ enum RedditPostMarkdown {
 
     static func images(in blocks: [RedditMarkdownBlock]) -> [RedditMarkdownImage] {
         blocks.compactMap { if case .image(let image) = $0 { image } else { nil } }
+    }
+
+    static func groupingAdjacentImages(in blocks: [RedditMarkdownBlock]) -> [RedditMarkdownBlock] {
+        var result: [RedditMarkdownBlock] = []
+        var images: [RedditMarkdownImage] = []
+
+        func appendImages() {
+            if images.count == 1, let image = images.first {
+                result.append(.image(image))
+            } else if images.count > 1 {
+                result.append(.gallery(images))
+            }
+            images.removeAll(keepingCapacity: true)
+        }
+
+        for block in blocks {
+            switch block {
+            case .image(let image):
+                images.append(image)
+            case .text(let text) where text.allSatisfy(\.isWhitespace):
+                continue
+            default:
+                appendImages()
+                result.append(block)
+            }
+        }
+        appendImages()
+        return result
     }
 
     static func resolvingMediaReferences(

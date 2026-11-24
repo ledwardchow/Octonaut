@@ -285,9 +285,9 @@ struct OctonautPostRow: View {
             if !post.body.isEmpty && (bodyLineLimit == nil || !bodyPreview.isEmpty) {
                 postBody
             }
-            if bodyLineLimit != nil && !post.bodyImages.isEmpty {
+            if bodyLineLimit != nil, let image = post.firstBodyImage {
                 RedditMarkdownView(
-                    images: post.bodyImages,
+                    image: image,
                     hidesMedia: hidesBodyMedia,
                     maximumImageHeight: min(260, mediaMaximumHeight ?? 260)
                 )
@@ -504,7 +504,7 @@ struct OctonautPostRow: View {
                 .lineLimit(bodyLineLimit)
                 .multilineTextAlignment(.leading)
         } else {
-            RedditMarkdownView(source: post.body, hidesMedia: hidesBodyMedia)
+            RedditMarkdownView(source: post.body, hidesMedia: hidesBodyMedia, groupsImages: true)
                 .font(.subheadline)
                 .foregroundStyle(theme.primaryText)
                 .tint(theme.accent)

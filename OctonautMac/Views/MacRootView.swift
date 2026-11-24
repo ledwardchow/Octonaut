@@ -92,7 +92,7 @@ struct MacRootView: View {
         .task(id: selectedPost?.id) {
             store.clearPostDetail()
             guard let post = selectedPost else { return }
-            if await store.loadPostDetail(for: post) {
+            if await store.loadPostDetail(for: post, markAsSeen: true) {
                 await store.recordPostViewed()
             }
         }

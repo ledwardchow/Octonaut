@@ -1185,9 +1185,11 @@ enum RedditJSONCodec {
 
     private static func directImageURL(in text: String?) -> URL? {
         let candidates = URLs(in: text).filter(isDirectImageURL)
-        guard let text, text.contains("!["), !candidates.isEmpty else { return candidates.first }
-        let inlineImages = Set(RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: text)).map(\.url))
-        return candidates.first { !inlineImages.contains($0) }
+        guard let text, !candidates.isEmpty else { return candidates.first }
+        let inlineImages = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: text))
+        guard text.contains("![") || inlineImages.count > 1 else { return candidates.first }
+        let inlineURLs = Set(inlineImages.map(\.url))
+        return candidates.first { !inlineURLs.contains($0) }
     }
 
     private static func bodyVideoMedia(in text: String?, thumbnailURL: URL?) -> PostMedia? {

@@ -43,6 +43,11 @@ struct DuoLayout {
             && rootWidth >= minimumWidth && rootHeight >= 600
     }
 
+    static func usesPortraitHeader(isPhone: Bool, size: CGSize) -> Bool {
+        isPhone && size.width.isFinite && size.height.isFinite
+            && size.width >= minimumWidth && size.height > size.width
+    }
+
     static func feedWidth(availableWidth: CGFloat, fraction: Double) -> CGFloat {
         guard availableWidth.isFinite else { return 280 }
         let space = max(0, availableWidth - dividerWidth)
@@ -198,6 +203,10 @@ struct OctonautTabsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var rootSize: CGSize = .zero
+    @State private var visitedTabs: Set<AppTab> = []
+    @State private var topSearchQuery = ""
+    @State private var topSearchSubmission: UUID?
+    @FocusState private var topSearchFocused: Bool
     @State private var selectedTab: AppTab
     @State private var postsRouter: OctonautFeatureRouter
     @State private var inboxRouter = OctonautFeatureRouter()
@@ -229,18 +238,37 @@ struct OctonautTabsView: View {
     }
 
     var body: some View {
+        GeometryReader { geometry in
+            tabsBody(topInset: geometry.safeAreaInsets.top)
+                .onAppear { rootSize = geometry.size; visitedTabs.insert(selectedTab) }
+                .onChange(of: geometry.size) { _, size in rootSize = size }
+        }
+        .ignoresSafeArea(.keyboard)
+    }
+
+    private func tabsBody(topInset: CGFloat) -> some View {
         ZStack(alignment: .bottom) {
             if usesFloatingTabBar {
-                persistentTabContent
-                    .safeAreaPadding(.bottom, 82)
-
-                FloatingTabBar(
-                    selection: tabSelection,
-                    unreadCount: store.unreadCount,
-                    accountTitle: accountTabTitle(whenSignedOut: "Account")
-                )
-                .padding(.horizontal, 24)
-                .padding(.bottom, 14)
+                if usesDuoPortraitHeader {
+                    PortraitTabContentHost(content: portraitTabs
+                        .environment(dependencies)
+                        .environment(\.octonautRootWidth, rootSize.width)
+                        .environment(\.octonautRootHeight, rootSize.height)
+                        .environment(\.octonautRootIsRegular, horizontalSizeClass == .regular)
+                        .tint(.orange))
+                } else {
+                    persistentTabContent
+                        .safeAreaInset(edge: .bottom, spacing: 0) {
+                            Color.clear.frame(height: 82)
+                        }
+                    FloatingTabBar(
+                        selection: tabSelection,
+                        unreadCount: store.unreadCount,
+                        accountTitle: accountTabTitle(whenSignedOut: "Account")
+                    )
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                }
             } else if usesSidebarTabBar {
                 compactTabs
                     .tabViewStyle(.sidebarAdaptable)
@@ -248,16 +276,52 @@ struct OctonautTabsView: View {
                 compactTabs
             }
         }
-        .tint(.orange)
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onAppear { rootSize = geometry.size }
-                    .onChange(of: geometry.size) { _, size in rootSize = size }
+        .overlay(alignment: .topLeading) {
+            if usesDuoPortraitHeader {
+                GeometryReader { _ in
+                    HStack(spacing: 12) {
+                        Button {
+                            topSearchFocused = false
+                            tabSelection.wrappedValue = .account
+                        } label: {
+                            Image(systemName: "person.crop.circle")
+                                .font(.title2)
+                                .frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("Profile")
+                        .glassEffect(.regular, in: Circle())
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search Reddit", text: $topSearchQuery)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .submitLabel(.search)
+                                .focused($topSearchFocused)
+                                .onSubmit { topSearchSubmission = UUID() }
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(height: 44)
+                        .glassEffect(.regular, in: Capsule())
+                    }
+                    .frame(width: max(0, rootSize.width - 150))
+                    .padding(.leading, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: max(60, topInset))
+                    .accessibilityIdentifier("duo-portrait-header")
+                }
+                .ignoresSafeArea(.container, edges: .top)
             }
-            // Keyboard avoidance must not switch layouts and remove the focused field.
-            .ignoresSafeArea(.keyboard)
         }
+        .ignoresSafeArea(.container, edges: usesFloatingTabBar ? .bottom : [])
+        .onChange(of: selectedTab) { oldTab, newTab in
+            visitedTabs.insert(oldTab)
+            visitedTabs.insert(newTab)
+        }
+        .onChange(of: topSearchFocused) { _, focused in
+            if focused { selectedTab = .search }
+        }
+        .tint(.orange)
         .environment(\.octonautRootWidth, rootSize.width)
         .environment(\.octonautRootHeight, rootSize.height)
         .environment(\.octonautRootIsRegular, OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass))
@@ -372,8 +436,15 @@ struct OctonautTabsView: View {
 
     private var usesFloatingTabBar: Bool {
         let regular = OctonautAdaptiveLayout.usesWideInterface(horizontalSizeClass: horizontalSizeClass)
-        return regular && (UIDevice.current.userInterfaceIdiom == .pad
+        return usesDuoPortraitHeader || regular && (UIDevice.current.userInterfaceIdiom == .pad
             || dependencies.settings.showBottomNavigationOnLargeScreens)
+    }
+
+    private var usesDuoPortraitHeader: Bool {
+        DuoLayout.usesPortraitHeader(
+            isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+            size: rootSize
+        )
     }
 
     private var usesSidebarTabBar: Bool {
@@ -391,13 +462,48 @@ struct OctonautTabsView: View {
 
     private var persistentTabContent: some View {
         ZStack {
-            ForEach(AppTab.allCases) { tab in
+            ForEach(AppTab.allCases.filter { visitedTabs.contains($0) || selectedTab == $0 }) { tab in
                 tabContent(for: tab)
                     .opacity(selectedTab == tab ? 1 : 0)
                     .allowsHitTesting(selectedTab == tab)
                     .accessibilityHidden(selectedTab != tab)
                     .zIndex(selectedTab == tab ? 1 : 0)
             }
+        }
+    }
+
+    private var portraitTabs: some View {
+        TabView(selection: tabSelection) {
+            Tab("Posts", systemImage: "rectangle.stack", value: AppTab.posts) {
+                portraitTabContent(for: .posts)
+            }
+            Tab("Inbox", systemImage: "envelope", value: AppTab.inbox) {
+                portraitTabContent(for: .inbox)
+            }
+            .badge(store.unreadCount)
+            Tab("Profile", systemImage: "person.crop.circle", value: AppTab.account) {
+                portraitTabContent(for: .account)
+            }
+            .hidden()
+            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
+                portraitTabContent(for: .search)
+            }
+            .hidden()
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
+                portraitTabContent(for: .settings)
+            }
+        }
+        .tabViewStyle(.tabBarOnly)
+        .environment(\.horizontalSizeClass, .compact)
+    }
+
+    @ViewBuilder
+    private func portraitTabContent(for tab: AppTab) -> some View {
+        if selectedTab == tab || visitedTabs.contains(tab) {
+            tabContent(for: tab)
+                .environment(\.horizontalSizeClass, horizontalSizeClass)
+        } else {
+            Color.clear
         }
     }
 
@@ -447,7 +553,9 @@ struct OctonautTabsView: View {
             }
         case .search:
             NavigationStack(path: $searchRouter.path) {
-                SearchRootView(store: store, router: searchRouter, reddit: reddit)
+                SearchRootView(store: store, router: searchRouter, reddit: reddit,
+                               externalQuery: usesDuoPortraitHeader ? $topSearchQuery : nil,
+                               externalSubmission: topSearchSubmission)
                     .navigationDestination(for: FeatureRoute.self) { route in
                         OctonautDestinationView(route: route, store: store, router: searchRouter)
                     }
@@ -466,14 +574,36 @@ private extension FeatureRoute {
 }
 
 @MainActor
+private struct PortraitTabContentHost<Content: View>: UIViewControllerRepresentable {
+    let content: Content
+
+    func makeUIViewController(context: Context) -> UIHostingController<Content> {
+        let controller = UIHostingController(rootView: content)
+        controller.view.backgroundColor = .clear
+        return controller
+    }
+
+    func updateUIViewController(_ controller: UIHostingController<Content>, context: Context) {
+        controller.rootView = content
+    }
+}
+
+@MainActor
 private struct FloatingTabBar: View {
     @Binding var selection: AppTab
     let unreadCount: Int
     let accountTitle: String
+    var hidesProfileAndSearch = false
+
+    private var tabs: [AppTab] {
+        AppTab.allCases.filter {
+            !hidesProfileAndSearch || ($0 != .account && $0 != .search)
+        }
+    }
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(AppTab.allCases) { tab in
+            ForEach(tabs) { tab in
                 Button {
                     selection = tab
                 } label: {
@@ -497,7 +627,7 @@ private struct FloatingTabBar: View {
                             .lineLimit(1)
                     }
                     .foregroundStyle(selection == tab ? Color.accentColor : Color.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 50)
+                    .frame(minWidth: 64, maxWidth: hidesProfileAndSearch ? nil : .infinity, minHeight: 50)
                     .padding(.horizontal, 6)
                     .background {
                         if selection == tab {
@@ -514,12 +644,8 @@ private struct FloatingTabBar: View {
         }
         .padding(6)
         .frame(maxWidth: 520)
-        .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .stroke(Color.primary.opacity(0.09), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.16), radius: 18, y: 8)
+        .fixedSize(horizontal: hidesProfileAndSearch, vertical: false)
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 
     private func title(for tab: AppTab) -> String {
@@ -1165,31 +1291,84 @@ private struct AdaptiveSettingsTabView: View {
 private struct SettingsSplitView: View {
     let store: OctonautFeatureStore
     let router: OctonautFeatureRouter
+    @Environment(\.octonautRootWidth) private var rootWidth
+    @Environment(\.octonautRootHeight) private var rootHeight
     @State private var selection: SettingsDestination? = .general
 
-    var body: some View {
-        @Bindable var router = router
+    private var usesPortraitColumns: Bool {
+        DuoLayout.usesPortraitHeader(isPhone: UIDevice.current.userInterfaceIdiom == .phone,
+                                     size: CGSize(width: rootWidth, height: rootHeight))
+    }
 
-        NavigationSplitView {
-            List(SettingsDestination.allCases, selection: $selection) { destination in
-                Label(destination.title, systemImage: destination.systemImage)
-                    .tag(destination)
+    var body: some View {
+        Group {
+            if usesPortraitColumns {
+                HStack(spacing: 0) {
+                    NavigationStack {
+                        settingsList
+                            .listStyle(.plain)
+                            .contentMargins(.top, 8, for: .scrollContent)
+                            .navigationBarTitleDisplayMode(.inline)
+                    }
+                    .frame(width: 220)
+                    Divider()
+                    settingsDetail
+                }
+            } else {
+                NavigationSplitView {
+                    settingsList
+                        .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 380)
+                } detail: {
+                    settingsDetail
+                }
+                .navigationSplitViewStyle(.balanced)
             }
-            .navigationTitle("Settings")
-            .navigationSplitViewColumnWidth(min: 250, ideal: 300, max: 380)
-        } detail: {
-            NavigationStack(path: $router.path) {
+        }
+        .onChange(of: selection) { _, _ in router.popToRoot() }
+        .onAppear(perform: consumeSettingsRoute)
+        .onChange(of: router.path) { _, _ in consumeSettingsRoute() }
+    }
+
+    private func consumeSettingsRoute() {
+        guard router.path.count == 1, case .settings(let destination) = router.path[0] else { return }
+        selection = destination
+        router.popToRoot()
+    }
+
+    private var settingsList: some View {
+        List(SettingsDestination.allCases, selection: $selection) { destination in
+            Label(destination.title, systemImage: destination.systemImage)
+                .tag(destination)
+                .listRowSeparator(usesPortraitColumns ? .hidden : .automatic)
+                .listRowBackground(Group {
+                    if usesPortraitColumns {
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(selection == destination ? Color.accentColor.opacity(0.14) : .clear)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                    }
+                })
+        }
+        .navigationTitle("Settings")
+    }
+
+    private var settingsDetail: some View {
+        @Bindable var router = router
+        return NavigationStack(path: $router.path) {
+            Group {
                 if let selection {
                     SettingsDetailView(destination: selection, store: store, router: router)
-                        .navigationDestination(for: FeatureRoute.self) { route in
-                            OctonautDestinationView(route: route, store: store, router: router)
-                        }
+                        .contentMargins(.top, usesPortraitColumns ? 8 : 16, for: .scrollContent)
                 } else {
                     ContentUnavailableView("Choose a setting", systemImage: "gearshape")
                 }
             }
+            .navigationBarTitleDisplayMode(usesPortraitColumns ? .inline : .automatic)
+            .navigationDestination(for: FeatureRoute.self) { route in
+                OctonautDestinationView(route: route, store: store, router: router)
+                    .navigationBarTitleDisplayMode(usesPortraitColumns ? .inline : .automatic)
+            }
         }
-        .navigationSplitViewStyle(.balanced)
     }
 }
 

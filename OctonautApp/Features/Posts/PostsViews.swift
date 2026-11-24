@@ -402,14 +402,12 @@ struct FeedView: View {
                                 }
                             }
                             .fixedSize(horizontal: false, vertical: true)
+                            .modifier(MarkPostSeenWhileVisible(post: post, enabled: dependencies.settings.autoMarkSeenWhileScrolling, store: store))
                             .listRowInsets(EdgeInsets())
                             .listRowSeparator(.hidden)
                             .id(post.id)
                             .onAppear {
                                 preloadMedia(after: index)
-                                if dependencies.settings.autoMarkSeenWhileScrolling, !post.isSeen {
-                                    store.markSeen(postID: post.id, seen: true)
-                                }
                                 if index >= visiblePosts.count - 2 { Task { await store.loadMorePosts(for: descriptor) } }
                             }
                         }

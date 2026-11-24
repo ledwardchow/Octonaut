@@ -685,6 +685,37 @@ final class DomainTests: XCTestCase {
         )
     }
 
+    func testImageOnlyBodyGroupsAdjacentInlineImagesInOrder() {
+        let body = """
+        ![Photo](https://i.redd.it/first.png) ![GIF](https://preview.redd.it/second.gif)
+
+        ![Last](https://i.redd.it/third.png)
+        """
+        let blocks = RedditPostMarkdown.blocks(from: body)
+        let images = RedditPostMarkdown.images(in: blocks)
+
+        XCTAssertEqual(images.count, 3)
+        XCTAssertEqual(RedditPostMarkdown.groupingAdjacentImages(in: blocks), [.gallery(images)])
+    }
+
+    func testTextSeparatesInlineGalleriesAndStandaloneImages() throws {
+        let body = """
+        ![Photo](https://i.redd.it/first.png)
+        ![GIF](https://preview.redd.it/second.gif)
+        A caption between images.
+        ![Last](https://i.redd.it/third.png)
+        """
+        let blocks = RedditPostMarkdown.blocks(from: body)
+        let images = RedditPostMarkdown.images(in: blocks)
+        let groups = RedditPostMarkdown.groupingAdjacentImages(in: blocks)
+
+        XCTAssertEqual(groups, [
+            .gallery(Array(images.prefix(2))),
+            .text("\nA caption between images.\n"),
+            .image(try XCTUnwrap(images.last)),
+        ])
+    }
+
     func testInlineGIFDecodesDistinctFramesAndTheirDelays() async throws {
         // Two one-pixel frames, red and blue, with 100 ms and 200 ms delays.
         let data = try XCTUnwrap(Data(base64Encoded:
@@ -1730,7 +1761,9 @@ final class DomainTests: XCTestCase {
         let card = PostCardModel(post: post)
 
         XCTAssertEqual(card.bodyPreview, "")
-        XCTAssertEqual(card.bodyImages.map(\.url.absoluteString), [
+        let images = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: card.body))
+        XCTAssertEqual(card.firstBodyImage, images.first)
+        XCTAssertEqual(images.map(\.url.absoluteString), [
             "https://preview.redd.it/image.png?width=640&format=png",
             "https://preview.redd.it/animation.gif",
         ])
@@ -1760,6 +1793,25 @@ final class DomainTests: XCTestCase {
         XCTAssertEqual(card.mediaKind, "image")
         XCTAssertEqual(card.mediaURL?.absoluteString, imageURL)
         XCTAssertTrue(card.body.isEmpty)
+    }
+
+    func testMultipleBareRedditImageURLsStayTogetherInThePostBody() throws {
+        let object: [String: RedditJSONValue] = [
+            "id": .string("media-post"),
+            "title": .string("Inline media"),
+            "permalink": .string("/r/swift/comments/media-post/"),
+            "is_self": .bool(true),
+            "selftext": .string("https://i.redd.it/first.png\nhttps://i.redd.it/second.png"),
+        ]
+        let post = try XCTUnwrap(RedditJSONCodec.mapPost(object, kind: "t3"))
+        let card = PostCardModel(post: post)
+        let blocks = RedditPostMarkdown.blocks(from: card.body)
+        let images = RedditPostMarkdown.images(in: blocks)
+
+        XCTAssertEqual(card.mediaKind, "none")
+        XCTAssertEqual(card.firstBodyImage?.url.absoluteString, "https://i.redd.it/first.png")
+        XCTAssertEqual(images.count, 2)
+        XCTAssertEqual(RedditPostMarkdown.groupingAdjacentImages(in: blocks), [.gallery(images)])
     }
 
     func testDirectImageURLDoesNotRequirePostHint() throws {
@@ -2854,6 +2906,78 @@ extension DomainTests {
         XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["seen1", "new1"])
         let requestCount = await client.listingRequests()
         XCTAssertEqual(requestCount, 2)
+    }
+
+    @MainActor
+    func testEnablingHideSeenInSettingsHidesPreviouslyReadRows() async {
+        let settings = Self.sortSettings()
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a", "b"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+
+        await store.refreshPosts(for: .home)
+        store.markSeen(postID: "a", seen: true)
+        settings.hideSeenPosts = true
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+
+        store.markSeen(postID: "b", seen: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        settings.hideSeenPosts = false
+        settings.hideSeenPosts = true
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
+    }
+
+    @MainActor
+    func testOpeningPostMarksItSeenAcrossCachedFeedsAndRefreshes() async throws {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let thread = Data(#"[{"data":{"children":[{"kind":"t3","data":{"id":"a","name":"t3_a","title":"Read post","subreddit":"swift","permalink":"/r/swift/comments/a/title/"}}]}},{"data":{"children":[]}}]"#.utf8)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a", "b"], after: nil), postData: thread)
+        let persistence = InMemoryPersistenceStore()
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+
+        await store.refreshPosts(for: .popular)
+        await store.refreshPosts(for: .home)
+        let post = try XCTUnwrap(store.posts.first)
+        let opened = await store.loadPostDetail(for: post, markAsSeen: true)
+        XCTAssertTrue(opened)
+        XCTAssertEqual(store.detailPost?.isSeen, true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a", "b"])
+
+        await store.refreshPosts(for: .popular)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        let requestCount = await client.listingRequests()
+        XCTAssertEqual(requestCount, 2)
+
+        await store.refreshPosts(for: .popular, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["b"])
+        store.markSeen(postID: "a", seen: false)
+        await store.loadPostDetail(for: post, sort: "New")
+        XCTAssertEqual(store.detailPost?.isSeen, false)
+        await store.refreshPosts(for: .popular, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["a", "b"])
+    }
+
+    @MainActor
+    func testScrollingMarksSeenOnlyAfterAnUncancelledVisibleDwell() async {
+        let settings = Self.sortSettings()
+        settings.autoMarkSeenWhileScrolling = true
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["fast", "offscreen", "read"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+        await store.refreshPosts(for: .home)
+
+        let fastScroll = Task { await store.markSeenAfterScrollDwell(postID: "fast") { true } }
+        fastScroll.cancel()
+        await fastScroll.value
+        XCTAssertTrue(store.posts.allSatisfy { !$0.isSeen })
+
+        let offscreen = Task { await store.markSeenAfterScrollDwell(postID: "offscreen") { false } }
+        let clock = ContinuousClock()
+        let start = clock.now
+        await store.markSeenAfterScrollDwell(postID: "read") { true }
+        XCTAssertTrue(start.duration(to: clock.now) >= .milliseconds(750))
+        await offscreen.value
+
+        XCTAssertEqual(store.posts.filter(\.isSeen).map(\.id), ["read"])
     }
 
     @MainActor

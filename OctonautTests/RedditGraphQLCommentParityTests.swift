@@ -60,7 +60,9 @@ final class RedditGraphQLCommentParityTests: XCTestCase {
         let card = PostCardModel(post: post)
 
         XCTAssertEqual(card.bodyPreview, "Caption")
-        XCTAssertEqual(card.bodyImages.map(\.url.absoluteString), [
+        let images = RedditPostMarkdown.images(in: RedditPostMarkdown.blocks(from: card.body))
+        XCTAssertEqual(card.firstBodyImage, images.first)
+        XCTAssertEqual(images.map(\.url.absoluteString), [
             "https://i.redd.it/first.png",
             "https://media.giphy.com/media/Example42/giphy.gif",
             "https://preview.redd.it/second.png",

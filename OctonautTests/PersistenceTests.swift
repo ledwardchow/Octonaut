@@ -1,6 +1,37 @@
 import XCTest
 @testable import Octonaut
 
+private actor BlockingDraftWrites {
+    private var drafts: [UUID: Draft] = [:]
+    private var saveStarted: CheckedContinuation<Void, Never>?
+    private var releaseSave: CheckedContinuation<Void, Never>?
+
+    func save(_ draft: Draft) async {
+        await withCheckedContinuation { continuation in
+            releaseSave = continuation
+            saveStarted?.resume()
+            saveStarted = nil
+        }
+        drafts[draft.id] = draft
+    }
+
+    func delete(_ id: UUID) {
+        drafts.removeValue(forKey: id)
+    }
+
+    func waitForSave() async {
+        if releaseSave != nil { return }
+        await withCheckedContinuation { saveStarted = $0 }
+    }
+
+    func finishSave() {
+        releaseSave?.resume()
+        releaseSave = nil
+    }
+
+    func contains(_ id: UUID) -> Bool { drafts[id] != nil }
+}
+
 final class PersistenceTests: XCTestCase {
     func testSeenPostsAreCappedAndNewestAreReturnedFirst() async throws {
         let store = InMemoryPersistenceStore()
@@ -26,6 +57,66 @@ final class PersistenceTests: XCTestCase {
         XCTAssertEqual(firstDrafts.count, 1)
         XCTAssertEqual(secondDrafts.count, 1)
         XCTAssertEqual(anonymousDrafts.count, 0)
+    }
+
+    @MainActor
+    func testBlankMessageRecipientRestoresNewestDraftForSameAccount() async throws {
+        let store = InMemoryPersistenceStore()
+        let account = AccountID()
+        let anotherAccount = AccountID()
+        let old = Draft(kind: .message, accountID: account, target: "old-user", title: "Old", body: "First", modifiedAt: Date(timeIntervalSince1970: 1))
+        let newest = Draft(kind: .message, accountID: account, target: "new-user", title: "New", body: "Second", modifiedAt: Date(timeIntervalSince1970: 2))
+        try await store.saveDraft(old)
+        try await store.saveDraft(newest)
+        try await store.saveDraft(Draft(kind: .message, accountID: anotherAccount, target: "other", body: "Private", modifiedAt: Date(timeIntervalSince1970: 3)))
+
+        let drafts = try await store.loadDrafts(accountID: account)
+        let inboxDraft = Draft.newestMatching(in: drafts, kind: .message, target: "", anyTargetWhenEmpty: true)
+        let addressedDraft = Draft.newestMatching(in: drafts, kind: .message, target: "old-user", anyTargetWhenEmpty: true)
+
+        XCTAssertEqual(inboxDraft?.id, newest.id)
+        XCTAssertEqual(inboxDraft?.target, "new-user")
+        XCTAssertEqual(addressedDraft?.id, old.id)
+    }
+
+    @MainActor
+    func testDiscardWaitsForInFlightDraftSave() async throws {
+        let writes = BlockingDraftWrites()
+        let session = ComposerDraftSession(
+            save: { await writes.save($0) },
+            delete: { await writes.delete($0) }
+        )
+        let account = AccountID()
+        let draft = Draft(kind: .comment, accountID: account, target: "t3_post", body: "Do not restore")
+
+        session.schedule(draft, id: draft.id)
+        await writes.waitForSave()
+        let discard = Task { try await session.finish(.discard, id: draft.id) }
+        await writes.finishSave()
+        try await discard.value
+        session.schedule(draft, id: draft.id)
+
+        let stillSaved = await writes.contains(draft.id)
+        XCTAssertFalse(stillSaved)
+    }
+
+    @MainActor
+    func testFailedDraftSaveLeavesSessionOpen() async {
+        struct SaveFailure: Error {}
+        let session = ComposerDraftSession(
+            save: { _ in throw SaveFailure() },
+            delete: { _ in }
+        )
+        let draft = Draft(kind: .post, accountID: AccountID(), target: "swift", title: "Title")
+
+        do {
+            try await session.finish(.save(draft), id: draft.id)
+            XCTFail("Expected the draft save to fail")
+        } catch is SaveFailure {
+            XCTAssertFalse(session.isClosed)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testDeletingAccountRemovesItsDrafts() async throws {

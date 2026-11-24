@@ -1122,6 +1122,10 @@ final class SettingsTests: XCTestCase {
     }
 
     func testDuoLayoutEligibilityAndColumnBounds() {
+        XCTAssertTrue(DuoLayout.usesPortraitHeader(isPhone: true, size: CGSize(width: 669, height: 951)))
+        XCTAssertFalse(DuoLayout.usesPortraitHeader(isPhone: true, size: CGSize(width: 951, height: 669)))
+        XCTAssertFalse(DuoLayout.usesPortraitHeader(isPhone: false, size: CGSize(width: 768, height: 1024)))
+        XCTAssertFalse(DuoLayout.usesPortraitHeader(isPhone: true, size: CGSize(width: 440, height: 956)))
         XCTAssertTrue(DuoLayout.isEligible(isPhone: true, isRegular: true, rootWidth: 669, rootHeight: 669))
         XCTAssertFalse(DuoLayout.isEligible(isPhone: false, isRegular: true, rootWidth: 1000, rootHeight: 669))
         XCTAssertFalse(DuoLayout.isEligible(isPhone: true, isRegular: false, rootWidth: 669, rootHeight: 669))
