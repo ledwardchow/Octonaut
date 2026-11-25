@@ -35,13 +35,13 @@ private actor BlockingDraftWrites {
 final class PersistenceTests: XCTestCase {
     func testSeenPostsAreCappedAndNewestAreReturnedFirst() async throws {
         let store = InMemoryPersistenceStore()
-        for index in 0..<5_010 {
+        for index in 0..<25_010 {
             try await store.markPostSeen("post-\(index)", seenAt: Date(timeIntervalSince1970: TimeInterval(index)))
         }
 
         let ids = try await store.loadSeenPostIDs()
-        XCTAssertEqual(ids.count, 5_000)
-        XCTAssertEqual(ids.first, "post-5009")
+        XCTAssertEqual(ids.count, 25_000)
+        XCTAssertEqual(ids.first, "post-25009")
         XCTAssertFalse(ids.contains("post-0"))
     }
 

@@ -1,6 +1,8 @@
 import Foundation
 import SwiftData
 
+private let seenPostHistoryLimit = 25_000
+
 actor InMemoryPersistenceStore: PersistenceStore {
     private var accounts: [AccountID: Account] = [:]
     private var seen: [String: Date] = [:]
@@ -29,8 +31,8 @@ actor InMemoryPersistenceStore: PersistenceStore {
 
     func markPostSeen(_ id: String, seenAt: Date = .now) async throws {
         seen[id] = seenAt
-        if seen.count > 5_000 {
-            let excess = seen.count - 5_000
+        if seen.count > seenPostHistoryLimit {
+            let excess = seen.count - seenPostHistoryLimit
             let oldest = seen.sorted { $0.value < $1.value }.prefix(excess).map(\.key)
             oldest.forEach { seen.removeValue(forKey: $0) }
         }
@@ -189,8 +191,8 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
         }
         let currentCount = seenCount ?? (try? context.fetchCount(FetchDescriptor<SeenPostRecord>())) ?? 0
         seenCount = currentCount
-        if currentCount > 5_000 {
-            let excess = currentCount - 5_000
+        if currentCount > seenPostHistoryLimit {
+            let excess = currentCount - seenPostHistoryLimit
             var pruneDescriptor = FetchDescriptor<SeenPostRecord>(
                 sortBy: [SortDescriptor(\.lastSeenAt, order: .forward)]
             )
@@ -200,7 +202,7 @@ final class SwiftDataPersistenceStore: PersistenceStore, @unchecked Sendable {
                 seenIDsCache?.remove(record.postID)
                 context.delete(record)
             }
-            seenCount = 5_000
+            seenCount = seenPostHistoryLimit
         }
         try context.save()
     }

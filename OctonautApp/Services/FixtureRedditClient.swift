@@ -14,6 +14,7 @@ actor FixtureRedditClient: RedditClient {
     private var blockedUserNames: [String] = []
     private let actionResult: ActionResult
     private let listingDelay: Duration?
+    private let listingRefreshError: RedditClientError?
     private let postDelay: Duration?
     private let moreCommentsDelay: Duration?
     private let subscribedCommunitiesDelay: Duration?
@@ -34,6 +35,7 @@ actor FixtureRedditClient: RedditClient {
         communitiesData: Data? = nil,
         usersData: Data? = nil,
         listingDelay: Duration? = nil,
+        listingRefreshError: RedditClientError? = nil,
         postDelay: Duration? = nil,
         moreCommentsDelay: Duration? = nil,
         subscribedCommunitiesDelay: Duration? = nil,
@@ -49,6 +51,7 @@ actor FixtureRedditClient: RedditClient {
         self.communitiesData = communitiesData
         self.usersData = usersData
         self.listingDelay = listingDelay
+        self.listingRefreshError = listingRefreshError
         self.postDelay = postDelay
         self.moreCommentsDelay = moreCommentsDelay
         self.subscribedCommunitiesDelay = subscribedCommunitiesDelay
@@ -70,6 +73,7 @@ actor FixtureRedditClient: RedditClient {
         self.communitiesData = try read("communities.json")
         self.usersData = try read("users.json")
         self.listingDelay = nil
+        self.listingRefreshError = nil
         self.postDelay = nil
         self.moreCommentsDelay = nil
         self.subscribedCommunitiesDelay = nil
@@ -81,6 +85,9 @@ actor FixtureRedditClient: RedditClient {
         listingRequestCount += 1
         if let listingDelay = delaysByDestination[request.feed.destination] ?? listingDelay {
             try await Task.sleep(for: listingDelay)
+        }
+        if request.responseCachePolicy == .reloadIgnoringCache, let listingRefreshError {
+            throw listingRefreshError
         }
         guard let listingData = listingsByDestination[request.feed.destination] ?? listingData else { return Listing(items: []) }
         return try RedditJSONCodec.decodePosts(listingData)

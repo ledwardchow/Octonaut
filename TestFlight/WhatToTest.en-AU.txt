@@ -1,4 +1,6 @@
 Changes in current build:
+Seen posts stay hidden when refresh or history fails.
+Seen history now remembers up to 25,000 posts.
 Fixed inline images in Reddit comments.
 Added a swipeable three-column layout for Duo.
 Fixed scrolling snapping back below summaries.

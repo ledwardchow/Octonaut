@@ -1107,6 +1107,13 @@ final class OctonautFeatureStore {
     private var seenVisibilityRevision: UInt?
     @ObservationIgnored private var seenWriteRevision: UInt = 0
     @ObservationIgnored private var seenWrite: Task<Void, Never>?
+    @ObservationIgnored private var storedSeenPostIDs: Set<String> = []
+    @ObservationIgnored private var failedSeenChanges: [String: SeenChange] = [:]
+
+    private struct SeenChange {
+        let isSeen: Bool
+        let date: Date
+    }
 
     var visibleFeedPosts: [PostCardModel] {
         guard settings?.hideSeenPosts == true else { return posts }
@@ -1375,6 +1382,16 @@ final class OctonautFeatureStore {
         nextPageError = nil
         let selectedAccountID = accountID
         let selectedGeneration = accountGeneration
+        let seenVisibilityAtStart = settings?.hideSeenPostsRevision
+        let seenBeforeRefresh = forceRefresh && loadedFeed == descriptor ? newlySeenPostIDs : []
+        defer {
+            if loadedFeed == descriptor,
+               isCurrentAccount(selectedAccountID, generation: selectedGeneration),
+               settings?.hideSeenPostsRevision == seenVisibilityAtStart {
+                newlySeenPostIDs.subtract(seenBeforeRefresh)
+            }
+        }
+        if forceRefresh { enqueueSeenChanges() }
         let sortSettingsRevision = settings?.feedSortPreferenceRevision
         // Resolve before computing the cache key, but keep the lookup tied to this load.
         await resolveStoredSort(for: descriptor, requestID: requestID)
@@ -2093,8 +2110,14 @@ final class OctonautFeatureStore {
         while !Task.isCancelled {
             let revision = seenWriteRevision
             await seenWrite?.value
-            let ids = (try? await persistence.loadSeenPostIDs()) ?? []
-            if revision == seenWriteRevision { return Set(ids) }
+            let ids = try? await persistence.loadSeenPostIDs()
+            guard revision == seenWriteRevision else { continue }
+            if let ids { storedSeenPostIDs = Set(ids) }
+            var effectiveIDs = storedSeenPostIDs
+            for (postID, change) in failedSeenChanges {
+                applySeenChange(change, postID: postID, to: &effectiveIDs)
+            }
+            return effectiveIDs
         }
         return []
     }
@@ -2560,16 +2583,37 @@ final class OctonautFeatureStore {
                 feedCache[key]?.posts[index].isSeen = isSeen
             }
         }
+        enqueueSeenChanges([postID: SeenChange(isSeen: isSeen, date: .now)])
+    }
+
+    private func applySeenChange(_ change: SeenChange, postID: String, to ids: inout Set<String>) {
+        if change.isSeen {
+            ids.insert(postID)
+        } else {
+            ids.remove(postID)
+        }
+    }
+
+    /// A refresh retries failed writes after any newer edits already in the queue.
+    private func enqueueSeenChanges(_ changes: [String: SeenChange]? = nil) {
         guard let persistence else { return }
         let previousWrite = seenWrite
-        let seenAt = Date.now
         seenWriteRevision &+= 1
         seenWrite = Task {
             await previousWrite?.value
-            if isSeen {
-                try? await persistence.markPostSeen(postID, seenAt: seenAt)
-            } else {
-                try? await persistence.removePostSeen(postID)
+            let changesToSave = changes ?? failedSeenChanges
+            for (postID, change) in changesToSave.sorted(by: { $0.value.date < $1.value.date }) {
+                do {
+                    if change.isSeen {
+                        try await persistence.markPostSeen(postID, seenAt: change.date)
+                    } else {
+                        try await persistence.removePostSeen(postID)
+                    }
+                    applySeenChange(change, postID: postID, to: &storedSeenPostIDs)
+                    failedSeenChanges.removeValue(forKey: postID)
+                } catch {
+                    failedSeenChanges[postID] = change
+                }
             }
         }
     }

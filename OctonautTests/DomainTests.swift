@@ -2499,7 +2499,7 @@ extension DomainTests {
     @MainActor
     private func checkStalePreferenceRead(cancelOldLoad: Bool) async throws {
         let backing = InMemoryPersistenceStore()
-        let persistence = PausedFeedPreferenceStore(backing: backing, feedKey: "community:swift")
+        let persistence = FeedTestPersistenceStore(backing: backing, feedKey: "community:swift")
         let settings = Self.sortSettings(rememberCommunity: true)
         let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["a"], after: nil))
         let swift = FeedDescriptorModel(kind: .community, name: "swift")
@@ -2531,17 +2531,23 @@ extension DomainTests {
     }
 }
 
-/// Holds one preference read until the test has switched feeds.
-private actor PausedFeedPreferenceStore: PersistenceStore {
+private actor FeedTestPersistenceStore: PersistenceStore {
     let backing: InMemoryPersistenceStore
     private var pausedFeedKey: String?
     private var readStarted = false
     private var startContinuation: CheckedContinuation<Void, Never>?
     private var readContinuation: CheckedContinuation<Void, Never>?
+    private var seenReadsFail = false
+    private var seenWritesFail = false
 
-    init(backing: InMemoryPersistenceStore, feedKey: String) {
+    init(backing: InMemoryPersistenceStore, feedKey: String? = nil) {
         self.backing = backing
         pausedFeedKey = feedKey
+    }
+
+    func setSeenFailures(reads: Bool = false, writes: Bool = false) {
+        seenReadsFail = reads
+        seenWritesFail = writes
     }
 
     func waitForRead() async {
@@ -2579,14 +2585,17 @@ private actor PausedFeedPreferenceStore: PersistenceStore {
     }
 
     func loadSeenPostIDs() async throws -> [String] {
+        if seenReadsFail { throw CocoaError(.fileReadUnknown) }
         return try await backing.loadSeenPostIDs()
     }
 
     func markPostSeen(_ id: String, seenAt: Date) async throws {
+        if seenWritesFail { throw CocoaError(.fileWriteUnknown) }
         try await backing.markPostSeen(id, seenAt: seenAt)
     }
 
     func removePostSeen(_ id: String) async throws {
+        if seenWritesFail { throw CocoaError(.fileWriteUnknown) }
         try await backing.removePostSeen(id)
     }
 
@@ -2978,6 +2987,96 @@ extension DomainTests {
         XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["seen1", "new1"])
         let requestCount = await client.listingRequests()
         XCTAssertEqual(requestCount, 2)
+    }
+
+    @MainActor
+    func testFailedFeedRefreshHidesSeenRowsAndKeepsUnreadRows() async {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let client = FixtureRedditClient(
+            listingData: Self.listingJSON(ids: ["seen", "unread"], after: "cursor"),
+            listingRefreshError: .transport("Offline")
+        )
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+
+        await store.refreshPosts(for: .home)
+        store.markSeen(postID: "seen", seen: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["seen", "unread"])
+
+        await store.refreshPosts(for: .home, forceRefresh: true)
+
+        XCTAssertEqual(store.posts.map(\.isSeen), [true, false])
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["unread"])
+        XCTAssertEqual(store.feedState, .loaded)
+        XCTAssertEqual(store.galleryPageCursor(for: .home), "cursor")
+        let requests = await client.listingRequests()
+        XCTAssertEqual(requests, 2)
+    }
+
+    @MainActor
+    func testFeedStillHidesSeenRowsWhenHistoryReadFails() async throws {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let backing = InMemoryPersistenceStore()
+        try await backing.markPostSeen("seen", seenAt: .now)
+        let persistence = FeedTestPersistenceStore(backing: backing)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["seen", "new"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+
+        await store.refreshPosts(for: .home)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["new"])
+        await persistence.setSeenFailures(reads: true)
+        store.markSeen(postID: "new", seen: true)
+        await store.refreshPosts(for: .home, forceRefresh: true)
+
+        XCTAssertTrue(store.visibleFeedPosts.isEmpty)
+        XCTAssertTrue(store.posts.allSatisfy(\.isSeen))
+    }
+
+    @MainActor
+    func testSeenChangesSurviveWriteFailuresAndAreRetriedOnRefresh() async throws {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let backing = InMemoryPersistenceStore()
+        try await backing.markPostSeen("old", seenAt: .now)
+        let persistence = FeedTestPersistenceStore(backing: backing)
+        let client = FixtureRedditClient(listingData: Self.listingJSON(ids: ["old", "new"], after: nil))
+        let store = OctonautFeatureStore(reddit: client, settings: settings, persistence: persistence)
+
+        await store.refreshPosts(for: .home)
+        await persistence.setSeenFailures(writes: true)
+        store.markSeen(postID: "old", seen: false)
+        store.markSeen(postID: "new", seen: true)
+        await store.refreshPosts(for: .home, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["old"])
+        let unchangedHistory = try await backing.loadSeenPostIDs()
+        XCTAssertEqual(unchangedHistory, ["old"])
+
+        await persistence.setSeenFailures()
+        await store.refreshPosts(for: .home, forceRefresh: true)
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["old"])
+        let recoveredHistory = try await backing.loadSeenPostIDs()
+        XCTAssertEqual(recoveredHistory, ["new"])
+    }
+
+    @MainActor
+    func testCancelledManualRefreshStillAppliesSeenFilter() async {
+        let settings = Self.sortSettings()
+        settings.hideSeenPosts = true
+        let client = FixtureRedditClient(
+            listingData: Self.listingJSON(ids: ["seen", "unread"], after: nil),
+            listingDelay: .milliseconds(75)
+        )
+        let store = OctonautFeatureStore(reddit: client, settings: settings)
+        await store.refreshPosts(for: .home)
+        store.markSeen(postID: "seen", seen: true)
+
+        let refresh = Task { await store.refreshPosts(for: .home, forceRefresh: true) }
+        while await client.listingRequests() < 2 { await Task.yield() }
+        refresh.cancel()
+        await refresh.value
+
+        XCTAssertEqual(store.visibleFeedPosts.map(\.id), ["unread"])
     }
 
     @MainActor
